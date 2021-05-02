@@ -8,3 +8,6 @@ edition = "2018"
 [dependencies]
 async-std = { version = "1.9", features = ["attributes", "tokio02", "tokio03", "tokio1"]}
 yeelight = "0.3"
+dotenv = "0.15"
+telegram-bot = "0.8"
+futures = "0.3"
