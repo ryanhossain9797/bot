@@ -23,8 +23,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let UpdateKind::Message(message) = update.kind {
             if let MessageKind::Text { ref data, .. } = message.kind {
                 // Print received text message to stdout.
-                println!("<{}>: {}", &message.from.first_name, data);
-                if &message.from.first_name == "zireael9797" {
+                println!("<{}>: {}", &message.from.id, data);
+
+                let user_id: i64 = message.from.id.into();
+                if
+                /*user_id == 801021640 || */
+                user_id == 486433660 {
                     let props = Properties(vec![Property::Power]);
 
                     let state = bulb.get_prop(&props).await?;
