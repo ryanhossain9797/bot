@@ -15,14 +15,9 @@ impl BotHandle {
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::channel(8);
         let bot = Bot::new(receiver);
+        tokio::spawn(run_bot(bot));
 
-        let (kill_send, kill_recv) = oneshot::channel();
-        tokio::spawn(run_bot(bot, kill_send));
-
-        Self {
-            sender,
-            on_kill: kill_recv,
-        }
+        Self { sender }
     }
 
     pub async fn act(&self, action: BotAction) {
@@ -37,13 +32,24 @@ async fn bot_transition(bot: &mut Bot, action: BotAction) -> io::Result<()> {
             println!("{response}");
             Ok(())
         }
+        BotAction::HandleMessage {
+            user_id,
+            user_name,
+            chat_id,
+            http,
+            start_conversation,
+            msg,
+        } => {
+            let _ = chat_id
+                .say(http, format!("You said: {msg}").to_string())
+                .await;
+            Ok(())
+        }
     }
 }
 
-pub async fn run_bot(mut bot: Bot, kill_msg: oneshot::Sender<()>) {
+pub async fn run_bot(mut bot: Bot) {
     while let Some(action) = bot.receiver.recv().await {
         bot_transition(&mut bot, action).await.unwrap();
     }
-
-    kill_msg.send(());
 }
