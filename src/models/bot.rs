@@ -1,20 +1,12 @@
 use std::sync::Arc;
 
-use serenity::{
-    async_trait,
-    http::Http as SerenityHttp,
-    model::{
-        channel::Message as DMessage,
-        gateway::Ready,
-        id::{ChannelId, UserId},
-    },
-    prelude::*,
-};
 use tokio::{
     io,
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
+
+use super::user::UserId;
 
 pub enum BotAction {
     Ping {

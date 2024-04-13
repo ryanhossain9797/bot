@@ -14,6 +14,8 @@ use crate::{
     models::bot::{Bot, BotAction, BotHandle},
 };
 
+use super::user_lifecycle::placeholder_handle_bot_message;
+
 impl Bot {
     pub fn new(receiver: mpsc::Receiver<BotAction>) -> Self {
         Self { receiver }
@@ -41,32 +43,13 @@ async fn bot_transition(bot: &mut Bot, action: BotAction) -> anyhow::Result<()> 
             println!("{response}");
             Ok(())
         }
+        //Placeholder, There should be a user_lifecycle single actor, and that should recieve these instead
         BotAction::HandleMessage {
             user_id,
             start_conversation,
             msg,
         } => {
-            let http = Http::new(
-                get_client_token("discord_token")
-                    .ok_or_else(|| anyhow::anyhow!("Failed to load Discord Token"))?,
-            );
-            let dm_channel_result = match user_id.to_user(&http).await {
-                Ok(user) => user.create_dm_channel(&http).await,
-                Err(e) => Err(e),
-            };
-
-            match dm_channel_result {
-                Ok(channel) => {
-                    let _ = channel
-                        .send_message(
-                            &http,
-                            CreateMessage::new().content(format!("You said {msg}")),
-                        )
-                        .await;
-                }
-                Err(_) => (),
-            }
-
+            let _ = placeholder_handle_bot_message(user_id, msg, start_conversation).await;
             Ok(())
         }
     }

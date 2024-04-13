@@ -3,7 +3,10 @@ use common::get_client_token;
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
-use crate::models::bot::{BotAction, BotHandle};
+use crate::models::{
+    bot::{BotAction, BotHandle},
+    user::{UserChannel, UserId},
+};
 
 use super::common;
 
@@ -39,7 +42,7 @@ impl EventHandler for Handler {
         if !message.author.bot {
             if let Some((msg, start_conversation)) = filter(&message, &ctx).await {
                 let action = BotAction::HandleMessage {
-                    user_id: message.author.id,
+                    user_id: UserId(UserChannel::Discord, message.author.id.get().to_string()),
                     start_conversation,
                     msg,
                 };
