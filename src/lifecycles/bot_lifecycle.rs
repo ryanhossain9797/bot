@@ -1,9 +1,18 @@
+use serenity::{
+    all::{CreateMessage, Http},
+    futures::TryFutureExt,
+    http,
+    model::channel,
+};
 use tokio::{
     io,
     sync::{mpsc, oneshot},
 };
 
-use crate::models::bot::{Bot, BotAction, BotHandle};
+use crate::{
+    external_connections::common::get_client_token,
+    models::bot::{Bot, BotAction, BotHandle},
+};
 
 impl Bot {
     pub fn new(receiver: mpsc::Receiver<BotAction>) -> Self {
@@ -25,7 +34,7 @@ impl BotHandle {
     }
 }
 
-async fn bot_transition(bot: &mut Bot, action: BotAction) -> io::Result<()> {
+async fn bot_transition(bot: &mut Bot, action: BotAction) -> anyhow::Result<()> {
     match action {
         BotAction::Ping { message } => {
             let response = format!("Pong: {message}");
@@ -34,15 +43,30 @@ async fn bot_transition(bot: &mut Bot, action: BotAction) -> io::Result<()> {
         }
         BotAction::HandleMessage {
             user_id,
-            user_name,
-            chat_id,
-            http,
             start_conversation,
             msg,
         } => {
-            let _ = chat_id
-                .say(http, format!("You said: {msg}").to_string())
-                .await;
+            let http = Http::new(
+                get_client_token("discord_token")
+                    .ok_or_else(|| anyhow::anyhow!("Failed to load Discord Token"))?,
+            );
+            let dm_channel_result = match user_id.to_user(&http).await {
+                Ok(user) => user.create_dm_channel(&http).await,
+                Err(e) => Err(e),
+            };
+
+            match dm_channel_result {
+                Ok(channel) => {
+                    let _ = channel
+                        .send_message(
+                            &http,
+                            CreateMessage::new().content(format!("You said {msg}")),
+                        )
+                        .await;
+                }
+                Err(_) => (),
+            }
+
             Ok(())
         }
     }

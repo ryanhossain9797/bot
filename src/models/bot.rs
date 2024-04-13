@@ -22,9 +22,6 @@ pub enum BotAction {
     },
     HandleMessage {
         user_id: UserId,
-        user_name: String,
-        chat_id: ChannelId,
-        http: Arc<SerenityHttp>,
         start_conversation: bool,
         msg: String,
     },

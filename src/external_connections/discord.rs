@@ -40,9 +40,6 @@ impl EventHandler for Handler {
             if let Some((msg, start_conversation)) = filter(&message, &ctx).await {
                 let action = BotAction::HandleMessage {
                     user_id: message.author.id,
-                    user_name: message.author.name.clone(),
-                    chat_id: message.channel_id,
-                    http: ctx.http,
                     start_conversation,
                     msg,
                 };
