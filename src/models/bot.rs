@@ -9,14 +9,7 @@ use tokio::{
 use super::user::UserId;
 
 pub enum BotAction {
-    Ping {
-        message: String,
-    },
-    HandleMessage {
-        user_id: UserId,
-        start_conversation: bool,
-        msg: String,
-    },
+    Ping { message: String },
 }
 
 pub struct Bot {

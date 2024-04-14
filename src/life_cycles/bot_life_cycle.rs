@@ -14,7 +14,7 @@ use crate::{
     models::bot::{Bot, BotAction, BotHandle},
 };
 
-use super::user_lifecycle::placeholder_handle_bot_message;
+use super::user_life_cycle::placeholder_handle_bot_message;
 
 impl Bot {
     pub fn new(receiver: mpsc::Receiver<BotAction>) -> Self {
@@ -41,15 +41,6 @@ async fn bot_transition(bot: &mut Bot, action: BotAction) -> anyhow::Result<()> 
         BotAction::Ping { message } => {
             let response = format!("Pong: {message}");
             println!("{response}");
-            Ok(())
-        }
-        //Placeholder, There should be a user_lifecycle single actor, and that should recieve these instead
-        BotAction::HandleMessage {
-            user_id,
-            start_conversation,
-            msg,
-        } => {
-            let _ = placeholder_handle_bot_message(user_id, msg, start_conversation).await;
             Ok(())
         }
     }

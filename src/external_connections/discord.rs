@@ -1,37 +1,37 @@
-use common::get_client_token;
-
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
-use crate::models::{
-    bot::{BotAction, BotHandle},
-    user::{UserChannel, UserId},
+use crate::{
+    life_cycles::user_life_cycle::{self, UserLifeCycleHandle},
+    models::user::{UserAction, UserChannel, UserId},
 };
 
 use super::common;
 
-///Main Starting point for the Discord api.
-pub async fn run_discord(bot_handle: BotHandle) -> anyhow::Result<()> {
+pub async fn prepare_discord_client(
+    discord_token: &str,
+    user_life_cycle: UserLifeCycleHandle,
+) -> anyhow::Result<Client> {
     // Configure the client with your Discord bot token in the environment.
-    let token = get_client_token("discord_token")
-        .ok_or_else(|| anyhow::anyhow!("Failed to load Discord Token"))?;
 
     let intents = GatewayIntents::DIRECT_MESSAGES;
 
     // Create a new instance of the Client, logging in as a bot. This will
-    let mut client = Client::builder(token, intents)
-        .event_handler(Handler { bot_handle })
+    let client = Client::builder(discord_token, intents)
+        .event_handler(Handler { user_life_cycle })
         .await?;
 
-    // Finally, start a single shard, and start listening to events
-    // Shards will automatically attempt to reconnect, and will perform
-    // exponential backoff until it reconnects.
+    Ok(client)
+}
+
+///Main Starting point for the Discord api.
+pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
     client.start().await?;
     Err(anyhow::anyhow!("Discord failed"))
 }
 
 struct Handler {
-    bot_handle: BotHandle,
+    user_life_cycle: UserLifeCycleHandle,
 }
 
 #[async_trait]
@@ -41,12 +41,12 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, message: DMessage) {
         if !message.author.bot {
             if let Some((msg, start_conversation)) = filter(&message, &ctx).await {
-                let action = BotAction::HandleMessage {
-                    user_id: UserId(UserChannel::Discord, message.author.id.get().to_string()),
+                let user_id = UserId(UserChannel::Discord, message.author.id.get().to_string());
+                let action = UserAction::NewMessage {
                     start_conversation,
                     msg,
                 };
-                self.bot_handle.act(action).await;
+                self.user_life_cycle.act(user_id, action).await;
             }
         }
     }
@@ -59,8 +59,6 @@ impl EventHandler for Handler {
 /// - removes mentions of the bot from the message ("hellow    @machinelifeformbot   world" becomes "hellow      world").
 /// - replaces redundant spaces with single spaces using regex ("hellow      world" becomes "hellow world").
 async fn filter(message: &DMessage, ctx: &Context) -> Option<(String, bool)> {
-    let source = "DISCORD";
-
     let Ok(info) = ctx.http.get_current_application_info().await else {
         return None;
     };
