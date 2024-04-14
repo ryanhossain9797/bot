@@ -10,6 +10,7 @@ mod models;
 
 use external_connections::{common::get_client_token, discord::*};
 use serenity::all::{Http, HttpBuilder};
+use tokio::task::JoinSet;
 
 struct Env {
     discord_http: Arc<Http>,
@@ -35,9 +36,15 @@ async fn main() -> anyhow::Result<!> {
     let user_life_cycle = UserLifeCycleHandle::new(env);
     let discord_client = prepare_discord_client(discord_token, user_life_cycle).await?;
 
-    let x = tokio::spawn(run_discord(discord_client));
+    let mut set = JoinSet::new();
 
-    let _ = x.await;
+    let clients = vec![run_discord(discord_client)];
+
+    clients.into_iter().for_each(|client| {
+        set.spawn(client);
+    });
+
+    let _ = set.join_next().await;
 
     panic!("spawned handlers closed")
 }
