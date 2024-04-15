@@ -7,21 +7,39 @@ use serenity::{
 use tokio::sync::mpsc::{self, Receiver};
 
 use crate::{
+    lib_life_cycle::{ExternalOperation, TransitionResult},
     life_cycles::user_life_cycle,
     models::user::{User, UserAction, UserChannel, UserHandle, UserId},
     Env,
 };
 
+type UserTransitionResult = TransitionResult<User, UserAction>;
+type UserExternalOperation = ExternalOperation<UserAction>;
+
+#[derive(Clone)]
+pub struct Transition(
+    pub  fn(
+        Arc<Env>,
+        UserId,
+        User,
+        UserAction,
+    ) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send>>,
+);
 #[derive(Clone)]
 pub struct UserLifeCycleHandle {
     pub sender: mpsc::Sender<(UserId, UserAction)>,
 }
 
-impl UserLifeCycleHandle {
-    pub fn new(env: Arc<Env>) -> Self {
+impl<'a> UserLifeCycleHandle {
+    pub fn new(env: Arc<Env>, transition: Transition) -> Self {
         let (sender, receiver) = mpsc::channel(8);
         let user_life_cycle_handle = Self { sender };
-        tokio::spawn(run_action(env, user_life_cycle_handle.clone(), receiver));
+        tokio::spawn(start_life_cycle(
+            env,
+            user_life_cycle_handle.clone(),
+            receiver,
+            transition,
+        ));
         user_life_cycle_handle
     }
 
@@ -39,9 +57,16 @@ impl UserHandle {
         env: Arc<Env>,
         user_id: UserId,
         user_life_cycle_handle: UserLifeCycleHandle,
+        transition: Transition,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(8);
-        tokio::spawn(run_user(env, user_id, receiver, user_life_cycle_handle));
+        tokio::spawn(run_user(
+            env,
+            user_id,
+            receiver,
+            user_life_cycle_handle,
+            transition,
+        ));
         Self { sender }
     }
 
@@ -50,10 +75,11 @@ impl UserHandle {
     }
 }
 
-async fn run_action(
+async fn start_life_cycle(
     env: Arc<Env>,
     user_life_cycle_handle: UserLifeCycleHandle,
     mut receiver: Receiver<(UserId, UserAction)>,
+    transition: Transition,
 ) -> ! {
     let mut handle_by_user = std::collections::BTreeMap::<UserId, UserHandle>::new();
 
@@ -61,8 +87,12 @@ async fn run_action(
         match handle_by_user.contains_key(&user_id) {
             true => (),
             false => {
-                let handle =
-                    UserHandle::new(env.clone(), user_id.clone(), user_life_cycle_handle.clone());
+                let handle = UserHandle::new(
+                    env.clone(),
+                    user_id.clone(),
+                    user_life_cycle_handle.clone(),
+                    transition.clone(),
+                );
                 handle_by_user.insert(user_id.clone(), handle.clone());
             }
         }
@@ -77,10 +107,11 @@ pub async fn run_user(
     user_id: UserId,
     mut receiver: Receiver<UserAction>,
     handle: UserLifeCycleHandle,
+    transition: Transition,
 ) {
     let mut user = User { action_count: 0 };
     while let Some(action) = receiver.recv().await {
-        match user_transition(env.clone(), &user_id, &mut user, action).await {
+        match transition.0(env.clone(), user_id.clone(), user.clone(), action).await {
             Ok((updated_user, external)) => {
                 user = updated_user;
                 external.into_iter().for_each(|f| {
@@ -99,16 +130,16 @@ pub async fn run_user(
 
 async fn user_transition(
     env: Arc<Env>,
-    user_id: &UserId,
-    user: &User,
+    user_id: UserId,
+    user: User,
     action: UserAction,
-) -> anyhow::Result<(User, Vec<Pin<Box<dyn Future<Output = UserAction> + Send>>>)> {
+) -> UserTransitionResult {
     match action {
         UserAction::NewMessage {
             msg,
             start_conversation,
         } => {
-            let mut external = Vec::<Pin<Box<dyn Future<Output = UserAction> + Send>>>::new();
+            let mut external = Vec::<UserExternalOperation>::new();
 
             external.push(Box::pin(placeholder_handle_bot_message(
                 env.clone(),
@@ -129,6 +160,16 @@ async fn user_transition(
             Ok((user.clone(), Vec::new()))
         }
     }
+}
+
+pub fn user_transition_wrapper(
+    env: Arc<Env>,
+    user_id: UserId,
+    user: User,
+    action: UserAction,
+) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send>> {
+    let fut = user_transition(env, user_id, user, action);
+    Box::pin(fut)
 }
 
 pub async fn placeholder_handle_bot_message(
