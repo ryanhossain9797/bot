@@ -7,6 +7,7 @@ use serenity::{
 use tokio::sync::mpsc::{self, Receiver};
 
 use crate::{
+    life_cycles::user_life_cycle,
     models::user::{User, UserAction, UserChannel, UserHandle, UserId},
     Env,
 };
@@ -19,9 +20,9 @@ pub struct UserLifeCycleHandle {
 impl UserLifeCycleHandle {
     pub fn new(env: Arc<Env>) -> Self {
         let (sender, receiver) = mpsc::channel(8);
-        tokio::spawn(run_action(env, receiver));
-
-        Self { sender }
+        let user_life_cycle_handle = Self { sender };
+        tokio::spawn(run_action(env, user_life_cycle_handle.clone(), receiver));
+        user_life_cycle_handle
     }
 
     pub async fn act(&self, user_id: UserId, user_action: UserAction) {
@@ -34,11 +35,14 @@ impl UserLifeCycleHandle {
 }
 
 impl UserHandle {
-    pub fn new(env: Arc<Env>, user_id: UserId) -> Self {
+    pub fn new(
+        env: Arc<Env>,
+        user_id: UserId,
+        user_life_cycle_handle: UserLifeCycleHandle,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(8);
-        let handle = Self { sender };
-        tokio::spawn(run_user(env, user_id, receiver, handle.clone()));
-        handle
+        tokio::spawn(run_user(env, user_id, receiver, user_life_cycle_handle));
+        Self { sender }
     }
 
     pub async fn act(&self, user_action: UserAction) {
@@ -46,14 +50,19 @@ impl UserHandle {
     }
 }
 
-async fn run_action(env: Arc<Env>, mut receiver: Receiver<(UserId, UserAction)>) -> ! {
+async fn run_action(
+    env: Arc<Env>,
+    user_life_cycle_handle: UserLifeCycleHandle,
+    mut receiver: Receiver<(UserId, UserAction)>,
+) -> ! {
     let mut handle_by_user = std::collections::BTreeMap::<UserId, UserHandle>::new();
 
     while let Some((user_id, action)) = receiver.recv().await {
         match handle_by_user.contains_key(&user_id) {
             true => (),
             false => {
-                let handle = UserHandle::new(env.clone(), user_id.clone());
+                let handle =
+                    UserHandle::new(env.clone(), user_id.clone(), user_life_cycle_handle.clone());
                 handle_by_user.insert(user_id.clone(), handle.clone());
             }
         }
@@ -67,7 +76,7 @@ pub async fn run_user(
     env: Arc<Env>,
     user_id: UserId,
     mut receiver: Receiver<UserAction>,
-    handle: UserHandle,
+    handle: UserLifeCycleHandle,
 ) {
     let mut user = User { action_count: 0 };
     while let Some(action) = receiver.recv().await {
@@ -76,9 +85,10 @@ pub async fn run_user(
                 user = updated_user;
                 external.into_iter().for_each(|f| {
                     let handle = handle.clone();
+                    let user_id = user_id.clone();
                     tokio::spawn(async move {
                         let action = f.await;
-                        handle.act(action).await;
+                        handle.act(user_id, action).await;
                     });
                 });
             }
