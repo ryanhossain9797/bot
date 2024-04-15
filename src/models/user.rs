@@ -27,6 +27,7 @@ pub enum UserAction {
         msg: String,
         start_conversation: bool,
     },
+    SendResult(anyhow::Result<()>),
 }
 
 #[derive(Clone)]

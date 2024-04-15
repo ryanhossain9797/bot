@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use serenity::{
     all::{CreateMessage, Http},
@@ -7,7 +7,6 @@ use serenity::{
 use tokio::sync::mpsc::{self, Receiver};
 
 use crate::{
-    external_connections::common::get_client_token,
     models::user::{User, UserAction, UserChannel, UserHandle, UserId},
     Env,
 };
@@ -37,9 +36,9 @@ impl UserLifeCycleHandle {
 impl UserHandle {
     pub fn new(env: Arc<Env>, user_id: UserId) -> Self {
         let (sender, receiver) = mpsc::channel(8);
-        tokio::spawn(run_user(env, user_id, receiver));
-
-        Self { sender }
+        let handle = Self { sender };
+        tokio::spawn(run_user(env, user_id, receiver, handle.clone()));
+        handle
     }
 
     pub async fn act(&self, user_action: UserAction) {
@@ -64,11 +63,25 @@ async fn run_action(env: Arc<Env>, mut receiver: Receiver<(UserId, UserAction)>)
     panic!()
 }
 
-pub async fn run_user(env: Arc<Env>, user_id: UserId, mut receiver: Receiver<UserAction>) {
+pub async fn run_user(
+    env: Arc<Env>,
+    user_id: UserId,
+    mut receiver: Receiver<UserAction>,
+    handle: UserHandle,
+) {
     let mut user = User { action_count: 0 };
     while let Some(action) = receiver.recv().await {
         match user_transition(env.clone(), &user_id, &mut user, action).await {
-            Ok(updated_user) => user = updated_user,
+            Ok((updated_user, external)) => {
+                user = updated_user;
+                external.into_iter().for_each(|f| {
+                    let handle = handle.clone();
+                    tokio::spawn(async move {
+                        let action = f.await;
+                        handle.act(action).await;
+                    });
+                });
+            }
             Err(_) => (),
         }
     }
@@ -77,15 +90,21 @@ pub async fn run_user(env: Arc<Env>, user_id: UserId, mut receiver: Receiver<Use
 async fn user_transition(
     env: Arc<Env>,
     user_id: &UserId,
-    user: &mut User,
+    user: &User,
     action: UserAction,
-) -> anyhow::Result<User> {
+) -> anyhow::Result<(User, Vec<Pin<Box<dyn Future<Output = UserAction> + Send>>>)> {
     match action {
         UserAction::NewMessage {
             msg,
             start_conversation,
         } => {
-            let _ = placeholder_handle_bot_message(&env, user_id, msg).await;
+            let mut external = Vec::<Pin<Box<dyn Future<Output = UserAction> + Send>>>::new();
+
+            external.push(Box::pin(placeholder_handle_bot_message(
+                env.clone(),
+                user_id.clone(),
+                msg,
+            )));
 
             let user = User {
                 action_count: user.action_count + 1,
@@ -93,36 +112,53 @@ async fn user_transition(
 
             println!("Id: {0} {1}", user_id.1, user.action_count);
 
-            Ok(user)
+            Ok((user, external))
+        }
+        UserAction::SendResult(send_result) => {
+            println!("Send Succesful?: {0}", send_result.is_ok());
+            Ok((user.clone(), Vec::new()))
         }
     }
 }
 
 pub async fn placeholder_handle_bot_message(
-    env: &Env,
-    user_id: &UserId,
+    env: Arc<Env>,
+    user_id: UserId,
     msg: String,
-) -> anyhow::Result<()> {
-    let user_id = match user_id.0 {
-        UserChannel::Discord => serenity::all::UserId::new(user_id.1.parse::<u64>()?),
+) -> UserAction {
+    let user_id_result = match user_id.0 {
+        UserChannel::Discord => {
+            let user_id_result = user_id.1.parse::<u64>();
+            match user_id_result {
+                Ok(user_id) => Ok(serenity::all::UserId::new(user_id)),
+                Err(err) => Err(anyhow::anyhow!(err)),
+            }
+        }
         _ => panic!("Telegram not yet implemented"),
     };
-    let dm_channel_result = match user_id.to_user(&env.discord_http).await {
-        Ok(user) => user.create_dm_channel(&env.discord_http).await,
-        Err(e) => Err(e),
-    };
+    match user_id_result {
+        Err(err) => UserAction::SendResult(Err(err)),
+        Ok(user_id) => {
+            let dm_channel_result = match user_id.to_user(&env.discord_http).await {
+                Ok(user) => user.create_dm_channel(&env.discord_http).await,
+                Err(e) => Err(e),
+            };
 
-    match dm_channel_result {
-        Ok(channel) => {
-            let _ = channel
-                .send_message(
-                    &env.discord_http,
-                    CreateMessage::new().content(format!("You said {msg}")),
-                )
-                .await;
+            match dm_channel_result {
+                Ok(channel) => {
+                    let res = channel
+                        .send_message(
+                            &env.discord_http,
+                            CreateMessage::new().content(format!("You said {msg}")),
+                        )
+                        .await;
+                    match res {
+                        Ok(_) => UserAction::SendResult(Ok(())),
+                        Err(err) => UserAction::SendResult(Err(anyhow::anyhow!(err))),
+                    }
+                }
+                Err(err) => UserAction::SendResult(Err(anyhow::anyhow!(err))),
+            }
         }
-        Err(_) => (),
     }
-
-    Ok(())
 }
