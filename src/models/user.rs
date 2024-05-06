@@ -19,7 +19,7 @@ impl UserChannel {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct UserId(pub UserChannel, pub String);
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct User {
     pub action_count: usize,
 }

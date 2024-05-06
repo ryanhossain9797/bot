@@ -4,7 +4,9 @@ use serenity::all::CreateMessage;
 use tokio::sync::mpsc::{self, Receiver};
 
 use crate::{
-    lib_life_cycle::{ExternalOperation, LifeCycleHandle, Transition, TransitionResult},
+    lib_life_cycle::{
+        run_entity, ExternalOperation, LifeCycleHandle, Transition, TransitionResult,
+    },
     models::user::{User, UserAction, UserChannel, UserHandle, UserId},
     Env,
 };
@@ -34,7 +36,7 @@ impl UserHandle {
         transition: Transition<UserId, User, UserAction>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(8);
-        tokio::spawn(run_user(
+        tokio::spawn(run_entity(
             env,
             user_id,
             receiver,
@@ -74,32 +76,6 @@ async fn start_life_cycle(
         tokio::spawn(async move { user_handle.act(action).await });
     }
     panic!()
-}
-
-pub async fn run_user(
-    env: Arc<Env>,
-    user_id: UserId,
-    mut receiver: Receiver<UserAction>,
-    handle: LifeCycleHandle<UserId, UserAction>,
-    transition: Transition<UserId, User, UserAction>,
-) {
-    let mut user = User { action_count: 0 };
-    while let Some(action) = receiver.recv().await {
-        match transition.0(env.clone(), user_id.clone(), user.clone(), action).await {
-            Ok((updated_user, external)) => {
-                user = updated_user;
-                external.into_iter().for_each(|f| {
-                    let handle: LifeCycleHandle<UserId, UserAction> = handle.clone();
-                    let user_id = user_id.clone();
-                    tokio::spawn(async move {
-                        let action = f.await;
-                        handle.act(user_id, action).await;
-                    });
-                });
-            }
-            Err(_) => (),
-        }
-    }
 }
 
 async fn user_transition(
