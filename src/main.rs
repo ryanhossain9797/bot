@@ -1,7 +1,6 @@
 #![feature(never_type)]
 use std::{sync::Arc, time::Duration};
 
-use life_cycles::user_life_cycle::UserLifeCycleHandle;
 use models::bot::{BotAction, BotHandle};
 
 mod external_connections;
@@ -13,7 +12,10 @@ use external_connections::{common::get_client_token, discord::*};
 use serenity::all::{Http, HttpBuilder};
 use tokio::task::JoinSet;
 
-use crate::life_cycles::user_life_cycle::{user_transition_wrapper, Transition};
+use crate::{
+    lib_life_cycle::{LifeCycleHandle, Transition},
+    life_cycles::user_life_cycle::user_transition_wrapper,
+};
 
 struct Env {
     discord_http: Arc<Http>,
@@ -37,7 +39,7 @@ async fn main() -> anyhow::Result<!> {
         bot_singleton_handle,
     });
 
-    let user_life_cycle = UserLifeCycleHandle::new(env, Transition(user_transition_wrapper));
+    let user_life_cycle = LifeCycleHandle::new(env, Transition(user_transition_wrapper));
     let discord_client = prepare_discord_client(discord_token, user_life_cycle).await?;
 
     let mut set = JoinSet::new();

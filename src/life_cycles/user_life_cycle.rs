@@ -1,14 +1,10 @@
-use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use serenity::{
-    all::{CreateMessage, Http},
-    model::user,
-};
+use serenity::all::CreateMessage;
 use tokio::sync::mpsc::{self, Receiver};
 
 use crate::{
-    lib_life_cycle::{ExternalOperation, TransitionResult},
-    life_cycles::user_life_cycle,
+    lib_life_cycle::{ExternalOperation, LifeCycleHandle, Transition, TransitionResult},
     models::user::{User, UserAction, UserChannel, UserHandle, UserId},
     Env,
 };
@@ -16,22 +12,8 @@ use crate::{
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
 
-#[derive(Clone)]
-pub struct Transition(
-    pub  fn(
-        Arc<Env>,
-        UserId,
-        User,
-        UserAction,
-    ) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send>>,
-);
-#[derive(Clone)]
-pub struct UserLifeCycleHandle {
-    pub sender: mpsc::Sender<(UserId, UserAction)>,
-}
-
-impl<'a> UserLifeCycleHandle {
-    pub fn new(env: Arc<Env>, transition: Transition) -> Self {
+impl LifeCycleHandle<UserId, UserAction> {
+    pub fn new(env: Arc<Env>, transition: Transition<UserId, User, UserAction>) -> Self {
         let (sender, receiver) = mpsc::channel(8);
         let user_life_cycle_handle = Self { sender };
         tokio::spawn(start_life_cycle(
@@ -42,22 +24,14 @@ impl<'a> UserLifeCycleHandle {
         ));
         user_life_cycle_handle
     }
-
-    pub async fn act(&self, user_id: UserId, user_action: UserAction) {
-        let _ = self
-            .sender
-            .send((user_id, user_action))
-            .await
-            .expect("Send failed");
-    }
 }
 
 impl UserHandle {
     pub fn new(
         env: Arc<Env>,
         user_id: UserId,
-        user_life_cycle_handle: UserLifeCycleHandle,
-        transition: Transition,
+        user_life_cycle_handle: LifeCycleHandle<UserId, UserAction>,
+        transition: Transition<UserId, User, UserAction>,
     ) -> Self {
         let (sender, receiver) = mpsc::channel(8);
         tokio::spawn(run_user(
@@ -77,9 +51,9 @@ impl UserHandle {
 
 async fn start_life_cycle(
     env: Arc<Env>,
-    user_life_cycle_handle: UserLifeCycleHandle,
+    user_life_cycle_handle: LifeCycleHandle<UserId, UserAction>,
     mut receiver: Receiver<(UserId, UserAction)>,
-    transition: Transition,
+    transition: Transition<UserId, User, UserAction>,
 ) -> ! {
     let mut handle_by_user = std::collections::BTreeMap::<UserId, UserHandle>::new();
 
@@ -106,8 +80,8 @@ pub async fn run_user(
     env: Arc<Env>,
     user_id: UserId,
     mut receiver: Receiver<UserAction>,
-    handle: UserLifeCycleHandle,
-    transition: Transition,
+    handle: LifeCycleHandle<UserId, UserAction>,
+    transition: Transition<UserId, User, UserAction>,
 ) {
     let mut user = User { action_count: 0 };
     while let Some(action) = receiver.recv().await {
@@ -115,7 +89,7 @@ pub async fn run_user(
             Ok((updated_user, external)) => {
                 user = updated_user;
                 external.into_iter().for_each(|f| {
-                    let handle = handle.clone();
+                    let handle: LifeCycleHandle<UserId, UserAction> = handle.clone();
                     let user_id = user_id.clone();
                     tokio::spawn(async move {
                         let action = f.await;
@@ -188,7 +162,7 @@ pub async fn placeholder_handle_bot_message(
         _ => panic!("Telegram not yet implemented"),
     };
     match user_id_result {
-        Err(err) => UserAction::SendResult(Err(err)),
+        Err(err) => UserAction::SendResult(Arc::new(Err(err))),
         Ok(user_id) => {
             let dm_channel_result = match user_id.to_user(&env.discord_http).await {
                 Ok(user) => user.create_dm_channel(&env.discord_http).await,
@@ -204,11 +178,11 @@ pub async fn placeholder_handle_bot_message(
                         )
                         .await;
                     match res {
-                        Ok(_) => UserAction::SendResult(Ok(())),
-                        Err(err) => UserAction::SendResult(Err(anyhow::anyhow!(err))),
+                        Ok(_) => UserAction::SendResult(Arc::new(Ok(()))),
+                        Err(err) => UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err)))),
                     }
                 }
-                Err(err) => UserAction::SendResult(Err(anyhow::anyhow!(err))),
+                Err(err) => UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err)))),
             }
         }
     }

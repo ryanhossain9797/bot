@@ -2,7 +2,7 @@ use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    life_cycles::user_life_cycle::{self, UserLifeCycleHandle},
+    lib_life_cycle::LifeCycleHandle,
     models::user::{UserAction, UserChannel, UserId},
 };
 
@@ -10,7 +10,7 @@ use super::common;
 
 pub async fn prepare_discord_client(
     discord_token: &str,
-    user_life_cycle: UserLifeCycleHandle,
+    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
 ) -> anyhow::Result<Client> {
     // Configure the client with your Discord bot token in the environment.
 
@@ -31,7 +31,7 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    user_life_cycle: UserLifeCycleHandle,
+    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
 }
 
 #[async_trait]

@@ -1,3 +1,5 @@
+use std::{clone, sync::Arc};
+
 use tokio::sync::mpsc;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -22,12 +24,13 @@ pub struct User {
     pub action_count: usize,
 }
 
+#[derive(Clone)]
 pub enum UserAction {
     NewMessage {
         msg: String,
         start_conversation: bool,
     },
-    SendResult(anyhow::Result<()>),
+    SendResult(Arc<anyhow::Result<()>>),
 }
 
 #[derive(Clone)]
