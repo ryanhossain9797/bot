@@ -3,14 +3,14 @@ use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
     lib_life_cycle::LifeCycleHandle,
-    models::user::{UserAction, UserChannel, UserId},
+    models::user::{User, UserAction, UserChannel, UserId},
 };
 
 use super::common;
 
 pub async fn prepare_discord_client(
     discord_token: &str,
-    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
+    user_life_cycle: LifeCycleHandle<UserId, User, UserAction>,
 ) -> anyhow::Result<Client> {
     // Configure the client with your Discord bot token in the environment.
 
@@ -31,7 +31,7 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
+    user_life_cycle: LifeCycleHandle<UserId, User, UserAction>,
 }
 
 #[async_trait]

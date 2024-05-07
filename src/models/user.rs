@@ -32,8 +32,3 @@ pub enum UserAction {
     },
     SendResult(Arc<anyhow::Result<()>>),
 }
-
-#[derive(Clone)]
-pub struct UserHandle {
-    pub sender: mpsc::Sender<UserAction>,
-}
