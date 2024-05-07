@@ -13,7 +13,7 @@ use serenity::all::{Http, HttpBuilder};
 use tokio::task::JoinSet;
 
 use crate::{
-    lib_life_cycle::{LifeCycleHandle, Transition},
+    lib_life_cycle::{new_life_cycle, LifeCycleHandle, Transition},
     life_cycles::user_life_cycle::user_transition_wrapper,
 };
 
@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<!> {
         bot_singleton_handle,
     });
 
-    let user_life_cycle = LifeCycleHandle::new(env, Transition(user_transition_wrapper));
+    let user_life_cycle = new_life_cycle(env, Transition(user_transition_wrapper));
     let discord_client = prepare_discord_client(discord_token, user_life_cycle).await?;
 
     let mut set = JoinSet::new();

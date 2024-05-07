@@ -10,7 +10,7 @@ use super::common;
 
 pub async fn prepare_discord_client(
     discord_token: &str,
-    user_life_cycle: LifeCycleHandle<UserId, User, UserAction>,
+    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
 ) -> anyhow::Result<Client> {
     // Configure the client with your Discord bot token in the environment.
 
@@ -31,7 +31,7 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    user_life_cycle: LifeCycleHandle<UserId, User, UserAction>,
+    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
 }
 
 #[async_trait]

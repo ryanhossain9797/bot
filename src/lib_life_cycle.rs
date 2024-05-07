@@ -1,4 +1,4 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use tokio::sync::mpsc::{self, Receiver};
 
@@ -23,36 +23,19 @@ pub struct Transition<Id, State, Action>(
 );
 
 #[derive(Clone)]
-pub struct LifeCycleHandle<Id, State, Action>
+pub struct LifeCycleHandle<Id, Action>
 where
     Id: LifeCycleItem,
-    State: LifeCycleItem + Default,
     Action: LifeCycleItem,
 {
-    pub state_type: PhantomData<State>,
     pub sender: mpsc::Sender<(Id, Action)>,
 }
 
-impl<Id, State, Action> LifeCycleHandle<Id, State, Action>
+impl<Id, Action> LifeCycleHandle<Id, Action>
 where
     Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + Default + 'static,
     Action: LifeCycleItem + 'static,
 {
-    pub fn new(env: Arc<Env>, transition: Transition<Id, State, Action>) -> Self {
-        let (sender, receiver) = mpsc::channel(8);
-        let user_life_cycle_handle = Self {
-            state_type: PhantomData,
-            sender,
-        };
-        tokio::spawn(start_life_cycle(
-            env,
-            user_life_cycle_handle.clone(),
-            receiver,
-            transition,
-        ));
-        user_life_cycle_handle
-    }
     pub async fn act(&self, user_id: Id, user_action: Action) {
         let _ = self
             .sender
@@ -62,7 +45,26 @@ where
     }
 }
 
-pub async fn run_entity<
+pub fn new_life_cycle<
+    Id: LifeCycleItem + Ord + 'static,
+    State: LifeCycleItem + Default + 'static,
+    Action: LifeCycleItem + 'static,
+>(
+    env: Arc<Env>,
+    transition: Transition<Id, State, Action>,
+) -> LifeCycleHandle<Id, Action> {
+    let (sender, receiver) = mpsc::channel(8);
+    let user_life_cycle_handle = LifeCycleHandle { sender };
+    tokio::spawn(start_life_cycle(
+        env,
+        user_life_cycle_handle.clone(),
+        receiver,
+        transition,
+    ));
+    user_life_cycle_handle
+}
+
+async fn run_entity<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
     Action: LifeCycleItem + 'static,
@@ -70,7 +72,7 @@ pub async fn run_entity<
     env: Arc<Env>,
     id: Id,
     mut receiver: Receiver<Action>,
-    handle: LifeCycleHandle<Id, State, Action>,
+    handle: LifeCycleHandle<Id, Action>,
     transition: Transition<Id, State, Action>,
 ) {
     let mut state = State::default();
@@ -79,7 +81,7 @@ pub async fn run_entity<
             Ok((updated_user, external)) => {
                 state = updated_user;
                 external.into_iter().for_each(|f| {
-                    let handle: LifeCycleHandle<Id, State, Action> = handle.clone();
+                    let handle: LifeCycleHandle<Id, Action> = handle.clone();
                     let user_id = id.clone();
                     tokio::spawn(async move {
                         let action = f.await;
@@ -93,65 +95,60 @@ pub async fn run_entity<
 }
 
 #[derive(Clone)]
-pub struct Handle<Id, State, Action>
+pub struct Handle<Action>
 where
-    Id: LifeCycleItem + 'static,
-    State: LifeCycleItem + 'static + Default,
     Action: LifeCycleItem + 'static,
 {
-    id_type: PhantomData<Id>,
-    state_type: PhantomData<State>,
     pub sender: mpsc::Sender<Action>,
 }
-impl<Id, State, Action> Handle<Id, State, Action>
+
+impl<Action> Handle<Action>
 where
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + 'static + Default,
     Action: LifeCycleItem + 'static,
 {
-    pub fn new(
-        env: Arc<Env>,
-        id: Id,
-        user_life_cycle_handle: LifeCycleHandle<Id, State, Action>,
-        transition: Transition<Id, State, Action>,
-    ) -> Self {
-        let (sender, receiver) = mpsc::channel(8);
-        tokio::spawn(run_entity(
-            env,
-            id,
-            receiver,
-            user_life_cycle_handle,
-            transition,
-        ));
-        Self {
-            id_type: PhantomData,
-            state_type: PhantomData,
-            sender,
-        }
-    }
-
     pub async fn act(&self, action: Action) {
         let _ = self.sender.send(action).await.expect("Send failed");
     }
 }
 
-pub async fn start_life_cycle<
+pub fn new_entity<
+    Id: LifeCycleItem + Ord + 'static,
+    State: LifeCycleItem + 'static + Default,
+    Action: LifeCycleItem + 'static,
+>(
+    env: Arc<Env>,
+    id: Id,
+    user_life_cycle_handle: LifeCycleHandle<Id, Action>,
+    transition: Transition<Id, State, Action>,
+) -> Handle<Action> {
+    let (sender, receiver) = mpsc::channel(8);
+    tokio::spawn(run_entity(
+        env,
+        id,
+        receiver,
+        user_life_cycle_handle,
+        transition,
+    ));
+    Handle { sender }
+}
+
+async fn start_life_cycle<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
     Action: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
-    life_cycle_handle: LifeCycleHandle<Id, State, Action>,
+    life_cycle_handle: LifeCycleHandle<Id, Action>,
     mut receiver: Receiver<(Id, Action)>,
     transition: Transition<Id, State, Action>,
 ) -> ! {
-    let mut handle_by_id = std::collections::BTreeMap::<Id, Handle<Id, State, Action>>::new();
+    let mut handle_by_id = std::collections::BTreeMap::<Id, Handle<Action>>::new();
 
     while let Some((id, action)) = receiver.recv().await {
         match handle_by_id.contains_key(&id) {
             true => (),
             false => {
-                let handle = Handle::new(
+                let handle = new_entity(
                     env.clone(),
                     id.clone(),
                     life_cycle_handle.clone(),
