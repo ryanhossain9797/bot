@@ -9,6 +9,9 @@ pub type TransitionResult<Type, Action> =
 
 pub type ExternalOperation<Action> = Pin<Box<dyn Future<Output = Action> + Send>>;
 
+pub trait LifeCycleItem: Send + Sync + Clone {}
+impl<T: Send + Sync + Clone> LifeCycleItem for T {}
+
 #[derive(Clone)]
 pub struct Transition<Id, State, Action>(
     pub  fn(
@@ -22,9 +25,9 @@ pub struct Transition<Id, State, Action>(
 #[derive(Clone)]
 pub struct LifeCycleHandle<Id, State, Action>
 where
-    Id: Clone + Send + Sync,
-    State: Clone + Send + Sync + Default,
-    Action: Clone + Send,
+    Id: LifeCycleItem,
+    State: LifeCycleItem + Default,
+    Action: LifeCycleItem,
 {
     pub state_type: PhantomData<State>,
     pub sender: mpsc::Sender<(Id, Action)>,
@@ -32,9 +35,9 @@ where
 
 impl<Id, State, Action> LifeCycleHandle<Id, State, Action>
 where
-    Id: Clone + Send + Sync + Ord + 'static,
-    State: Clone + Send + Sync + Default + 'static,
-    Action: Clone + Send + Sync + 'static,
+    Id: LifeCycleItem + Ord + 'static,
+    State: LifeCycleItem + Default + 'static,
+    Action: LifeCycleItem + 'static,
 {
     pub fn new(env: Arc<Env>, transition: Transition<Id, State, Action>) -> Self {
         let (sender, receiver) = mpsc::channel(8);
@@ -60,9 +63,9 @@ where
 }
 
 pub async fn run_entity<
-    Id: Clone + Send + Sync + Ord + 'static,
-    Action: Clone + Send + Sync + 'static,
-    State: Clone + Send + Sync + Default + 'static,
+    Id: LifeCycleItem + Ord + 'static,
+    State: LifeCycleItem + Default + 'static,
+    Action: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
     id: Id,
@@ -92,9 +95,9 @@ pub async fn run_entity<
 #[derive(Clone)]
 pub struct Handle<Id, State, Action>
 where
-    Id: Clone + Send + 'static,
-    State: Clone + Send + 'static + Default,
-    Action: Clone + Send + 'static,
+    Id: LifeCycleItem + 'static,
+    State: LifeCycleItem + 'static + Default,
+    Action: LifeCycleItem + 'static,
 {
     id_type: PhantomData<Id>,
     state_type: PhantomData<State>,
@@ -102,9 +105,9 @@ where
 }
 impl<Id, State, Action> Handle<Id, State, Action>
 where
-    Id: Clone + Send + Sync + Ord + 'static,
-    State: Clone + Send + Sync + 'static + Default,
-    Action: Clone + Send + Sync + 'static,
+    Id: LifeCycleItem + Ord + 'static,
+    State: LifeCycleItem + 'static + Default,
+    Action: LifeCycleItem + 'static,
 {
     pub fn new(
         env: Arc<Env>,
@@ -133,9 +136,9 @@ where
 }
 
 pub async fn start_life_cycle<
-    Id: Clone + Send + Sync + Ord + 'static,
-    State: Clone + Send + Sync + Default + 'static,
-    Action: Clone + Send + Sync + 'static,
+    Id: LifeCycleItem + Ord + 'static,
+    State: LifeCycleItem + Default + 'static,
+    Action: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
     life_cycle_handle: LifeCycleHandle<Id, State, Action>,
