@@ -1,13 +1,9 @@
-use std::{future::Future, marker::PhantomData, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use serenity::all::CreateMessage;
-use tokio::sync::mpsc::{self, Receiver};
 
 use crate::{
-    lib_life_cycle::{
-        run_entity, start_life_cycle, ExternalOperation, Handle, LifeCycleHandle, Transition,
-        TransitionResult,
-    },
+    lib_life_cycle::{ExternalOperation, TransitionResult},
     models::user::{User, UserAction, UserChannel, UserId},
     Env,
 };

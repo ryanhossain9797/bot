@@ -1,20 +1,6 @@
-use serenity::{
-    all::{CreateMessage, Http},
-    futures::TryFutureExt,
-    http,
-    model::channel,
-};
-use tokio::{
-    io,
-    sync::{mpsc, oneshot},
-};
+use tokio::sync::mpsc;
 
-use crate::{
-    external_connections::common::get_client_token,
-    models::bot::{Bot, BotAction, BotHandle},
-};
-
-use super::user_life_cycle::placeholder_handle_bot_message;
+use crate::models::bot::{Bot, BotAction, BotHandle};
 
 impl Bot {
     pub fn new(receiver: mpsc::Receiver<BotAction>) -> Self {
