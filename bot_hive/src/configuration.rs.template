@@ -1,0 +1,6 @@
+pub const MONGODB_AUTH: &str = "FOO";
+pub const ADMIN_IDS: [&str; 2] = ["1234", "5678"];
+pub mod client_tokens {
+    pub const telegram_token: &str = "FOO";
+    pub const discord_token: &str = "FOO";
+}
