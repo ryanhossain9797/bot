@@ -1,10 +1,10 @@
 #![feature(never_type)]
 use std::{sync::Arc, time::Duration};
 
+use lib_hive::{new_life_cycle, Transition};
 use models::bot::{BotAction, BotHandle};
 
 mod external_connections;
-mod lib_life_cycle;
 mod life_cycles;
 mod models;
 
@@ -12,11 +12,9 @@ use external_connections::{common::get_client_token, discord::*};
 use serenity::all::{Http, HttpBuilder};
 use tokio::task::JoinSet;
 
-use crate::{
-    lib_life_cycle::{new_life_cycle, LifeCycleHandle, Transition},
-    life_cycles::user_life_cycle::user_transition_wrapper,
-};
+use crate::life_cycles::user_life_cycle::user_transition_wrapper;
 
+#[derive(Clone)]
 struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,

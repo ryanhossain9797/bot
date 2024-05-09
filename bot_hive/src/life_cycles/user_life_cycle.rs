@@ -1,9 +1,9 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
+use lib_hive::{ExternalOperation, TransitionResult};
 use serenity::all::CreateMessage;
 
 use crate::{
-    lib_life_cycle::{ExternalOperation, TransitionResult},
     models::user::{User, UserAction, UserChannel, UserId},
     Env,
 };

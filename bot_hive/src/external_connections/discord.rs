@@ -1,12 +1,8 @@
+use lib_hive::LifeCycleHandle;
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
-use crate::{
-    lib_life_cycle::LifeCycleHandle,
-    models::user::{User, UserAction, UserChannel, UserId},
-};
-
-use super::common;
+use crate::models::user::{User, UserAction, UserChannel, UserId};
 
 pub async fn prepare_discord_client(
     discord_token: &str,

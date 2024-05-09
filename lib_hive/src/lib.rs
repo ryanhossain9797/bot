@@ -2,8 +2,6 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use tokio::sync::mpsc::{self, Receiver};
 
-use crate::Env;
-
 pub type TransitionResult<Type, Action> =
     anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output = Action> + Send>>>)>;
 
@@ -13,7 +11,7 @@ pub trait LifeCycleItem: Send + Sync + Clone {}
 impl<T: Send + Sync + Clone> LifeCycleItem for T {}
 
 #[derive(Clone)]
-pub struct Transition<Id, State, Action>(
+pub struct Transition<Id, State, Action, Env>(
     pub  fn(
         Arc<Env>,
         Id,
@@ -49,9 +47,10 @@ pub fn new_life_cycle<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
     Action: LifeCycleItem + 'static,
+    Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
-    transition: Transition<Id, State, Action>,
+    transition: Transition<Id, State, Action, Env>,
 ) -> LifeCycleHandle<Id, Action> {
     let (sender, receiver) = mpsc::channel(8);
     let user_life_cycle_handle = LifeCycleHandle { sender };
@@ -68,12 +67,13 @@ async fn run_entity<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
     Action: LifeCycleItem + 'static,
+    Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
     id: Id,
     mut receiver: Receiver<Action>,
     handle: LifeCycleHandle<Id, Action>,
-    transition: Transition<Id, State, Action>,
+    transition: Transition<Id, State, Action, Env>,
 ) {
     let mut state = State::default();
     while let Some(action) = receiver.recv().await {
@@ -115,11 +115,12 @@ pub fn new_entity<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + 'static + Default,
     Action: LifeCycleItem + 'static,
+    Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
     id: Id,
     user_life_cycle_handle: LifeCycleHandle<Id, Action>,
-    transition: Transition<Id, State, Action>,
+    transition: Transition<Id, State, Action, Env>,
 ) -> Handle<Action> {
     let (sender, receiver) = mpsc::channel(8);
     tokio::spawn(run_entity(
@@ -136,11 +137,12 @@ async fn start_life_cycle<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
     Action: LifeCycleItem + 'static,
+    Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
     life_cycle_handle: LifeCycleHandle<Id, Action>,
     mut receiver: Receiver<(Id, Action)>,
-    transition: Transition<Id, State, Action>,
+    transition: Transition<Id, State, Action, Env>,
 ) -> ! {
     let mut handle_by_id = std::collections::BTreeMap::<Id, Handle<Action>>::new();
 
