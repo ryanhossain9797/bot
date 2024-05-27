@@ -15,7 +15,7 @@ async fn user_transition(
     env: Arc<Env>,
     user_id: UserId,
     user: User,
-    action: UserAction,
+    action: &UserAction,
 ) -> UserTransitionResult {
     match action {
         UserAction::NewMessage {
@@ -27,7 +27,7 @@ async fn user_transition(
             external.push(Box::pin(placeholder_handle_bot_message(
                 env.clone(),
                 user_id.clone(),
-                msg,
+                msg.to_string(),
             )));
 
             let user = User {
@@ -49,8 +49,8 @@ pub fn user_transition_wrapper(
     env: Arc<Env>,
     user_id: UserId,
     user: User,
-    action: UserAction,
-) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send>> {
+    action: &UserAction,
+) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send + '_>> {
     let fut = user_transition(env, user_id, user, action);
     Box::pin(fut)
 }

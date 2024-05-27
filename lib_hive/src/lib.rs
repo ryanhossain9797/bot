@@ -16,8 +16,8 @@ pub struct Transition<Id, State, Action, Env>(
         Arc<Env>,
         Id,
         State,
-        Action,
-    ) -> Pin<Box<dyn Future<Output = TransitionResult<State, Action>> + Send>>,
+        &Action,
+    ) -> Pin<Box<dyn Future<Output = TransitionResult<State, Action>> + Send + '_>>,
 );
 
 #[derive(Clone)]
@@ -77,7 +77,7 @@ async fn run_entity<
 ) {
     let mut state = State::default();
     while let Some(action) = receiver.recv().await {
-        match transition.0(env.clone(), id.clone(), state.clone(), action).await {
+        match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
             Ok((updated_user, external)) => {
                 state = updated_user;
                 external.into_iter().for_each(|f| {
