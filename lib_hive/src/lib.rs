@@ -1,38 +1,56 @@
 use std::{future::Future, pin::Pin, sync::Arc};
+use std::time::Duration;
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 use tokio::sync::mpsc::{self, Receiver};
+use tokio::task::JoinHandle;
 
 pub type TransitionResult<Type, Action> =
-    anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output = Action> + Send>>>)>;
+anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output=Action> + Send>>>)>;
 
-pub type ExternalOperation<Action> = Pin<Box<dyn Future<Output = Action> + Send>>;
+pub type ExternalOperation<Action> = Pin<Box<dyn Future<Output=Action> + Send>>;
 
 pub trait LifeCycleItem: Send + Sync + Clone {}
+
 impl<T: Send + Sync + Clone> LifeCycleItem for T {}
 
 #[derive(Clone)]
 pub struct Transition<Id, State, Action, Env>(
-    pub  fn(
+    pub fn(
         Arc<Env>,
         Id,
         State,
         &Action,
-    ) -> Pin<Box<dyn Future<Output = TransitionResult<State, Action>> + Send + '_>>,
+    ) -> Pin<Box<dyn Future<Output=TransitionResult<State, Action>> + Send + '_>>,
+);
+
+
+#[derive(Clone)]
+pub struct Scheduled<Action> {
+    at: DateTime<Utc>,
+    action: Action,
+}
+
+#[derive(Clone)]
+pub struct Schedule<State, Action>(
+    pub fn(
+        &State,
+    ) -> Vec<Scheduled<Action>>,
 );
 
 #[derive(Clone)]
 pub struct LifeCycleHandle<Id, Action>
-where
-    Id: LifeCycleItem,
-    Action: LifeCycleItem,
+    where
+        Id: LifeCycleItem,
+        Action: LifeCycleItem,
 {
     pub sender: mpsc::Sender<(Id, Action)>,
 }
 
 impl<Id, Action> LifeCycleHandle<Id, Action>
-where
-    Id: LifeCycleItem + Ord + 'static,
-    Action: LifeCycleItem + 'static,
+    where
+        Id: LifeCycleItem + Ord + 'static,
+        Action: LifeCycleItem + 'static,
 {
     pub async fn act(&self, user_id: Id, user_action: Action) {
         let _ = self
@@ -51,6 +69,7 @@ pub fn new_life_cycle<
 >(
     env: Arc<Env>,
     transition: Transition<Id, State, Action, Env>,
+    schedule: Schedule<State, Action>,
 ) -> LifeCycleHandle<Id, Action> {
     let (sender, receiver) = mpsc::channel(8);
     let user_life_cycle_handle = LifeCycleHandle { sender };
@@ -59,6 +78,7 @@ pub fn new_life_cycle<
         user_life_cycle_handle.clone(),
         receiver,
         transition,
+        schedule,
     ));
     user_life_cycle_handle
 }
@@ -74,12 +94,49 @@ async fn run_entity<
     mut receiver: Receiver<Action>,
     handle: LifeCycleHandle<Id, Action>,
     transition: Transition<Id, State, Action, Env>,
+    schedule: Schedule<State, Action>,
 ) {
+    let now = Utc::now();
     let mut state = State::default();
+    let mut maybe_scheduled: Option<JoinHandle<()>> = None;
+
     while let Some(action) = receiver.recv().await {
         match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
             Ok((updated_user, external)) => {
-                state = updated_user;
+                match &maybe_scheduled {
+                    Some(scheduled) => {
+                        scheduled.abort();
+                    }
+                    None => {}
+                }
+                let mut scheduled = schedule.0(&updated_user);
+
+                scheduled.sort_by_key(|scheduled| scheduled.at);
+
+                let earliest = scheduled.first();
+                let earliest = earliest.map(|scheduled| scheduled.at);
+
+                match earliest {
+                    Some(scheduled_at) => {
+                        let handle: LifeCycleHandle<Id, Action> = handle.clone();
+                        let user_id = id.clone();
+                        let handle = tokio::spawn(async move {
+                            let sleep_for = (scheduled_at - now).num_milliseconds();
+                            match sleep_for < 0 {
+                                true => {}
+                                false => {
+                                    tokio::time::sleep(Duration::from_millis(sleep_for as u64)).await;
+                                }
+                            }
+
+                            //run timer here
+                        });
+
+                        maybe_scheduled = Some(handle)
+                    }
+                    None => {}
+                }
+
                 external.into_iter().for_each(|f| {
                     let handle: LifeCycleHandle<Id, Action> = handle.clone();
                     let user_id = id.clone();
@@ -88,6 +145,7 @@ async fn run_entity<
                         handle.act(user_id, action).await;
                     });
                 });
+                state = updated_user;
             }
             Err(_) => (),
         }
@@ -96,15 +154,15 @@ async fn run_entity<
 
 #[derive(Clone)]
 pub struct Handle<Action>
-where
-    Action: LifeCycleItem + 'static,
+    where
+        Action: LifeCycleItem + 'static,
 {
     pub sender: mpsc::Sender<Action>,
 }
 
 impl<Action> Handle<Action>
-where
-    Action: LifeCycleItem + 'static,
+    where
+        Action: LifeCycleItem + 'static,
 {
     pub async fn act(&self, action: Action) {
         let _ = self.sender.send(action).await.expect("Send failed");
@@ -121,6 +179,7 @@ pub fn new_entity<
     id: Id,
     user_life_cycle_handle: LifeCycleHandle<Id, Action>,
     transition: Transition<Id, State, Action, Env>,
+    schedule: Schedule<State, Action>,
 ) -> Handle<Action> {
     let (sender, receiver) = mpsc::channel(8);
     tokio::spawn(run_entity(
@@ -129,6 +188,7 @@ pub fn new_entity<
         receiver,
         user_life_cycle_handle,
         transition,
+        schedule,
     ));
     Handle { sender }
 }
@@ -143,6 +203,7 @@ async fn start_life_cycle<
     life_cycle_handle: LifeCycleHandle<Id, Action>,
     mut receiver: Receiver<(Id, Action)>,
     transition: Transition<Id, State, Action, Env>,
+    schedule: Schedule<State, Action>,
 ) -> ! {
     let mut handle_by_id = std::collections::BTreeMap::<Id, Handle<Action>>::new();
 
@@ -155,6 +216,7 @@ async fn start_life_cycle<
                     id.clone(),
                     life_cycle_handle.clone(),
                     transition.clone(),
+                    schedule.clone(),
                 );
                 handle_by_id.insert(id.clone(), handle.clone());
             }
