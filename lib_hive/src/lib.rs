@@ -1,14 +1,14 @@
-use std::{future::Future, pin::Pin, sync::Arc};
-use std::time::Duration;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use std::time::Duration;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use tokio::sync::mpsc::{self, Receiver};
 use tokio::task::JoinHandle;
 
 pub type TransitionResult<Type, Action> =
-anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output=Action> + Send>>>)>;
+    anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output = Action> + Send>>>)>;
 
-pub type ExternalOperation<Action> = Pin<Box<dyn Future<Output=Action> + Send>>;
+pub type ExternalOperation<Action> = Pin<Box<dyn Future<Output = Action> + Send>>;
 
 pub trait LifeCycleItem: Send + Sync + Clone {}
 
@@ -16,14 +16,13 @@ impl<T: Send + Sync + Clone> LifeCycleItem for T {}
 
 #[derive(Clone)]
 pub struct Transition<Id, State, Action, Env>(
-    pub fn(
+    pub  fn(
         Arc<Env>,
         Id,
         State,
         &Action,
-    ) -> Pin<Box<dyn Future<Output=TransitionResult<State, Action>> + Send + '_>>,
+    ) -> Pin<Box<dyn Future<Output = TransitionResult<State, Action>> + Send + '_>>,
 );
-
 
 #[derive(Clone)]
 pub struct Scheduled<Action> {
@@ -32,25 +31,27 @@ pub struct Scheduled<Action> {
 }
 
 #[derive(Clone)]
-pub struct Schedule<State, Action>(
-    pub fn(
-        &State,
-    ) -> Vec<Scheduled<Action>>,
-);
+pub struct Schedule<State, Action>(pub fn(&State) -> Vec<Scheduled<Action>>);
+
+pub enum Activity<Action: LifeCycleItem + 'static> {
+    LifeCycleAction(Action),
+    ScheduledWakeup,
+    DeleteSelf,
+}
 
 #[derive(Clone)]
 pub struct LifeCycleHandle<Id, Action>
-    where
-        Id: LifeCycleItem,
-        Action: LifeCycleItem,
+where
+    Id: LifeCycleItem,
+    Action: LifeCycleItem,
 {
     pub sender: mpsc::Sender<(Id, Action)>,
 }
 
 impl<Id, Action> LifeCycleHandle<Id, Action>
-    where
-        Id: LifeCycleItem + Ord + 'static,
-        Action: LifeCycleItem + 'static,
+where
+    Id: LifeCycleItem + Ord + 'static,
+    Action: LifeCycleItem + 'static,
 {
     pub async fn act(&self, user_id: Id, user_action: Action) {
         let _ = self
@@ -91,7 +92,7 @@ async fn run_entity<
 >(
     env: Arc<Env>,
     id: Id,
-    mut receiver: Receiver<Action>,
+    mut receiver: Receiver<Activity<Action>>,
     handle: LifeCycleHandle<Id, Action>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
@@ -100,72 +101,85 @@ async fn run_entity<
     let mut state = State::default();
     let mut maybe_scheduled: Option<JoinHandle<()>> = None;
 
-    while let Some(action) = receiver.recv().await {
-        match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
-            Ok((updated_user, external)) => {
-                match &maybe_scheduled {
-                    Some(scheduled) => {
-                        scheduled.abort();
-                    }
-                    None => {}
-                }
-                let mut scheduled = schedule.0(&updated_user);
-
-                scheduled.sort_by_key(|scheduled| scheduled.at);
-
-                let earliest = scheduled.first();
-                let earliest = earliest.map(|scheduled| scheduled.at);
-
-                match earliest {
-                    Some(scheduled_at) => {
-                        let handle: LifeCycleHandle<Id, Action> = handle.clone();
-                        let user_id = id.clone();
-                        let handle = tokio::spawn(async move {
-                            let sleep_for = (scheduled_at - now).num_milliseconds();
-                            match sleep_for < 0 {
-                                true => {}
-                                false => {
-                                    tokio::time::sleep(Duration::from_millis(sleep_for as u64)).await;
-                                }
+    while let Some(activity) = receiver.recv().await {
+        match activity {
+            Activity::LifeCycleAction(action) => {
+                match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
+                    Ok((updated_user, external)) => {
+                        match &maybe_scheduled {
+                            Some(scheduled) => {
+                                scheduled.abort();
                             }
+                            None => {}
+                        }
+                        let mut scheduled = schedule.0(&updated_user);
 
-                            //run timer here
+                        scheduled.sort_by_key(|scheduled| scheduled.at);
+
+                        let earliest = scheduled.first().map(|scheduled| scheduled.at);
+
+                        match earliest {
+                            Some(scheduled_at) => {
+                                let handle = tokio::spawn(async move {
+                                    let sleep_for = (scheduled_at - now).num_milliseconds();
+                                    match sleep_for < 0 {
+                                        true => {}
+                                        false => {
+                                            tokio::time::sleep(Duration::from_millis(
+                                                sleep_for as u64,
+                                            ))
+                                            .await;
+                                        }
+                                    }
+
+                                    //run timer here
+                                });
+
+                                maybe_scheduled = Some(handle)
+                            }
+                            None => {}
+                        }
+
+                        external.into_iter().for_each(|f| {
+                            let handle: LifeCycleHandle<Id, Action> = handle.clone();
+                            let user_id = id.clone();
+                            tokio::spawn(async move {
+                                let action = f.await;
+                                handle.act(user_id, action).await;
+                            });
                         });
-
-                        maybe_scheduled = Some(handle)
+                        state = updated_user;
                     }
-                    None => {}
+                    Err(_) => (),
                 }
-
-                external.into_iter().for_each(|f| {
-                    let handle: LifeCycleHandle<Id, Action> = handle.clone();
-                    let user_id = id.clone();
-                    tokio::spawn(async move {
-                        let action = f.await;
-                        handle.act(user_id, action).await;
-                    });
-                });
-                state = updated_user;
             }
-            Err(_) => (),
+            Activity::ScheduledWakeup => {
+                let mut scheduled = schedule.0(&state);
+                scheduled.sort_by_key(|scheduled| scheduled.at);
+            }
+            Activity::DeleteSelf => todo!(),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct Handle<Action>
-    where
-        Action: LifeCycleItem + 'static,
+where
+    Action: LifeCycleItem + 'static,
 {
-    pub sender: mpsc::Sender<Action>,
+    pub sender: mpsc::Sender<Activity<Action>>,
 }
 
 impl<Action> Handle<Action>
-    where
-        Action: LifeCycleItem + 'static,
+where
+    Action: LifeCycleItem + 'static,
 {
     pub async fn act(&self, action: Action) {
-        let _ = self.sender.send(action).await.expect("Send failed");
+        let _ = self
+            .sender
+            .send(Activity::LifeCycleAction(action))
+            .await
+            .expect("Send failed");
     }
 }
 

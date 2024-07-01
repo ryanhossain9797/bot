@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use lib_hive::{ExternalOperation, TransitionResult};
+use lib_hive::{ExternalOperation, Scheduled, TransitionResult};
 use serenity::all::CreateMessage;
 
 use crate::{
@@ -53,6 +53,10 @@ pub fn user_transition_wrapper(
 ) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send + '_>> {
     let fut = user_transition(env, user_id, user, action);
     Box::pin(fut)
+}
+
+pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
+    Vec::new()
 }
 
 pub async fn placeholder_handle_bot_message(
