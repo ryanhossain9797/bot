@@ -1,8 +1,13 @@
+mod bee_handle;
+mod life_cycle_handle;
+
+use bee_handle::{new_entity, Handle};
 use chrono::{DateTime, NaiveDateTime, Utc};
+pub use life_cycle_handle::*;
 use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
 
 pub type TransitionResult<Type, Action> =
@@ -26,8 +31,8 @@ pub struct Transition<Id, State, Action, Env>(
 
 #[derive(Clone)]
 pub struct Scheduled<Action> {
-    at: DateTime<Utc>,
-    action: Action,
+    pub at: DateTime<Utc>,
+    pub action: Action,
 }
 
 #[derive(Clone)]
@@ -37,51 +42,6 @@ pub enum Activity<Action: LifeCycleItem + 'static> {
     LifeCycleAction(Action),
     ScheduledWakeup,
     DeleteSelf,
-}
-
-#[derive(Clone)]
-pub struct LifeCycleHandle<Id, Action>
-where
-    Id: LifeCycleItem,
-    Action: LifeCycleItem,
-{
-    pub sender: mpsc::Sender<(Id, Action)>,
-}
-
-impl<Id, Action> LifeCycleHandle<Id, Action>
-where
-    Id: LifeCycleItem + Ord + 'static,
-    Action: LifeCycleItem + 'static,
-{
-    pub async fn act(&self, user_id: Id, user_action: Action) {
-        let _ = self
-            .sender
-            .send((user_id, user_action))
-            .await
-            .expect("Send failed");
-    }
-}
-
-pub fn new_life_cycle<
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + 'static,
-    Env: LifeCycleItem + 'static,
->(
-    env: Arc<Env>,
-    transition: Transition<Id, State, Action, Env>,
-    schedule: Schedule<State, Action>,
-) -> LifeCycleHandle<Id, Action> {
-    let (sender, receiver) = mpsc::channel(8);
-    let user_life_cycle_handle = LifeCycleHandle { sender };
-    tokio::spawn(start_life_cycle(
-        env,
-        user_life_cycle_handle.clone(),
-        receiver,
-        transition,
-        schedule,
-    ));
-    user_life_cycle_handle
 }
 
 async fn run_entity<
@@ -96,6 +56,7 @@ async fn run_entity<
     handle: LifeCycleHandle<Id, Action>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
+    self_sender: Sender<Activity<Action>>,
 ) {
     let now = Utc::now();
     let mut state = State::default();
@@ -116,13 +77,14 @@ async fn run_entity<
 
                         scheduled.sort_by_key(|scheduled| scheduled.at);
 
-                        let earliest = scheduled.first().map(|scheduled| scheduled.at);
+                        let earliest = scheduled.into_iter().next();
 
                         match earliest {
-                            Some(scheduled_at) => {
-                                let handle = tokio::spawn(async move {
-                                    let sleep_for = (scheduled_at - now).num_milliseconds();
-                                    match sleep_for < 0 {
+                            Some(scheduled) => {
+                                let self_sender = self_sender.clone();
+                                let timer_handle = tokio::spawn(async move {
+                                    let sleep_for = (scheduled.clone().at - now).num_milliseconds();
+                                    match sleep_for <= 0 {
                                         true => {}
                                         false => {
                                             tokio::time::sleep(Duration::from_millis(
@@ -132,10 +94,11 @@ async fn run_entity<
                                         }
                                     }
 
-                                    //run timer here
+                                    let _ =
+                                        self_sender.clone().send(Activity::ScheduledWakeup).await;
                                 });
 
-                                maybe_scheduled = Some(handle)
+                                maybe_scheduled = Some(timer_handle)
                             }
                             None => {}
                         }
@@ -156,55 +119,30 @@ async fn run_entity<
             Activity::ScheduledWakeup => {
                 let mut scheduled = schedule.0(&state);
                 scheduled.sort_by_key(|scheduled| scheduled.at);
+
+                let earliest = scheduled.into_iter().next();
+
+                match earliest {
+                    Some(scheduled) => {
+                        let sleep_for = (scheduled.at - now).num_milliseconds();
+                        println!("Sleep For: {sleep_for}");
+                        match sleep_for <= 0 {
+                            true => {
+                                let _ = self_sender
+                                    .send(Activity::LifeCycleAction(scheduled.action))
+                                    .await;
+                            }
+                            false => {
+                                println!("Not Ready"); //TODO handle unexpected wakeup
+                            }
+                        }
+                    }
+                    None => {}
+                }
             }
             Activity::DeleteSelf => todo!(),
         }
     }
-}
-
-#[derive(Clone)]
-pub struct Handle<Action>
-where
-    Action: LifeCycleItem + 'static,
-{
-    pub sender: mpsc::Sender<Activity<Action>>,
-}
-
-impl<Action> Handle<Action>
-where
-    Action: LifeCycleItem + 'static,
-{
-    pub async fn act(&self, action: Action) {
-        let _ = self
-            .sender
-            .send(Activity::LifeCycleAction(action))
-            .await
-            .expect("Send failed");
-    }
-}
-
-pub fn new_entity<
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + 'static + Default,
-    Action: LifeCycleItem + 'static,
-    Env: LifeCycleItem + 'static,
->(
-    env: Arc<Env>,
-    id: Id,
-    user_life_cycle_handle: LifeCycleHandle<Id, Action>,
-    transition: Transition<Id, State, Action, Env>,
-    schedule: Schedule<State, Action>,
-) -> Handle<Action> {
-    let (sender, receiver) = mpsc::channel(8);
-    tokio::spawn(run_entity(
-        env,
-        id,
-        receiver,
-        user_life_cycle_handle,
-        transition,
-        schedule,
-    ));
-    Handle { sender }
 }
 
 async fn start_life_cycle<

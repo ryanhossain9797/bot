@@ -120,6 +120,7 @@ name = "bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "lib_hive",
  "once_cell",
  "regex",

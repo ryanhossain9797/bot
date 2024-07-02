@@ -1,5 +1,6 @@
 use std::{clone, sync::Arc};
 
+use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
@@ -22,6 +23,7 @@ pub struct UserId(pub UserChannel, pub String);
 #[derive(Clone, Default)]
 pub struct User {
     pub action_count: usize,
+    pub maybe_poke_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone)]
@@ -30,5 +32,6 @@ pub enum UserAction {
         msg: String,
         start_conversation: bool,
     },
+    Poke,
     SendResult(Arc<anyhow::Result<()>>),
 }

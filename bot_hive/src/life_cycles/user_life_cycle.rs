@@ -1,12 +1,12 @@
-use std::{future::Future, pin::Pin, sync::Arc};
-
-use lib_hive::{ExternalOperation, Scheduled, TransitionResult};
-use serenity::all::CreateMessage;
+use std::{future::Future, ops::Add, pin::Pin, sync::Arc, time::Duration};
 
 use crate::{
     models::user::{User, UserAction, UserChannel, UserId},
     Env,
 };
+use chrono::Utc;
+use lib_hive::{ExternalOperation, Scheduled, TransitionResult};
+use serenity::all::CreateMessage;
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -18,6 +18,16 @@ async fn user_transition(
     action: &UserAction,
 ) -> UserTransitionResult {
     match action {
+        UserAction::Poke => {
+            println!("Poked");
+            Ok((
+                User {
+                    maybe_poke_at: None,
+                    ..user
+                },
+                Vec::new(),
+            ))
+        }
         UserAction::NewMessage {
             msg,
             start_conversation,
@@ -32,6 +42,7 @@ async fn user_transition(
 
             let user = User {
                 action_count: user.action_count + 1,
+                maybe_poke_at: Some(Utc::now().add(Duration::from_millis(2_000))), //replace with managed time,
             };
 
             println!("Id: {0} {1}", user_id.1, user.action_count);
@@ -40,7 +51,13 @@ async fn user_transition(
         }
         UserAction::SendResult(send_result) => {
             println!("Send Succesful?: {0}", send_result.is_ok());
-            Ok((user.clone(), Vec::new()))
+            Ok((
+                User {
+                    maybe_poke_at: Some(Utc::now().add(Duration::from_millis(2_000))), //replace with managed time
+                    ..user
+                },
+                Vec::new(),
+            ))
         }
     }
 }
@@ -56,7 +73,15 @@ pub fn user_transition_wrapper(
 }
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
-    Vec::new()
+    match user.maybe_poke_at {
+        Some(poke_at) => {
+            vec![Scheduled {
+                at: poke_at,
+                action: UserAction::Poke,
+            }]
+        }
+        None => Vec::new(),
+    }
 }
 
 pub async fn placeholder_handle_bot_message(
