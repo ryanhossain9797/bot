@@ -42,7 +42,7 @@ async fn user_transition(
 
             let user = User {
                 action_count: user.action_count + 1,
-                maybe_poke_at: Some(Utc::now().add(Duration::from_millis(2_000))), //replace with managed time,
+                maybe_poke_at: None, //replace with managed time,
             };
 
             println!("Id: {0} {1}", user_id.1, user.action_count);
@@ -50,10 +50,9 @@ async fn user_transition(
             Ok((user, external))
         }
         UserAction::SendResult(send_result) => {
-            println!("Send Succesful?: {0}", send_result.is_ok());
             Ok((
                 User {
-                    maybe_poke_at: Some(Utc::now().add(Duration::from_millis(2_000))), //replace with managed time
+                    maybe_poke_at: Some(Utc::now().add(Duration::from_millis(10_000))), //replace with managed time
                     ..user
                 },
                 Vec::new(),

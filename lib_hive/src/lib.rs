@@ -5,6 +5,8 @@ mod life_cycle_handle;
 use bee_handle::{new_entity, Handle};
 use chrono::{DateTime, TimeDelta, Utc};
 pub use life_cycle_handle::*;
+use std::ops::Add;
+use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -60,11 +62,13 @@ async fn run_entity<
     schedule: Schedule<State, Action>,
     self_sender: Sender<Activity<Action>>,
 ) {
-    let now = Utc::now();
     let mut state = State::default();
     let mut maybe_scheduled: Option<JoinHandle<()>> = None;
 
     while let Some(activity) = receiver.recv().await {
+        let now = Utc::now();
+
+        println!("TRANSITION AT {now}");
         match activity {
             Activity::LifeCycleAction(action) => {
                 match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
@@ -89,12 +93,23 @@ async fn run_entity<
                                     match sleep_for <= ZERO_TIME_DELTA {
                                         true => {}
                                         false => {
-                                            tokio::time::sleep(sleep_for.to_std().unwrap()).await;
+                                            let sleep_for = sleep_for.to_std().unwrap();
+
+                                            println!(
+                                                "Scheduling At: {now}, Waiting For: {0} milliseconds, Will wake up at {1}",
+                                                sleep_for.as_millis(),
+                                                scheduled.clone().at
+                                            );
+
+                                            tokio::time::sleep(sleep_for + Duration::from_secs(2))
+                                                .await;
+
+                                            let _ = self_sender
+                                                .clone()
+                                                .send(Activity::ScheduledWakeup)
+                                                .await;
                                         }
                                     }
-
-                                    let _ =
-                                        self_sender.clone().send(Activity::ScheduledWakeup).await;
                                 });
 
                                 maybe_scheduled = Some(timer_handle)
@@ -124,7 +139,8 @@ async fn run_entity<
                 match earliest {
                     Some(scheduled) => {
                         let sleep_for = scheduled.at - now;
-                        println!("Sleep For: {sleep_for}");
+                        println!("Scheduled At: {0}, Now {now}. Remaining time to wait for: {1} seconds, should be 0 seconds", scheduled.at, sleep_for.num_seconds());
+
                         match sleep_for <= ZERO_TIME_DELTA {
                             true => {
                                 let _ = self_sender
