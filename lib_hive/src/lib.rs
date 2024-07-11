@@ -1,14 +1,16 @@
+#![feature(const_option)]
 mod bee_handle;
 mod life_cycle_handle;
 
 use bee_handle::{new_entity, Handle};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 pub use life_cycle_handle::*;
-use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
+
+const ZERO_TIME_DELTA: TimeDelta = TimeDelta::new(0, 0).unwrap();
 
 pub type TransitionResult<Type, Action> =
     anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output = Action> + Send>>>)>;
@@ -83,14 +85,11 @@ async fn run_entity<
                             Some(scheduled) => {
                                 let self_sender = self_sender.clone();
                                 let timer_handle = tokio::spawn(async move {
-                                    let sleep_for = (scheduled.clone().at - now).num_milliseconds();
-                                    match sleep_for <= 0 {
+                                    let sleep_for = scheduled.clone().at - now;
+                                    match sleep_for <= ZERO_TIME_DELTA {
                                         true => {}
                                         false => {
-                                            tokio::time::sleep(Duration::from_millis(
-                                                sleep_for as u64,
-                                            ))
-                                            .await;
+                                            tokio::time::sleep(sleep_for.to_std().unwrap()).await;
                                         }
                                     }
 
@@ -124,9 +123,9 @@ async fn run_entity<
 
                 match earliest {
                     Some(scheduled) => {
-                        let sleep_for = (scheduled.at - now).num_milliseconds();
+                        let sleep_for = scheduled.at - now;
                         println!("Sleep For: {sleep_for}");
-                        match sleep_for <= 0 {
+                        match sleep_for <= ZERO_TIME_DELTA {
                             true => {
                                 let _ = self_sender
                                     .send(Activity::LifeCycleAction(scheduled.action))
