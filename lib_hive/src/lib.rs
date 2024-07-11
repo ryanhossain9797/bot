@@ -5,7 +5,6 @@ mod life_cycle_handle;
 use bee_handle::{new_entity, Handle};
 use chrono::{DateTime, TimeDelta, Utc};
 pub use life_cycle_handle::*;
-use std::ops::Add;
 use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
 
@@ -95,12 +94,6 @@ async fn run_entity<
                                         false => {
                                             let sleep_for = sleep_for.to_std().unwrap();
 
-                                            println!(
-                                                "Scheduling At: {now}, Waiting For: {0} milliseconds, Will wake up at {1}",
-                                                sleep_for.as_millis(),
-                                                scheduled.clone().at
-                                            );
-
                                             tokio::time::sleep(sleep_for + Duration::from_secs(2))
                                                 .await;
 
@@ -139,7 +132,6 @@ async fn run_entity<
                 match earliest {
                     Some(scheduled) => {
                         let sleep_for = scheduled.at - now;
-                        println!("Scheduled At: {0}, Now {now}. Remaining time to wait for: {1} seconds, should be 0 seconds", scheduled.at, sleep_for.num_seconds());
 
                         match sleep_for <= ZERO_TIME_DELTA {
                             true => {
