@@ -28,7 +28,7 @@ where
 pub fn new_entity<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + 'static + Default,
-    Action: LifeCycleItem + 'static,
+    Action: LifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,

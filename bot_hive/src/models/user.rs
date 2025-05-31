@@ -3,7 +3,7 @@ use std::{clone, sync::Arc};
 use chrono::{DateTime, Utc};
 use tokio::sync::mpsc;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UserChannel {
     Telegram,
     Discord,
@@ -26,7 +26,7 @@ pub struct User {
     pub maybe_poke_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum UserAction {
     NewMessage {
         msg: String,

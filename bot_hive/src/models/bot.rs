@@ -8,6 +8,7 @@ use tokio::{
 
 use super::user::UserId;
 
+#[derive(Debug)]
 pub enum BotAction {
     Ping { message: String },
 }

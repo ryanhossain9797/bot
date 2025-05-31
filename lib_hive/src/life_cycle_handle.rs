@@ -30,7 +30,7 @@ where
 pub fn new_life_cycle<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + 'static,
+    Action: LifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,

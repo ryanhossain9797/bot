@@ -50,7 +50,7 @@ pub enum Activity<Action: LifeCycleItem + 'static> {
 async fn run_entity<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + 'static,
+    Action: LifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
@@ -67,7 +67,16 @@ async fn run_entity<
     while let Some(activity) = receiver.recv().await {
         let now = Utc::now();
 
-        println!("TRANSITION AT {now}");
+        let activity_str = match &activity {
+            Activity::LifeCycleAction(action) => format!("Action: {:?}", action),
+            Activity::ScheduledWakeup => "ScheduledWakeup".to_string(),
+            Activity::DeleteSelf => "DeleteSelf".to_string(),
+        };
+        println!(
+            "TRANSITION AT {now} - Lifecycle: {} - {}",
+            std::any::type_name::<State>(),
+            activity_str
+        );
         match activity {
             Activity::LifeCycleAction(action) => {
                 match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
@@ -94,8 +103,7 @@ async fn run_entity<
                                         false => {
                                             let sleep_for = sleep_for.to_std().unwrap();
 
-                                            tokio::time::sleep(sleep_for + Duration::from_secs(2))
-                                                .await;
+                                            tokio::time::sleep(sleep_for).await;
 
                                             let _ = self_sender
                                                 .clone()
@@ -155,7 +163,7 @@ async fn run_entity<
 async fn start_life_cycle<
     Id: LifeCycleItem + Ord + 'static,
     State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + 'static,
+    Action: LifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
