@@ -99,12 +99,15 @@ async fn run_entity<
                                 let timer_handle = tokio::spawn(async move {
                                     let sleep_for = scheduled.clone().at - now;
                                     match sleep_for <= ZERO_TIME_DELTA {
-                                        true => {}
+                                        true => {
+                                            let _ = self_sender
+                                                .clone()
+                                                .send(Activity::ScheduledWakeup)
+                                                .await;
+                                        }
                                         false => {
                                             let sleep_for = sleep_for.to_std().unwrap();
-
                                             tokio::time::sleep(sleep_for).await;
-
                                             let _ = self_sender
                                                 .clone()
                                                 .send(Activity::ScheduledWakeup)

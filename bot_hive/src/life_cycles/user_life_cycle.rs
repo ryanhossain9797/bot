@@ -4,7 +4,7 @@ use crate::{
     models::user::{User, UserAction, UserChannel, UserId},
     Env,
 };
-use chrono::Utc;
+use chrono::{Duration as ChronoDuration, Utc};
 use lib_hive::{ExternalOperation, Scheduled, TransitionResult};
 use serenity::all::CreateMessage;
 
@@ -49,15 +49,13 @@ async fn user_transition(
 
             Ok((user, external))
         }
-        UserAction::SendResult(send_result) => {
-            Ok((
-                User {
-                    maybe_poke_at: Some(Utc::now().add(Duration::from_millis(10_000))), //replace with managed time
-                    ..user
-                },
-                Vec::new(),
-            ))
-        }
+        UserAction::SendResult(send_result) => Ok((
+            User {
+                maybe_poke_at: Some(Utc::now() + ChronoDuration::milliseconds(10_000)),
+                ..user
+            },
+            Vec::new(),
+        )),
     }
 }
 
