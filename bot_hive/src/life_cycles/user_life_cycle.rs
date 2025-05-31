@@ -1,7 +1,7 @@
 use std::{future::Future, ops::Add, pin::Pin, sync::Arc, time::Duration};
 
 use crate::{
-    models::user::{User, UserAction, UserChannel, UserId},
+    models::user::{User, UserAction, UserChannel, UserId, UserState},
     Env,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -18,21 +18,14 @@ pub fn user_transition(
     action: &UserAction,
 ) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send + '_>> {
     Box::pin(async move {
-        match action {
-            UserAction::Poke => {
-                println!("Poked");
-                Ok((
-                    User {
-                        maybe_poke_at: None,
-                        ..user
-                    },
-                    Vec::new(),
-                ))
-            }
-            UserAction::NewMessage {
-                msg,
-                start_conversation,
-            } => {
+        match (user.state, action) {
+            (
+                UserState::Idle,
+                UserAction::NewMessage {
+                    msg,
+                    start_conversation,
+                },
+            ) => {
                 let mut external = Vec::<UserExternalOperation>::new();
 
                 external.push(Box::pin(placeholder_handle_bot_message(
@@ -42,34 +35,60 @@ pub fn user_transition(
                 )));
 
                 let user = User {
-                    action_count: user.action_count + 1,
-                    maybe_poke_at: None, //replace with managed time,
+                    state: UserState::RespondingToMessage,
                 };
 
-                println!("Id: {0} {1}", user_id.1, user.action_count);
+                println!("Id: {0} {1:?}", user_id.1, user.state);
 
                 Ok((user, external))
             }
-            UserAction::SendResult(send_result) => Ok((
+            (UserState::RespondingToMessage, UserAction::SendResult(send_result)) => Ok((
                 User {
-                    maybe_poke_at: Some(Utc::now() + ChronoDuration::milliseconds(10_000)),
+                    state: UserState::WaitingToSayGoodbye(Some(
+                        Utc::now() + ChronoDuration::milliseconds(10_000),
+                    )),
                     ..user
                 },
                 Vec::new(),
             )),
+            (UserState::WaitingToSayGoodbye(_), UserAction::Poke) => {
+                println!("Poked");
+
+                let mut external = Vec::<UserExternalOperation>::new();
+
+                external.push(Box::pin(placeholder_handle_bot_message(
+                    env.clone(),
+                    user_id.clone(),
+                    "Goodbye".to_string(),
+                )));
+
+                Ok((
+                    User {
+                        state: UserState::SayingGoodbye,
+                    },
+                    external,
+                ))
+            }
+            (UserState::SayingGoodbye, UserAction::SendResult(_)) => Ok((
+                User {
+                    state: UserState::Idle,
+                },
+                Vec::new(),
+            )),
+            _ => Err(anyhow::anyhow!("Invalid state or action")),
         }
     })
 }
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
-    match user.maybe_poke_at {
-        Some(poke_at) => {
+    match user.state {
+        UserState::WaitingToSayGoodbye(Some(poke_at)) => {
             vec![Scheduled {
                 at: poke_at,
                 action: UserAction::Poke,
             }]
         }
-        None => Vec::new(),
+        _ => Vec::new(),
     }
 }
 
