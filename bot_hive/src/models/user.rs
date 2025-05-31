@@ -1,7 +1,6 @@
-use std::{clone, sync::Arc};
+use std::{fmt::Display, sync::Arc};
 
 use chrono::{DateTime, Utc};
-use tokio::sync::mpsc;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UserChannel {
@@ -20,10 +19,18 @@ impl UserChannel {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct UserId(pub UserChannel, pub String);
 
+#[derive(Clone, Debug, Default)]
+pub enum UserState {
+    #[default]
+    Idle,
+    RespondingToMessage,
+    WaitingToSayGoodbye(Option<DateTime<Utc>>),
+    SayingGoodbye,
+}
+
 #[derive(Clone, Default)]
 pub struct User {
-    pub action_count: usize,
-    pub maybe_poke_at: Option<DateTime<Utc>>,
+    pub state: UserState,
 }
 
 #[derive(Clone, Debug)]
