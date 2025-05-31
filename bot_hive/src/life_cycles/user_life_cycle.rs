@@ -31,7 +31,7 @@ pub fn user_transition(
                 external.push(Box::pin(placeholder_handle_bot_message(
                     env.clone(),
                     user_id.clone(),
-                    msg.to_string(),
+                    format!("You said {msg}"),
                 )));
 
                 let user = User {
@@ -118,10 +118,7 @@ pub async fn placeholder_handle_bot_message(
             match dm_channel_result {
                 Ok(channel) => {
                     let res = channel
-                        .send_message(
-                            &env.discord_http,
-                            CreateMessage::new().content(format!("You said {msg}")),
-                        )
+                        .send_message(&env.discord_http, CreateMessage::new().content(msg))
                         .await;
                     match res {
                         Ok(_) => UserAction::SendResult(Arc::new(Ok(()))),
