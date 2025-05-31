@@ -7,12 +7,13 @@ mod models;
 
 use external_connections::discord::*;
 use lib_hive::{new_life_cycle, Schedule, Transition};
+use life_cycles::user_life_cycle::user_transition;
 use models::bot::{BotAction, BotHandle};
 use serenity::all::{Http, HttpBuilder};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::life_cycles::user_life_cycle::{schedule, user_transition_wrapper};
+use crate::life_cycles::user_life_cycle::schedule;
 
 #[derive(Clone)]
 struct Env {
@@ -36,8 +37,7 @@ async fn main() -> anyhow::Result<!> {
         bot_singleton_handle,
     });
 
-    let user_life_cycle =
-        new_life_cycle(env, Transition(user_transition_wrapper), Schedule(schedule));
+    let user_life_cycle = new_life_cycle(env, Transition(user_transition), Schedule(schedule));
 
     let discord_client =
         prepare_discord_client(configuration::client_tokens::discord_token, user_life_cycle)

@@ -108,6 +108,9 @@ async fn run_entity<
                                         false => {
                                             let sleep_for = sleep_for.to_std().unwrap();
                                             tokio::time::sleep(sleep_for).await;
+                                            while Utc::now() < scheduled.at {
+                                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                            }
                                             let _ = self_sender
                                                 .clone()
                                                 .send(Activity::ScheduledWakeup)
