@@ -1,12 +1,13 @@
-use std::{future::Future, ops::Add, pin::Pin, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
-    models::user::{User, UserAction, UserChannel, UserId, UserState},
+    models::user::{User, UserAction, UserId, UserState},
     Env,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use lib_hive::{ExternalOperation, Scheduled, TransitionResult};
-use serenity::all::CreateMessage;
+
+use crate::connectors::user_connector::handle_bot_message;
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -23,12 +24,12 @@ pub fn user_transition(
                 UserState::Idle,
                 UserAction::NewMessage {
                     msg,
-                    start_conversation,
+                    start_conversation: true,
                 },
             ) => {
                 let mut external = Vec::<UserExternalOperation>::new();
 
-                external.push(Box::pin(placeholder_handle_bot_message(
+                external.push(Box::pin(handle_bot_message(
                     env.clone(),
                     user_id.clone(),
                     format!("You said {msg}"),
@@ -56,7 +57,7 @@ pub fn user_transition(
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
-                external.push(Box::pin(placeholder_handle_bot_message(
+                external.push(Box::pin(handle_bot_message(
                     env.clone(),
                     user_id.clone(),
                     "Goodbye".to_string(),
@@ -89,44 +90,5 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
             }]
         }
         _ => Vec::new(),
-    }
-}
-
-pub async fn placeholder_handle_bot_message(
-    env: Arc<Env>,
-    user_id: UserId,
-    msg: String,
-) -> UserAction {
-    let user_id_result = match user_id.0 {
-        UserChannel::Discord => {
-            let user_id_result = user_id.1.parse::<u64>();
-            match user_id_result {
-                Ok(user_id) => Ok(serenity::all::UserId::new(user_id)),
-                Err(err) => Err(anyhow::anyhow!(err)),
-            }
-        }
-        _ => panic!("Telegram not yet implemented"),
-    };
-    match user_id_result {
-        Err(err) => UserAction::SendResult(Arc::new(Err(err))),
-        Ok(user_id) => {
-            let dm_channel_result = match user_id.to_user(&env.discord_http).await {
-                Ok(user) => user.create_dm_channel(&env.discord_http).await,
-                Err(e) => Err(e),
-            };
-
-            match dm_channel_result {
-                Ok(channel) => {
-                    let res = channel
-                        .send_message(&env.discord_http, CreateMessage::new().content(msg))
-                        .await;
-                    match res {
-                        Ok(_) => UserAction::SendResult(Arc::new(Ok(()))),
-                        Err(err) => UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err)))),
-                    }
-                }
-                Err(err) => UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err)))),
-            }
-        }
     }
 }

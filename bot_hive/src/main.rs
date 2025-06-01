@@ -1,6 +1,7 @@
 #![feature(never_type)]
 
 mod configuration;
+mod connectors;
 mod external_connections;
 mod life_cycles;
 mod models;
