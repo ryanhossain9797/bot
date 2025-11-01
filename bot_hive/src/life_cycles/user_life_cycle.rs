@@ -52,7 +52,7 @@ pub fn user_transition(
                 },
                 Vec::new(),
             )),
-            (UserState::WaitingToSayGoodbye(_), UserAction::Poke) => {
+            (UserState::WaitingToSayGoodbye(_), UserAction::Timeout) => {
                 println!("Poked");
 
                 let mut external = Vec::<UserExternalOperation>::new();
@@ -83,10 +83,10 @@ pub fn user_transition(
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     match user.state {
-        UserState::WaitingToSayGoodbye(Some(poke_at)) => {
+        UserState::WaitingToSayGoodbye(Some(timeout)) => {
             vec![Scheduled {
-                at: poke_at,
-                action: UserAction::Poke,
+                at: timeout,
+                action: UserAction::Timeout,
             }]
         }
         _ => Vec::new(),

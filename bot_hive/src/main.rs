@@ -32,7 +32,8 @@ async fn main() -> anyhow::Result<!> {
     let _ = bot_singleton_handle.act(action).await;
 
     let discord_http =
-        Arc::new(HttpBuilder::new(configuration::client_tokens::discord_token).build());
+        Arc::new(HttpBuilder::new(configuration::client_tokens::DISCORD_TOKEN).build());
+
     let env = Arc::new(Env {
         discord_http,
         bot_singleton_handle,
@@ -41,7 +42,7 @@ async fn main() -> anyhow::Result<!> {
     let user_life_cycle = new_life_cycle(env, Transition(user_transition), Schedule(schedule));
 
     let discord_client =
-        prepare_discord_client(configuration::client_tokens::discord_token, user_life_cycle)
+        prepare_discord_client(configuration::client_tokens::DISCORD_TOKEN, user_life_cycle)
             .await?;
 
     let mut set = JoinSet::new();

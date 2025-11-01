@@ -39,6 +39,6 @@ pub enum UserAction {
         msg: String,
         start_conversation: bool,
     },
-    Poke,
+    Timeout,
     SendResult(Arc<anyhow::Result<()>>),
 }
