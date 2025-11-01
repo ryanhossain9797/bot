@@ -9,17 +9,19 @@ mod models;
 use external_connections::discord::*;
 use lib_hive::{new_life_cycle, Schedule, Transition};
 use life_cycles::user_life_cycle::user_transition;
+use llama_cpp_2::{llama_backend::LlamaBackend, model::LlamaModel};
 use models::bot::{BotAction, BotHandle};
 use serenity::all::{Http, HttpBuilder};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::life_cycles::user_life_cycle::schedule;
+use crate::{external_connections::llm::prepare_llm, life_cycles::user_life_cycle::schedule};
 
 #[derive(Clone)]
 struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
+    llm: Arc<(LlamaModel, LlamaBackend)>,
 }
 
 #[tokio::main]
@@ -34,9 +36,12 @@ async fn main() -> anyhow::Result<!> {
     let discord_http =
         Arc::new(HttpBuilder::new(configuration::client_tokens::DISCORD_TOKEN).build());
 
+    let llm = Arc::new(prepare_llm()?);
+
     let env = Arc::new(Env {
         discord_http,
         bot_singleton_handle,
+        llm,
     });
 
     let user_life_cycle = new_life_cycle(env, Transition(user_transition), Schedule(schedule));

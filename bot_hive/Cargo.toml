@@ -23,4 +23,5 @@ serenity = { version = "0.12", default-features = false, features = [
 ] }
 regex = "1.10"
 chrono = "0.4"
-
+llama-cpp-2 = "0.1.74"
+num_cpus = "1.16"
