@@ -19,13 +19,15 @@ impl UserChannel {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct UserId(pub UserChannel, pub String);
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub enum UserState {
-    #[default]
-    Idle,
-    RespondingToMessage,
-    WaitingToSayGoodbye(Option<DateTime<Utc>>),
-    SayingGoodbye,
+    Idle(Option<DateTime<Utc>>),
+    SendingMessage,
+}
+impl Default for UserState {
+    fn default() -> Self {
+        UserState::Idle(None)
+    }
 }
 
 #[derive(Clone, Default)]

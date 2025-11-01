@@ -21,7 +21,7 @@ pub fn user_transition(
     Box::pin(async move {
         match (user.state, action) {
             (
-                UserState::Idle,
+                UserState::Idle(_),
                 UserAction::NewMessage {
                     msg,
                     start_conversation: true,
@@ -36,24 +36,22 @@ pub fn user_transition(
                 )));
 
                 let user = User {
-                    state: UserState::RespondingToMessage,
+                    state: UserState::SendingMessage,
                 };
 
                 println!("Id: {0} {1:?}", user_id.1, user.state);
 
                 Ok((user, external))
             }
-            (UserState::RespondingToMessage, UserAction::SendResult(send_result)) => Ok((
+            (UserState::SendingMessage, UserAction::SendResult(_)) => Ok((
                 User {
-                    state: UserState::WaitingToSayGoodbye(Some(
-                        Utc::now() + ChronoDuration::milliseconds(10_000),
-                    )),
+                    state: UserState::Idle(Some(Utc::now())),
                     ..user
                 },
                 Vec::new(),
             )),
-            (UserState::WaitingToSayGoodbye(_), UserAction::Timeout) => {
-                println!("Poked");
+            (UserState::Idle(Some(_)), UserAction::Timeout) => {
+                println!("Timed Out");
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
@@ -65,17 +63,11 @@ pub fn user_transition(
 
                 Ok((
                     User {
-                        state: UserState::SayingGoodbye,
+                        state: UserState::SendingMessage,
                     },
                     external,
                 ))
             }
-            (UserState::SayingGoodbye, UserAction::SendResult(_)) => Ok((
-                User {
-                    state: UserState::Idle,
-                },
-                Vec::new(),
-            )),
             _ => Err(anyhow::anyhow!("Invalid state or action")),
         }
     })
@@ -83,9 +75,9 @@ pub fn user_transition(
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     match user.state {
-        UserState::WaitingToSayGoodbye(Some(timeout)) => {
+        UserState::Idle(Some(last_activity)) => {
             vec![Scheduled {
-                at: timeout,
+                at: last_activity + ChronoDuration::milliseconds(10_000),
                 action: UserAction::Timeout,
             }]
         }
