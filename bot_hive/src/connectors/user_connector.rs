@@ -31,6 +31,7 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String) -> 
                     let res = channel
                         .send_message(&env.discord_http, CreateMessage::new().content(msg))
                         .await;
+
                     match res {
                         Ok(_) => UserAction::SendResult(Arc::new(Ok(()))),
                         Err(err) => UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err)))),

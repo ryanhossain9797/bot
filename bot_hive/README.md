@@ -1,216 +1,160 @@
-# User Lifecycle Documentation
+# Bot Hive - User Lifecycle Documentation
 
 ## Overview
 
-This document describes the user lifecycle and state management system in the bot. The system implements a type-safe state machine that manages user interactions through distinct states and transitions.
+Type-safe state machine that manages user interactions through distinct states and transitions using a generic async framework (`lib_hive`).
 
 ## User States
 
-The user lifecycle consists of four states defined in `bot_hive/src/models/user.rs:6-13`:
+Defined in `src/models/user.rs:6-13`:
 
-### 1. Idle (Default State)
-- The initial state when a user is not interacting with the bot
-- Users return to this state after completing a conversation cycle
-- Ready to receive new messages
-
-### 2. RespondingToMessage
-- Entered when a user sends a message that starts a conversation
-- The bot processes the message and sends a response
-- Transitions to WaitingToSayGoodbye after response is sent
-
-### 3. WaitingToSayGoodbye
-- Entered after the bot responds to a user's message
-- Contains a scheduled timeout (currently 10 seconds)
-- Allows a delay before sending the goodbye message
-- Transitions to SayingGoodbye when timeout expires
-
-### 4. SayingGoodbye
-- The bot sends a goodbye message to the user
-- Final state before returning to Idle
-- Transitions back to Idle after message is sent
+1. **Idle** - Default state, waiting for user interaction
+2. **RespondingToMessage** - Processing user message and sending response
+3. **WaitingToSayGoodbye** - 10-second delay before goodbye message
+4. **SayingGoodbye** - Sending goodbye message before returning to Idle
 
 ## User Actions
 
-Actions trigger state transitions (defined in `bot_hive/src/models/user.rs:15-21`):
+Defined in `src/models/user.rs:15-21`:
 
-### NewMessage
-```rust
-NewMessage {
-    msg: String,
-    start_conversation: bool,
-}
-```
-- Triggered when user sends a message
-- `start_conversation: true` initiates a new conversation from Idle state
+- **NewMessage** - User sends message with `start_conversation` flag
+- **Timeout** - Scheduled timeout event (for goodbye delay)
+- **SendResult** - Result of sending a message (success/failure)
 
-### Timeout
-- Triggered by scheduled timeout events
-- Used to trigger the goodbye message after waiting period
-
-### SendResult
-```rust
-SendResult(Arc<anyhow::Result<()>>)
-```
-- Indicates the result of sending a message to the user
-- Triggers state transitions after message operations complete
-
-## State Transitions
-
-The complete lifecycle flow (`bot_hive/src/life_cycles/user_life_cycle.rs:8-53`):
+## State Flow
 
 ```
-         START
-          |
-          v
-       [IDLE] (Default state)
-          |
-          | NewMessage { start_conversation: true }
-          |
-          v
-  [RESPONDING TO MESSAGE]
-          |
-          | SendResult(Ok) after bot response
-          | (schedules 10s timeout)
-          |
-          v
-[WAITING TO SAY GOODBYE]
-          |
-          | Timeout (after 10s)
-          |
-          v
-    [SAYING GOODBYE]
-          |
-          | SendResult(Ok) after goodbye message
-          |
-          v
-       [IDLE]
-          |
-          +--- (Cycle repeats)
+Idle → RespondingToMessage → WaitingToSayGoodbye → SayingGoodbye → Idle
 ```
 
-### Transition 1: Idle → RespondingToMessage
-**Trigger:** User sends a message with `start_conversation: true`
+### Transitions
 
-**Implementation:** `bot_hive/src/life_cycles/user_life_cycle.rs:12-24`
+1. **Idle → RespondingToMessage** (`src/life_cycles/user_life_cycle.rs:12-24`)
+   - Trigger: NewMessage with `start_conversation: true`
+   - Action: Spawn external operation to send bot response
 
-**Actions:**
-- Bot processes the message
-- Schedules external operation to send response
-- Moves to RespondingToMessage state
+2. **RespondingToMessage → WaitingToSayGoodbye** (`src/life_cycles/user_life_cycle.rs:25-32`)
+   - Trigger: SendResult (response sent successfully)
+   - Action: Schedule 10-second timeout
 
-### Transition 2: RespondingToMessage → WaitingToSayGoodbye
-**Trigger:** Bot successfully sends the response message (SendResult)
+3. **WaitingToSayGoodbye → SayingGoodbye** (`src/life_cycles/user_life_cycle.rs:33-42`)
+   - Trigger: Timeout
+   - Action: Spawn external operation to send goodbye message
 
-**Implementation:** `bot_hive/src/life_cycles/user_life_cycle.rs:25-32`
+4. **SayingGoodbye → Idle** (`src/life_cycles/user_life_cycle.rs:43-47`)
+   - Trigger: SendResult (goodbye sent)
+   - Action: Return to Idle state
 
-**Actions:**
-- Sets timeout to 10 seconds from now
-- Moves to WaitingToSayGoodbye state
-- Timeout is automatically scheduled by the framework
+## Discord Communication
 
-### Transition 3: WaitingToSayGoodbye → SayingGoodbye
-**Trigger:** Timeout expires (10 seconds after response)
+Uses **Serenity v0.12** for Discord integration via WebSocket (incoming) and HTTP (outgoing).
 
-**Implementation:** `bot_hive/src/life_cycles/user_life_cycle.rs:33-42`
+### Initialization
 
-**Actions:**
-- Schedules external operation to send goodbye message
-- Moves to SayingGoodbye state
+`src/external_connections/discord.rs:42-52` and `src/main.rs:40-48`
 
-### Transition 4: SayingGoodbye → Idle
-**Trigger:** Goodbye message successfully sent (SendResult)
+- Token from `configuration::client_tokens::DISCORD_TOKEN`
+- Gateway Intent: `DIRECT_MESSAGES` only (DM-only bot)
+- Event handler connects to user lifecycle
+- Runs in spawned task via JoinSet
 
-**Implementation:** `bot_hive/src/life_cycles/user_life_cycle.rs:43-47`
+### Incoming Messages
 
-**Actions:**
-- Returns to Idle state
-- Ready for next conversation
-- No scheduled events
+`src/external_connections/discord.rs:13-26`
 
-## Scheduling System
+**Pipeline:**
+1. Discord WebSocket → Handler::message()
+2. Ignore bot messages
+3. Normalize message (lowercase, trim, remove mentions/slashes, collapse spaces)
+4. Create UserId(Discord, author_id_string)
+5. Dispatch NewMessage to lifecycle with `start_conversation` flag (true if DM or bot mentioned)
 
-The scheduling function (`bot_hive/src/life_cycles/user_life_cycle.rs:55-65`) determines when timeouts should occur:
+### Outgoing Messages
 
-```rust
-pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
-    match user.state {
-        UserState::WaitingToSayGoodbye(Some(timeout)) => {
-            vec![Scheduled {
-                at: timeout,
-                action: UserAction::Timeout,
-            }]
-        }
-        _ => Vec::new(),
-    }
-}
+`src/connectors/user_connector.rs:6-38`
+
+**Pipeline:**
+1. Parse UserId string → Discord UserId (u64)
+2. Fetch user via HTTP API
+3. Create/get DM channel
+4. Send message via HTTP API
+5. Return SendResult with success/error
+
+### Communication Flow
+
 ```
-
-Only the `WaitingToSayGoodbye` state generates scheduled events. The framework automatically manages these timeouts.
+Discord Server
+    ↓ WebSocket
+Serenity Client
+    ↓ Message Event
+Handler::message()
+    ↓ filter & normalize
+user_life_cycle.act()
+    ↓
+State Machine
+    ↓ spawn external operation
+handle_bot_message()
+    ↓ HTTP API
+Discord Server (message delivered)
+    ↓ SendResult
+State Machine (next state)
+```
 
 ## Architecture
 
 ### State Machine Framework
 
-The system uses a generic state machine implementation (`lib_hive/src/lib.rs`) with:
+`lib_hive/src/lib.rs`
 
-- **Type-safe transitions:** Invalid state-action combinations are caught at compile time
-- **Async-first design:** All transitions and operations are asynchronous
-- **Channel-based communication:** Uses tokio mpsc channels for thread-safe state management
-- **External operations:** Side effects (like sending messages) are separated from state logic
-- **Per-user isolation:** Each user has an independent lifecycle instance
+- **Type-safe transitions** - Invalid state-action combos caught at compile time
+- **Async-first** - All operations use tokio async/await
+- **Channel-based** - mpsc channels for thread-safe state management
+- **External operations** - Side effects separated from state logic
+- **Per-user isolation** - Each user has independent state
+- **Scheduled events** - Automatic timeout management
 
-### Integration
+### Key Features
 
-The lifecycle is integrated in `bot_hive/src/main.rs:34-38`:
+- **Platform-agnostic lifecycle** - Discord is one connector, Telegram planned
+- **DM-only** - Only responds to direct messages
+- **Concurrent users** - Each user has independent state
+- **Deterministic** - Each state-action has exactly one outcome
+- **Error handling** - Invalid transitions return errors
 
-```rust
-let user_life_cycle = new_life_cycle(
-    env, 
-    Transition(user_transition), 
-    Schedule(schedule)
-);
+## File Structure
+
 ```
+bot_hive/src/
+├── main.rs                      - Entry point, initialization
+├── configuration.rs             - Discord token config
+├── external_connections/
+│   └── discord.rs               - Client setup, event handler
+├── connectors/
+│   └── user_connector.rs        - Message sender
+├── life_cycles/
+│   └── user_life_cycle.rs       - State transitions, scheduling
+└── models/
+    └── user.rs                  - States, actions, types
 
-This creates a handle that processes user actions through the state machine.
-
-## Error Handling
-
-Invalid state-action combinations return an error:
-
-```rust
-_ => Err(anyhow::anyhow!("Invalid state or action"))
+lib_hive/src/
+├── lib.rs                       - State machine framework
+└── life_cycle_handle.rs         - Handle API
 ```
-
-This ensures:
-- Messages in wrong states are rejected
-- Timeouts only fire in appropriate states
-- SendResult only accepted after send operations
-
-## Key Features
-
-1. **Deterministic behavior:** Each state-action combination has exactly one outcome
-2. **Automatic timeout management:** Framework handles scheduling and timeout delivery
-3. **Clean separation of concerns:** State logic separate from message sending
-4. **Concurrent safety:** Multiple users can interact independently
-5. **Type safety:** Rust's type system prevents many bugs at compile time
 
 ## Configuration
 
-Current timeout configuration (in `bot_hive/src/life_cycles/user_life_cycle.rs:28`):
-- Goodbye delay: 10 seconds (10,000 milliseconds)
-
-To modify the goodbye delay, change the `ChronoDuration::milliseconds(10_000)` value in the RespondingToMessage → WaitingToSayGoodbye transition.
+- **Goodbye delay:** 10 seconds (`src/life_cycles/user_life_cycle.rs:28`)
+- Modify via `ChronoDuration::milliseconds(10_000)`
 
 ## Example Flow
 
 1. User sends "Hello" on Discord
-2. Discord connector creates `NewMessage` action
-3. State: Idle → RespondingToMessage
-4. Bot sends response "Hi there!"
-5. State: RespondingToMessage → WaitingToSayGoodbye(timeout in 10s)
-6. (10 seconds pass)
-7. Timeout fires
-8. State: WaitingToSayGoodbye → SayingGoodbye
-9. Bot sends "Goodbye"
-10. State: SayingGoodbye → Idle
-11. Ready for next conversation
+2. Handler normalizes to "hello", creates NewMessage action
+3. Idle → RespondingToMessage, spawns response
+4. Response sent: "You said hello"
+5. RespondingToMessage → WaitingToSayGoodbye (10s timeout)
+6. Timeout fires
+7. WaitingToSayGoodbye → SayingGoodbye, spawns goodbye
+8. Goodbye sent: "Goodbye"
+9. SayingGoodbye → Idle
+10. Ready for next conversation
