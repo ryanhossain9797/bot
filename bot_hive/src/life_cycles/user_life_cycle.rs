@@ -32,7 +32,7 @@ pub fn user_transition(
                 external.push(Box::pin(handle_bot_message(
                     env.clone(),
                     user_id.clone(),
-                    format!("You said {msg}"),
+                    msg.clone(),
                 )));
 
                 let user = User {
@@ -77,7 +77,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     match user.state {
         UserState::Idle(Some(last_activity)) => {
             vec![Scheduled {
-                at: last_activity + ChronoDuration::milliseconds(10_000),
+                at: last_activity + ChronoDuration::milliseconds(50_000),
                 action: UserAction::Timeout,
             }]
         }
