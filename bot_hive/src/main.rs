@@ -11,10 +11,13 @@ use lib_hive::{new_life_cycle, Schedule, Transition};
 use life_cycles::user_life_cycle::user_transition;
 use llama_cpp_2::{llama_backend::LlamaBackend, model::LlamaModel};
 use models::bot::{BotAction, BotHandle};
+use models::user::{User, UserId};
+use once_cell::sync::Lazy;
 use serenity::all::{Http, HttpBuilder};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
+use crate::models::user::UserAction;
 use crate::{external_connections::llm::prepare_llm, life_cycles::user_life_cycle::schedule};
 
 #[derive(Clone)]
@@ -24,27 +27,22 @@ struct Env {
     llm: Arc<(LlamaModel, LlamaBackend)>,
 }
 
+static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
+    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
+    Arc::new(Env {
+        discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
+        bot_singleton_handle: BotHandle::new(),
+        llm: Arc::new(prepare_llm().expect("Failed to initialize LLM")),
+    })
+});
+
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
-    let bot_singleton_handle = BotHandle::new();
-    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
-    let llm = Arc::new(prepare_llm()?);
-
-    let env = Arc::new(Env {
-        discord_http,
-        bot_singleton_handle,
-        llm,
-    });
-
-    let user_life_cycle = new_life_cycle(env, Transition(user_transition), Schedule(schedule));
-
     let mut set = JoinSet::new();
 
-    let clients = vec![run_discord(
-        prepare_discord_client(discord_token, user_life_cycle).await?,
-    )];
+    let clients = vec![run_discord(prepare_discord_client(discord_token).await?)];
 
     clients.into_iter().for_each(|client| {
         set.spawn(client);

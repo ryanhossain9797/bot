@@ -2,10 +2,13 @@ use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
     models::user::{User, UserAction, UserId, UserState},
-    Env,
+    Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use lib_hive::{ExternalOperation, Scheduled, TransitionResult};
+use lib_hive::{
+    new_life_cycle, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
+};
+use once_cell::sync::Lazy;
 
 use crate::connectors::user_connector::handle_bot_message;
 
@@ -84,3 +87,6 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         _ => Vec::new(),
     }
 }
+
+pub static USER_LIFE_CYCLE: Lazy<lib_hive::LifeCycleHandle<UserId, UserAction>> =
+    Lazy::new(|| new_life_cycle(ENV.clone(), Transition(user_transition), Schedule(schedule)));
