@@ -22,7 +22,7 @@ pub struct UserId(pub UserChannel, pub String);
 #[derive(Clone, Debug)]
 pub enum UserState {
     Idle(Option<DateTime<Utc>>),
-    SendingMessage,
+    SendingMessage(bool),
 }
 impl Default for UserState {
     fn default() -> Self {

@@ -39,16 +39,16 @@ pub fn user_transition(
                 )));
 
                 let user = User {
-                    state: UserState::SendingMessage,
+                    state: UserState::SendingMessage(false),
                 };
 
                 println!("Id: {0} {1:?}", user_id.1, user.state);
 
                 Ok((user, external))
             }
-            (UserState::SendingMessage, UserAction::SendResult(_)) => Ok((
+            (UserState::SendingMessage(is_timeout), UserAction::SendResult(_)) => Ok((
                 User {
-                    state: UserState::Idle(Some(Utc::now())),
+                    state: UserState::Idle(if is_timeout { None } else { Some(Utc::now()) }),
                     ..user
                 },
                 Vec::new(),
@@ -66,7 +66,7 @@ pub fn user_transition(
 
                 Ok((
                     User {
-                        state: UserState::SendingMessage,
+                        state: UserState::SendingMessage(true),
                     },
                     external,
                 ))

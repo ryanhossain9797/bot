@@ -29,9 +29,7 @@ async fn get_response_from_llm(
     match ctx_result {
         Ok(mut ctx) => {
             let conversation_prompt = format!(
-                "<|im_start|>system\nYou are a very basic conversational agent\n
-
-Try to respond in a few words, no rambling. However if the user specifically asks for more detail please go ahead.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                "<|im_start|>system\nYou are a very basic conversational agent\nTry to respond in a few words, no rambling\nHowever if the user specifically asks for more detail please go ahead.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
 msg
             );
             let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
