@@ -26,16 +26,10 @@ struct Env {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
+    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
+
     let bot_singleton_handle = BotHandle::new();
-    let action = BotAction::Ping {
-        message: "Ping".to_owned(),
-    };
-
-    let _ = bot_singleton_handle.act(action).await;
-
-    let discord_http =
-        Arc::new(HttpBuilder::new(configuration::client_tokens::DISCORD_TOKEN).build());
-
+    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
     let llm = Arc::new(prepare_llm()?);
 
     let env = Arc::new(Env {
@@ -46,13 +40,11 @@ async fn main() -> anyhow::Result<!> {
 
     let user_life_cycle = new_life_cycle(env, Transition(user_transition), Schedule(schedule));
 
-    let discord_client =
-        prepare_discord_client(configuration::client_tokens::DISCORD_TOKEN, user_life_cycle)
-            .await?;
-
     let mut set = JoinSet::new();
 
-    let clients = vec![run_discord(discord_client)];
+    let clients = vec![run_discord(
+        prepare_discord_client(discord_token, user_life_cycle).await?,
+    )];
 
     clients.into_iter().for_each(|client| {
         set.spawn(client);
