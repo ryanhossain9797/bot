@@ -20,8 +20,13 @@ impl UserChannel {
 pub struct UserId(pub UserChannel, pub String);
 
 #[derive(Clone, Debug)]
+pub struct RecentConversation {
+    pub summary: String,
+}
+
+#[derive(Clone, Debug)]
 pub enum UserState {
-    Idle(Option<DateTime<Utc>>),
+    Idle(Option<(RecentConversation, DateTime<Utc>)>),
     SendingMessage(bool),
 }
 impl Default for UserState {
@@ -42,5 +47,5 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
-    SendResult(Arc<anyhow::Result<()>>),
+    SendResult(Arc<anyhow::Result<String>>),
 }

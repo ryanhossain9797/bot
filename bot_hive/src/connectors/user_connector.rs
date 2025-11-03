@@ -17,6 +17,7 @@ use crate::{
 async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
     msg: &str,
+    summary: &str,
 ) -> anyhow::Result<String> {
     let (model, backend) = llm;
     let ctx_params = LlamaContextParams::default()
@@ -28,10 +29,17 @@ async fn get_response_from_llm(
 
     match ctx_result {
         Ok(mut ctx) => {
-            let conversation_prompt = format!(
-                "<|im_start|>system\nYou are a very basic conversational agent\nTry to respond in a few words, no rambling\nHowever if the user specifically asks for more detail please go ahead.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-msg
-            );
+            let conversation_prompt = if summary.is_empty() {
+                format!(
+                    "<|im_start|>system\nYou are conversational agent\nTry to respond without rambling too much, keep it to a few sentences or less by default\nHowever if the user specifically asks for more detail please go ahead.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                    msg
+                )
+            } else {
+                format!(
+                    "<|im_start|>system\nYou are conversational agent\nTry to respond without rambling too much, keep it to a few sentences or less by default\nHowever if the user specifically asks for more detail please go ahead.\n\nPrevious conversation history:\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                    summary, msg
+                )
+            };
             let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
 
             // Create a batch and add tokens
@@ -91,7 +99,7 @@ msg
     }
 }
 
-pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String) -> UserAction {
+pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, summary: String) -> UserAction {
     let user_id_result = match user_id.0 {
         UserChannel::Discord => {
             let user_id_result = user_id.1.parse::<u64>();
@@ -113,7 +121,7 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String) -> 
             match dm_channel_result {
                 Ok(channel) => {
                     // Wrap LLM processing in a scope to ensure all non-Send types are dropped
-                    let response = get_response_from_llm(env.llm.as_ref(), &msg).await; // End of scope - all non-Send types are dropped here
+                    let response = get_response_from_llm(env.llm.as_ref(), &msg, &summary).await; // End of scope - all non-Send types are dropped here
 
                     // Now send the message after llama-cpp objects are dropped
                     match response {
@@ -121,12 +129,33 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String) -> 
                             let res = channel
                                 .send_message(
                                     &env.discord_http,
-                                    CreateMessage::new().content(response_text),
+                                    CreateMessage::new().content(&response_text),
                                 )
                                 .await;
 
                             match res {
-                                Ok(_) => UserAction::SendResult(Arc::new(Ok(()))),
+                                Ok(_) => {
+                                    let summary_entry = format!("(User: {msg}, Response: {response_text})");
+                                    
+                                    // Parse existing summary entries (separated by " || ")
+                                    let mut entries: Vec<String> = if summary.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        summary.split(" || ").map(|s| s.to_string()).collect()
+                                    };
+                                    
+                                    // Add new entry
+                                    entries.push(summary_entry);
+                                    
+                                    let context_limit = 10;
+                                    if entries.len() > context_limit {
+                                        let skip_count = entries.len() - context_limit;
+                                        entries = entries.into_iter().skip(skip_count).collect();
+                                    }
+                                    
+                                    let new_summary = entries.join(" || ");
+                                    UserAction::SendResult(Arc::new(Ok(new_summary)))
+                                }
                                 Err(err) => {
                                     UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err))))
                                 }

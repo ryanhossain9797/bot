@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
-    models::user::{User, UserAction, UserId, UserState},
+    models::user::{RecentConversation, User, UserAction, UserId, UserState},
     Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -24,7 +24,7 @@ pub fn user_transition(
     Box::pin(async move {
         match (user.state, action) {
             (
-                UserState::Idle(_),
+                UserState::Idle(last_conversation),
                 UserAction::NewMessage {
                     msg,
                     start_conversation: true,
@@ -32,10 +32,17 @@ pub fn user_transition(
             ) => {
                 let mut external = Vec::<UserExternalOperation>::new();
 
+
+                let summary = match last_conversation {
+                    Some((recent_conversation, _)) => recent_conversation.summary.clone(),
+                    None => "".to_string(),
+                };
+
                 external.push(Box::pin(handle_bot_message(
                     env.clone(),
                     user_id.clone(),
                     msg.clone(),
+                    summary,
                 )));
 
                 let user = User {
@@ -46,14 +53,24 @@ pub fn user_transition(
 
                 Ok((user, external))
             }
-            (UserState::SendingMessage(is_timeout), UserAction::SendResult(_)) => Ok((
-                User {
-                    state: UserState::Idle(if is_timeout { None } else { Some(Utc::now()) }),
-                    ..user
-                },
-                Vec::new(),
-            )),
-            (UserState::Idle(Some(_)), UserAction::Timeout) => {
+            (UserState::SendingMessage(is_timeout), UserAction::SendResult(res)) => 
+            match &**res {
+                Ok(summary) => {
+                    Ok((
+                        User {
+                            state: UserState::Idle(if is_timeout { None } else { Some((RecentConversation { summary: summary.clone() }, Utc::now())) }),
+                        },
+                        Vec::new(),
+                    ))
+                }
+                Err(_) => Ok((
+                    User {
+                        state: UserState::Idle(None),
+                    },
+                    Vec::new(),
+                )),
+            },
+            (UserState::Idle(Some((recent_conversation, _))), UserAction::Timeout) => {
                 println!("Timed Out");
 
                 let mut external = Vec::<UserExternalOperation>::new();
@@ -61,7 +78,8 @@ pub fn user_transition(
                 external.push(Box::pin(handle_bot_message(
                     env.clone(),
                     user_id.clone(),
-                    "Goodbye".to_string(),
+                    "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string(),
+                    recent_conversation.summary.clone(),
                 )));
 
                 Ok((
@@ -78,9 +96,9 @@ pub fn user_transition(
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     match user.state {
-        UserState::Idle(Some(last_activity)) => {
+        UserState::Idle(Some((_, last_activity))) => {
             vec![Scheduled {
-                at: last_activity + ChronoDuration::milliseconds(20_000),
+                at: last_activity + ChronoDuration::milliseconds(40_000),
                 action: UserAction::Timeout,
             }]
         }
