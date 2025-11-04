@@ -1,0 +1,42 @@
+# GBNF Grammar for Bot Response with Intent (Rust enum / gRPC oneof pattern)
+# Schema: {
+#   "summary": string,
+#   "response": string,
+#   "intent": {
+#     "BasicConversation": {} | null,
+#     "ControlDevice": {device, property, value} | null
+#   }
+# }
+# Only ONE intent field can be non-null at a time (oneof pattern)
+
+root ::= object
+object ::= "{" ws "\"summary\"" ws ":" ws string "," ws "\"response\"" ws ":" ws string "," ws "\"intent\"" ws ":" ws intent-object "}" ws
+
+intent-object ::= "{" ws intent-fields "}" ws
+
+# Both intent fields always present, but only one is non-null (oneof pattern)
+intent-fields ::= basic-conversation-active | control-device-active
+
+# BasicConversation intent is active (non-null), ControlDevice is null
+basic-conversation-active ::= "\"BasicConversation\"" ws ":" ws basic-conversation-value "," ws "\"ControlDevice\"" ws ":" ws null
+
+# ControlDevice intent is active (non-null), BasicConversation is null
+control-device-active ::= "\"BasicConversation\"" ws ":" ws null "," ws "\"ControlDevice\"" ws ":" ws control-device-value
+
+# BasicConversation value - empty object as placeholder
+basic-conversation-value ::= empty-object
+
+# Empty object placeholder
+empty-object ::= "{" ws "}"
+
+# ControlDevice object with required fields
+control-device-value ::= "{" ws "\"device\"" ws ":" ws string "," ws "\"property\"" ws ":" ws string "," ws "\"value\"" ws ":" ws value "}" ws
+
+# Value can be either string or number
+value ::= string | number
+
+# Basic JSON types
+string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
+number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
+null ::= "null"
+ws ::= [ \t\n]*
