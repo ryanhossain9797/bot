@@ -98,7 +98,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     match user.state {
         UserState::Idle(Some((_, last_activity))) => {
             vec![Scheduled {
-                at: last_activity + ChronoDuration::milliseconds(40_000),
+                at: last_activity + ChronoDuration::milliseconds(300_000),
                 action: UserAction::Timeout,
             }]
         }
