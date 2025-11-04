@@ -1,6 +1,6 @@
 # GBNF Grammar for Bot Response with Intent (Rust enum / gRPC oneof pattern)
 # Schema: {
-#   "summary": string,
+#   "updated_summary": string,
 #   "response": string,
 #   "intent": {
 #     "BasicConversation": {} | null,
@@ -10,7 +10,7 @@
 # Only ONE intent field can be non-null at a time (oneof pattern)
 
 root ::= object
-object ::= "{" ws "\"summary\"" ws ":" ws string "," ws "\"response\"" ws ":" ws string "," ws "\"intent\"" ws ":" ws intent-object "}" ws
+object ::= "{" ws "\"updated_summary\"" ws ":" ws string "," ws "\"response\"" ws ":" ws string "," ws "\"intent\"" ws ":" ws intent-object "}" ws
 
 intent-object ::= "{" ws intent-fields "}" ws
 
