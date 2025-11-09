@@ -2,3 +2,4 @@
 members = [
     "bot_hive", "lib_hive",
 ]
+resolver = "3"

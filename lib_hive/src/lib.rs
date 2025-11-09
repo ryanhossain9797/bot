@@ -1,4 +1,3 @@
-#![feature(const_option)]
 mod bee_handle;
 mod life_cycle_handle;
 
