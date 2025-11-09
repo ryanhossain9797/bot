@@ -11,32 +11,21 @@ use serde::Deserialize;
 use serenity::all::CreateMessage;
 
 use crate::{
-    models::user::{UserAction, UserChannel, UserId},
+    models::user::{MessageOutcome, UserAction, UserChannel, UserId},
     Env,
 };
 
-#[derive(Debug, Clone, Deserialize)]
-pub enum Intent {
-    BasicConversation,
-    ControlDevice {
-        device: String,
-        property: String,
-        value: String,
-    },
-}
-
 #[derive(Debug, Deserialize)]
-struct LlmResponse {
+struct LLMResponse {
     updated_summary: String,
-    response: String,
-    intent: Intent,
+    outcome: MessageOutcome,
 }
 
 async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
     msg: &str,
     summary: &str,
-) -> anyhow::Result<LlmResponse> {
+) -> anyhow::Result<LLMResponse> {
     let (model, backend) = llm;
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(2048)) // Context size
@@ -53,32 +42,33 @@ async fn get_response_from_llm(
 
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
-  \"response\": \"Your response to the user\",
-  \"intent\": {{\"BasicConversation\": null}} OR {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}
+  \"outcome\": {{\"Final\": {{\"response\": \"Your response to the user\"}}}} OR {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message like 'I'm doing X'\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
 }}
 
 FIELD DESCRIPTIONS:
-- updated_summary: CRITICAL - This is for YOUR OWN future reference, NOT for humans to read. Use an EXTREMELY COMPACT machine-readable format like abbreviated keys, symbols, or shorthand notation. Examples: 'usr:greet|dev:AC>temp=27|lights=on' or 'IMPT[AC_pref=cool]|recent:lights_on,temp_27' or 'ctx(polite=T,AC=27C)'. Prioritize: (1) important context - keep indefinitely, (2) trivial details - prioritize recent, drop old. Do NOT use full sentences - use the most compact format possible.
-- response: Your direct response to the user's message.
-- intent: Exactly ONE intent variant. Use {{\"BasicConversation\": null}} for general conversation, or {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} for device control.
+- updated_summary: A brief summary of the conversation context for your own future reference. Keep it concise but informative. Prioritize important context and recent details.
+- outcome: Exactly ONE outcome variant:
+  - Final: Use when you have a complete response for the user. Format: {{\"Final\": {{\"response\": \"Your response text\"}}}}
+  - IntermediateToolCall: Use when you need to call a tool (like controlling a device) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}}}}}
 
-INTENT RULES:
-1. BasicConversation: For general conversation, questions, greetings. Format: {{\"BasicConversation\": null}}
-2. ControlDevice: For device control commands. Format: {{\"ControlDevice\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}
+OUTCOME RULES:
+1. Final: For general conversation, questions, greetings, or when you have all information needed. Use {{\"Final\": {{\"response\": \"...\"}}}}
+2. IntermediateToolCall: For device control commands that require tool execution. Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
+   - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\"). Use null for silent execution.
 
 EXAMPLES:
 
 User: \"Hello!\"
-{{\"updated_summary\":\"usr:greet\",\"response\":\"Hello! How can I help you today?\",\"intent\":{{\"BasicConversation\":null}}}}
+{{\"updated_summary\":\"User greeted me\",\"outcome\":{{\"Final\":{{\"response\":\"Hello! How can I help you today?\"}}}}}}
 
 User: \"Set AC to 27 degrees\"
-{{\"updated_summary\":\"dev:AC>temp=27\",\"response\":\"Setting AC temperature to 27 degrees\",\"intent\":{{\"ControlDevice\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}
+{{\"updated_summary\":\"User wants AC set to 27 degrees\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Setting AC to 27 degrees\",\"tool_call\":{{\"DeviceControl\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}}}}}
 
 User: \"What's the weather like?\"
-{{\"updated_summary\":\"q:weather(N/A)\",\"response\":\"I don't have access to weather information, but I can help you control your devices!\",\"intent\":{{\"BasicConversation\":null}}}}
+{{\"updated_summary\":\"User asked about weather, I don't have access\",\"outcome\":{{\"Final\":{{\"response\":\"I don't have access to weather information, but I can help you control your devices!\"}}}}}}
 
 User: \"Turn on the lights\"
-{{\"updated_summary\":\"dev:light>pwr=on\",\"response\":\"Turning on the lights now\",\"intent\":{{\"ControlDevice\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}
+{{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
 
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
@@ -90,37 +80,38 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
-  \"response\": \"Your response to the user\",
-  \"intent\": {{\"BasicConversation\": null}} OR {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}
+  \"outcome\": {{\"Final\": {{\"response\": \"Your response to the user\"}}}} OR {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message like 'I'm doing X'\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
 }}
 
 FIELD DESCRIPTIONS:
-- updated_summary: CRITICAL - This is for YOUR OWN future reference, NOT for humans to read. Use an EXTREMELY COMPACT machine-readable format like abbreviated keys, symbols, or shorthand notation. Examples: 'usr:greet|dev:AC>temp=27|lights=on' or 'IMPT[AC_pref=cool]|recent:lights_on,temp_27' or 'ctx(polite=T,AC=27C)'. Prioritize: (1) important context - keep indefinitely, (2) trivial details - prioritize recent, drop old. Do NOT use full sentences - use the most compact format possible.
-- response: Your direct response to the user's message.
-- intent: Exactly ONE intent variant. Use {{\"BasicConversation\": null}} for general conversation, or {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} for device control.
+- updated_summary: A brief summary of the conversation context for your own future reference. Keep it concise but informative. Prioritize important context and recent details.
+- outcome: Exactly ONE outcome variant:
+  - Final: Use when you have a complete response for the user. Format: {{\"Final\": {{\"response\": \"Your response text\"}}}}
+  - IntermediateToolCall: Use when you need to call a tool (like controlling a device) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}}}}}
 
-INTENT RULES:
-1. BasicConversation: For general conversation, questions, greetings. Format: {{\"BasicConversation\": null}}
-2. ControlDevice: For device control commands. Format: {{\"ControlDevice\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}
+OUTCOME RULES:
+1. Final: For general conversation, questions, greetings, or when you have all information needed. Use {{\"Final\": {{\"response\": \"...\"}}}}
+2. IntermediateToolCall: For device control commands that require tool execution. Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
+   - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\"). Use null for silent execution.
 
 EXAMPLES:
 
 User: \"Hello!\"
-{{\"updated_summary\":\"usr:greet\",\"response\":\"Hello! How can I help you today?\",\"intent\":{{\"BasicConversation\":null}}}}
+{{\"updated_summary\":\"User greeted me\",\"outcome\":{{\"Final\":{{\"response\":\"Hello! How can I help you today?\"}}}}}}
 
 User: \"Set AC to 27 degrees\"
-{{\"updated_summary\":\"dev:AC>temp=27\",\"response\":\"Setting AC temperature to 27 degrees\",\"intent\":{{\"ControlDevice\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}
+{{\"updated_summary\":\"User wants AC set to 27 degrees\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Setting AC to 27 degrees\",\"tool_call\":{{\"DeviceControl\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}}}}}
 
 User: \"What's the weather like?\"
-{{\"updated_summary\":\"q:weather(N/A)\",\"response\":\"I don't have access to weather information, but I can help you control your devices!\",\"intent\":{{\"BasicConversation\":null}}}}
+{{\"updated_summary\":\"User asked about weather, I don't have access\",\"outcome\":{{\"Final\":{{\"response\":\"I don't have access to weather information, but I can help you control your devices!\"}}}}}}
 
 User: \"Turn on the lights\"
-{{\"updated_summary\":\"dev:light>pwr=on\",\"response\":\"Turning on the lights now\",\"intent\":{{\"ControlDevice\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}
+{{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
 
 Previous conversation summary:
 {}
 
-Based on the previous summary above, update it to reflect the new exchange. DO NOT USE FULL SENTENCES. Use compact notation with symbols/abbreviations (like 'usr:greet|dev:AC=27|lights:on'). Drop old trivial details, keep important context, prioritize recent for non-important items.
+Based on the previous summary above, update it to reflect the new exchange. Keep it brief but informative. Drop old trivial details, keep important context, prioritize recent for non-important items.
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
                     summary, msg
@@ -184,7 +175,7 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 
             println!(); // Newline after streaming tokens
 
-            let parsed_response: LlmResponse = serde_json::from_str(&response)?;
+            let parsed_response: LLMResponse = serde_json::from_str(&response)?;
             Ok(parsed_response)
         },
         Err(err) => Err(anyhow::anyhow!(err)),
@@ -221,20 +212,43 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, sum
                     // Now send the message after llama-cpp objects are dropped
                     match llm_result {
                         Ok(llm_response) => {
-                            let res = channel
-                                .send_message(
-                                    &env.discord_http,
-                                    CreateMessage::new().content(&llm_response.response),
-                                )
-                                .await;
-
-                            match res {
-                                Ok(_) => {
-                                    // Return the LLM-managed summary
-                                    UserAction::SendResult(Arc::new(Ok(llm_response.updated_summary)))
+                            // Extract message to send from either outcome type
+                            let maybe_message_to_send = match &llm_response.outcome {
+                                MessageOutcome::Final { response } => Some(response.as_str()),
+                                MessageOutcome::IntermediateToolCall { maybe_intermediate_response, .. } => {
+                                    maybe_intermediate_response.as_deref()
                                 }
-                                Err(err) => {
-                                    UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err))))
+                            };
+
+                            // Send message if there is one
+                            match maybe_message_to_send {
+                                Some(message) => {
+                                    let res = channel
+                                        .send_message(
+                                            &env.discord_http,
+                                            CreateMessage::new().content(message),
+                                        )
+                                        .await;
+
+                                    match res {
+                                        Ok(_) => {
+                                            // Return the LLM-managed summary and outcome
+                                            UserAction::SendResult(Arc::new(Ok((
+                                                llm_response.updated_summary,
+                                                llm_response.outcome,
+                                            ))))
+                                        }
+                                        Err(err) => {
+                                            UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err))))
+                                        }
+                                    }
+                                }
+                                None => {
+                                    // No message to send (silent tool call), just return success with summary and outcome
+                                    UserAction::SendResult(Arc::new(Ok((
+                                        llm_response.updated_summary,
+                                        llm_response.outcome,
+                                    ))))
                                 }
                             }
                         }

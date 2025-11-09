@@ -55,7 +55,7 @@ pub fn user_transition(
             }
             (UserState::SendingMessage(is_timeout), UserAction::SendResult(res)) => 
             match &**res {
-                Ok(summary) => {
+                Ok((summary, _outcome)) => {
                     Ok((
                         User {
                             state: UserState::Idle(if is_timeout { None } else { Some((RecentConversation { summary: summary.clone() }, Utc::now())) }),

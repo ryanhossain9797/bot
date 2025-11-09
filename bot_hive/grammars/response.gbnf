@@ -1,25 +1,35 @@
-# GBNF Grammar for Bot Response with Intent (Serde externally tagged enum)
+# GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
 # Schema: {
 #   "updated_summary": string,
-#   "response": string,
-#   "intent": {"BasicConversation": null} | {"ControlDevice": {device, property, value}}
+#   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"DeviceControl": {device, property, value}}}}
 # }
-# Serde's default externally tagged format - only ONE variant key present
+# MessageOutcome enum (Serde's default externally tagged format for nested enums)
 
 root ::= object
-object ::= "{" ws "\"updated_summary\"" ws ":" ws string "," ws "\"response\"" ws ":" ws string "," ws "\"intent\"" ws ":" ws intent-object "}" ws
+object ::= "{" ws "\"updated_summary\"" ws ":" ws string "," ws "\"outcome\"" ws ":" ws outcome-object "}" ws
 
-# Intent is an externally tagged enum - only one variant key present
-intent-object ::= basic-conversation-intent | control-device-intent
+# MessageOutcome is an externally tagged enum
+outcome-object ::= final-outcome | intermediate-tool-call-outcome
 
-# BasicConversation: unit variant -> {"BasicConversation": null}
-basic-conversation-intent ::= "{" ws "\"BasicConversation\"" ws ":" ws null "}" ws
+# Final outcome: {"Final": {"response": "..."}}
+final-outcome ::= "{" ws "\"Final\"" ws ":" ws final-value "}" ws
+final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 
-# ControlDevice: struct variant -> {"ControlDevice": {device, property, value}}
-control-device-intent ::= "{" ws "\"ControlDevice\"" ws ":" ws control-device-value "}" ws
+# IntermediateToolCall outcome: {"IntermediateToolCall": {"maybe_intermediate_response": ... | null, "tool_call": {...}}}
+intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
+intermediate-tool-call-value ::= "{" ws "\"maybe_intermediate_response\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
 
-# ControlDevice struct fields
-control-device-value ::= "{" ws "\"device\"" ws ":" ws string "," ws "\"property\"" ws ":" ws string "," ws "\"value\"" ws ":" ws value "}" ws
+# Optional string (null or string)
+optional-string ::= null | string
+
+# ToolCall is an externally tagged enum
+tool-call-object ::= device-control-tool-call
+
+# DeviceControl tool call: {"DeviceControl": {device, property, value}}
+device-control-tool-call ::= "{" ws "\"DeviceControl\"" ws ":" ws device-control-value "}" ws
+
+# DeviceControl struct fields
+device-control-value ::= "{" ws "\"device\"" ws ":" ws string "," ws "\"property\"" ws ":" ws string "," ws "\"value\"" ws ":" ws value "}" ws
 
 # Value can be either string or number
 value ::= string | number

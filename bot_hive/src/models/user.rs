@@ -1,6 +1,7 @@
 use std::{fmt::Display, sync::Arc};
 
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum UserChannel {
@@ -40,6 +41,26 @@ pub struct User {
     pub state: UserState,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub enum ToolCall {
+    DeviceControl {
+        device: String,
+        property: String,
+        value: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub enum MessageOutcome {
+    IntermediateToolCall {
+        maybe_intermediate_response: Option<String>,
+        tool_call: ToolCall,
+    },
+    Final {
+        response: String,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub enum UserAction {
     NewMessage {
@@ -47,5 +68,5 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
-    SendResult(Arc<anyhow::Result<String>>),
+    SendResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
 }
