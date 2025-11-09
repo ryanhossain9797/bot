@@ -25,6 +25,7 @@ async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
     msg: &str,
     summary: &str,
+    previous_tool_calls: &[String],
 ) -> anyhow::Result<LLMResponse> {
     let (model, backend) = llm;
     let ctx_params = LlamaContextParams::default()
@@ -36,6 +37,15 @@ async fn get_response_from_llm(
 
     match ctx_result {
         Ok(mut ctx) => {
+            let tool_call_history = if previous_tool_calls.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\nPrevious tool calls and results:\n{}",
+                    previous_tool_calls.join("\n")
+                )
+            };
+
             let conversation_prompt = if summary.is_empty() {
                 format!(
                     "<|im_start|>system\nYou are a conversational assistant that can also control smart devices. Respond with ONLY a JSON object with this exact structure:
@@ -52,9 +62,19 @@ FIELD DESCRIPTIONS:
   - IntermediateToolCall: Use when you need to call a tool (like controlling a device) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}}}}}
 
 OUTCOME RULES:
-1. Final: For general conversation, questions, greetings, or when you have all information needed. Use {{\"Final\": {{\"response\": \"...\"}}}}
+1. Final: For general conversation, questions, greetings, or when you have all information needed and are ready to respond to the user. Use {{\"Final\": {{\"response\": \"...\"}}}}
+   - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
 2. IntermediateToolCall: For device control commands that require tool execution. Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
    - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\"). Use null for silent execution.
+   - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
+
+TOOL CALL RESULTS:
+- When you see \"Previous tool calls and results\" above, these show tools that were already executed.
+- Read the tool call results carefully - they tell you what was done and whether it succeeded.
+- You can make additional tool calls if needed based on the results, or provide a Final response if you have everything you need.
+- Example: If you see \"Tool call set AC temperature 27 | Result: Success\", you can either:
+  - Make another IntermediateToolCall if more actions are needed
+  - Provide Final: \"I've successfully set the AC temperature to 27 degrees.\" if you're done
 
 EXAMPLES:
 
@@ -69,10 +89,10 @@ User: \"What's the weather like?\"
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
-
+{}
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-                    msg
+                    tool_call_history, msg
                 )
             } else {
                 format!(
@@ -90,9 +110,19 @@ FIELD DESCRIPTIONS:
   - IntermediateToolCall: Use when you need to call a tool (like controlling a device) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}}}}}
 
 OUTCOME RULES:
-1. Final: For general conversation, questions, greetings, or when you have all information needed. Use {{\"Final\": {{\"response\": \"...\"}}}}
+1. Final: For general conversation, questions, greetings, or when you have all information needed and are ready to respond to the user. Use {{\"Final\": {{\"response\": \"...\"}}}}
+   - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
 2. IntermediateToolCall: For device control commands that require tool execution. Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
    - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\"). Use null for silent execution.
+   - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
+
+TOOL CALL RESULTS:
+- When you see \"Previous tool calls and results\" above, these show tools that were already executed.
+- Read the tool call results carefully - they tell you what was done and whether it succeeded.
+- You can make additional tool calls if needed based on the results, or provide a Final response if you have everything you need.
+- Example: If you see \"Tool call set AC temperature 27 | Result: Success\", you can either:
+  - Make another IntermediateToolCall if more actions are needed
+  - Provide Final: \"I've successfully set the AC temperature to 27 degrees.\" if you're done
 
 EXAMPLES:
 
@@ -109,12 +139,11 @@ User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
 
 Previous conversation summary:
-{}
-
+{}{}
 Based on the previous summary above, update it to reflect the new exchange. Keep it brief but informative. Drop old trivial details, keep important context, prioritize recent for non-important items.
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-                    summary, msg
+                    summary, tool_call_history, msg
                 )
             };
             let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
@@ -182,7 +211,7 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
     }
 }
 
-pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, summary: String) -> UserAction {
+pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, summary: String, previous_tool_calls: Vec<String>) -> UserAction {
     let user_id_result = match user_id.0 {
         UserChannel::Discord => {
             let user_id_result = user_id.1.parse::<u64>();
@@ -204,7 +233,7 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, sum
             match dm_channel_result {
                 Ok(channel) => {
                     // Wrap LLM processing in a scope to ensure all non-Send types are dropped
-                    let llm_result = get_response_from_llm(env.llm.as_ref(), &msg, &summary).await; // End of scope - all non-Send types are dropped here
+                    let llm_result = get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await; // End of scope - all non-Send types are dropped here
 
                     // Debug print the full LLM result
                     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);

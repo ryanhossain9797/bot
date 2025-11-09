@@ -28,11 +28,23 @@ pub struct RecentConversation {
 #[derive(Clone, Debug)]
 pub enum UserState {
     Idle(Option<(RecentConversation, DateTime<Utc>)>),
-    SendingMessage(bool),
+    SendingMessage {
+        is_timeout: bool,
+        previous_tool_calls: Vec<String>,
+    },
 }
 impl Default for UserState {
     fn default() -> Self {
         UserState::Idle(None)
+    }
+}
+
+impl UserState {
+    pub fn sending_message(is_timeout: bool) -> Self {
+        UserState::SendingMessage {
+            is_timeout,
+            previous_tool_calls: Vec::new(),
+        }
     }
 }
 
