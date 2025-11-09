@@ -15,10 +15,21 @@ use crate::{
     Env,
 };
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
+pub enum Intent {
+    BasicConversation,
+    ControlDevice {
+        device: String,
+        property: String,
+        value: String,
+    },
+}
+
+#[derive(Debug, Deserialize)]
 struct LlmResponse {
     updated_summary: String,
     response: String,
+    intent: Intent,
 }
 
 async fn get_response_from_llm(
@@ -43,34 +54,31 @@ async fn get_response_from_llm(
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
   \"response\": \"Your response to the user\",
-  \"intent\": {{
-    \"BasicConversation\": {{}} or null,
-    \"ControlDevice\": {{device, property, value}} or null
-  }}
+  \"intent\": {{\"BasicConversation\": null}} OR {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}
 }}
 
 FIELD DESCRIPTIONS:
 - updated_summary: CRITICAL - This is for YOUR OWN future reference, NOT for humans to read. Use an EXTREMELY COMPACT machine-readable format like abbreviated keys, symbols, or shorthand notation. Examples: 'usr:greet|dev:AC>temp=27|lights=on' or 'IMPT[AC_pref=cool]|recent:lights_on,temp_27' or 'ctx(polite=T,AC=27C)'. Prioritize: (1) important context - keep indefinitely, (2) trivial details - prioritize recent, drop old. Do NOT use full sentences - use the most compact format possible.
 - response: Your direct response to the user's message.
-- intent: Exactly ONE intent must be non-null (oneof/enum pattern).
+- intent: Exactly ONE intent variant. Use {{\"BasicConversation\": null}} for general conversation, or {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} for device control.
 
-INTENT RULES (oneof pattern - exactly ONE intent must be non-null):
-1. BasicConversation: For general conversation, questions, greetings. Set to {{}} (empty object) when active, null otherwise.
-2. ControlDevice: For device control commands. Contains {{\"device\": \"name\", \"property\": \"property\", \"value\": value}} when active, null otherwise.
+INTENT RULES:
+1. BasicConversation: For general conversation, questions, greetings. Format: {{\"BasicConversation\": null}}
+2. ControlDevice: For device control commands. Format: {{\"ControlDevice\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}
 
 EXAMPLES:
 
 User: \"Hello!\"
-{{\"updated_summary\":\"usr:greet\",\"response\":\"Hello! How can I help you today?\",\"intent\":{{\"BasicConversation\":{{}},\"ControlDevice\":null}}}}
+{{\"updated_summary\":\"usr:greet\",\"response\":\"Hello! How can I help you today?\",\"intent\":{{\"BasicConversation\":null}}}}
 
 User: \"Set AC to 27 degrees\"
-{{\"updated_summary\":\"dev:AC>temp=27\",\"response\":\"Setting AC temperature to 27 degrees\",\"intent\":{{\"BasicConversation\":null,\"ControlDevice\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}
+{{\"updated_summary\":\"dev:AC>temp=27\",\"response\":\"Setting AC temperature to 27 degrees\",\"intent\":{{\"ControlDevice\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}
 
 User: \"What's the weather like?\"
-{{\"updated_summary\":\"q:weather(N/A)\",\"response\":\"I don't have access to weather information, but I can help you control your devices!\",\"intent\":{{\"BasicConversation\":{{}},\"ControlDevice\":null}}}}
+{{\"updated_summary\":\"q:weather(N/A)\",\"response\":\"I don't have access to weather information, but I can help you control your devices!\",\"intent\":{{\"BasicConversation\":null}}}}
 
 User: \"Turn on the lights\"
-{{\"updated_summary\":\"dev:light>pwr=on\",\"response\":\"Turning on the lights now\",\"intent\":{{\"BasicConversation\":null,\"ControlDevice\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}
+{{\"updated_summary\":\"dev:light>pwr=on\",\"response\":\"Turning on the lights now\",\"intent\":{{\"ControlDevice\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}
 
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
@@ -79,38 +87,35 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
             } else {
                 format!(
                     "<|im_start|>system\nYou are a conversational assistant that can also control smart devices. Respond with ONLY a JSON object with this exact structure:
-d
+
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
   \"response\": \"Your response to the user\",
-  \"intent\": {{
-    \"BasicConversation\": {{}} or null,
-    \"ControlDevice\": {{device, property, value}} or null
-  }}
+  \"intent\": {{\"BasicConversation\": null}} OR {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}
 }}
 
 FIELD DESCRIPTIONS:
 - updated_summary: CRITICAL - This is for YOUR OWN future reference, NOT for humans to read. Use an EXTREMELY COMPACT machine-readable format like abbreviated keys, symbols, or shorthand notation. Examples: 'usr:greet|dev:AC>temp=27|lights=on' or 'IMPT[AC_pref=cool]|recent:lights_on,temp_27' or 'ctx(polite=T,AC=27C)'. Prioritize: (1) important context - keep indefinitely, (2) trivial details - prioritize recent, drop old. Do NOT use full sentences - use the most compact format possible.
 - response: Your direct response to the user's message.
-- intent: Exactly ONE intent must be non-null (oneof/enum pattern).
+- intent: Exactly ONE intent variant. Use {{\"BasicConversation\": null}} for general conversation, or {{\"ControlDevice\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} for device control.
 
-INTENT RULES (oneof pattern - exactly ONE intent must be non-null):
-1. BasicConversation: For general conversation, questions, greetings. Set to {{}} (empty object) when active, null otherwise.
-2. ControlDevice: For device control commands. Contains {{\"device\": \"name\", \"property\": \"property\", \"value\": value}} when active, null otherwise.
+INTENT RULES:
+1. BasicConversation: For general conversation, questions, greetings. Format: {{\"BasicConversation\": null}}
+2. ControlDevice: For device control commands. Format: {{\"ControlDevice\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}
 
 EXAMPLES:
 
 User: \"Hello!\"
-{{\"updated_summary\":\"usr:greet\",\"response\":\"Hello! How can I help you today?\",\"intent\":{{\"BasicConversation\":{{}},\"ControlDevice\":null}}}}
+{{\"updated_summary\":\"usr:greet\",\"response\":\"Hello! How can I help you today?\",\"intent\":{{\"BasicConversation\":null}}}}
 
 User: \"Set AC to 27 degrees\"
-{{\"updated_summary\":\"dev:AC>temp=27\",\"response\":\"Setting AC temperature to 27 degrees\",\"intent\":{{\"BasicConversation\":null,\"ControlDevice\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}
+{{\"updated_summary\":\"dev:AC>temp=27\",\"response\":\"Setting AC temperature to 27 degrees\",\"intent\":{{\"ControlDevice\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}
 
 User: \"What's the weather like?\"
-{{\"updated_summary\":\"q:weather(N/A)\",\"response\":\"I don't have access to weather information, but I can help you control your devices!\",\"intent\":{{\"BasicConversation\":{{}},\"ControlDevice\":null}}}}
+{{\"updated_summary\":\"q:weather(N/A)\",\"response\":\"I don't have access to weather information, but I can help you control your devices!\",\"intent\":{{\"BasicConversation\":null}}}}
 
 User: \"Turn on the lights\"
-{{\"updated_summary\":\"dev:light>pwr=on\",\"response\":\"Turning on the lights now\",\"intent\":{{\"BasicConversation\":null,\"ControlDevice\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}
+{{\"updated_summary\":\"dev:light>pwr=on\",\"response\":\"Turning on the lights now\",\"intent\":{{\"ControlDevice\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}
 
 Previous conversation summary:
 {}
@@ -209,6 +214,9 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, sum
                 Ok(channel) => {
                     // Wrap LLM processing in a scope to ensure all non-Send types are dropped
                     let llm_result = get_response_from_llm(env.llm.as_ref(), &msg, &summary).await; // End of scope - all non-Send types are dropped here
+
+                    // Debug print the full LLM result
+                    eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 
                     // Now send the message after llama-cpp objects are dropped
                     match llm_result {
