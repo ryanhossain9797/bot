@@ -44,18 +44,10 @@ impl Default for UserState {
     }
 }
 
-impl UserState {
-    pub fn awaiting_llm_decision(is_timeout: bool) -> Self {
-        UserState::AwaitingLLMDecision {
-            is_timeout,
-            previous_tool_calls: Vec::new(),
-        }
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct User {
     pub state: UserState,
+    pub last_transition: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,6 +72,7 @@ pub enum MessageOutcome {
 
 #[derive(Clone, Debug)]
 pub enum UserAction {
+    ForceReset,
     NewMessage {
         msg: String,
         start_conversation: bool,

@@ -23,6 +23,13 @@ pub fn user_transition(
 ) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send + '_>> {
     Box::pin(async move {
         match (user.state, action) {
+            (_, UserAction::ForceReset) => Ok((
+                User {
+                    state: UserState::default(),
+                    last_transition: Utc::now(),
+                },
+                Vec::new(),
+            )),
             (
                 UserState::Idle(last_conversation),
                 UserAction::NewMessage {
@@ -31,7 +38,6 @@ pub fn user_transition(
                 },
             ) => {
                 let mut external = Vec::<UserExternalOperation>::new();
-
 
                 let summary = match last_conversation {
                     Some((recent_conversation, _)) => recent_conversation.summary.clone(),
@@ -47,22 +53,41 @@ pub fn user_transition(
                 )));
 
                 let user = User {
-                    state: UserState::awaiting_llm_decision(false),
+                    state: UserState::AwaitingLLMDecision {
+                        is_timeout: false,
+                        previous_tool_calls: Vec::new(),
+                    },
+                    last_transition: Utc::now(),
                 };
 
                 println!("Id: {0} {1:?}", user_id.1, user.state);
 
                 Ok((user, external))
             }
-            (UserState::AwaitingLLMDecision { is_timeout, previous_tool_calls }, UserAction::LLMDecisionResult(res)) => 
-            match &**res {
+            (
+                UserState::AwaitingLLMDecision {
+                    is_timeout,
+                    previous_tool_calls,
+                },
+                UserAction::LLMDecisionResult(res),
+            ) => match &**res {
                 Ok((summary, outcome)) => {
                     match outcome {
                         MessageOutcome::Final { .. } => {
                             // LLM decided on final response - transition to Idle
                             Ok((
                                 User {
-                                    state: UserState::Idle(if is_timeout { None } else { Some((RecentConversation { summary: summary.clone() }, Utc::now())) }),
+                                    state: UserState::Idle(if is_timeout {
+                                        None
+                                    } else {
+                                        Some((
+                                            RecentConversation {
+                                                summary: summary.clone(),
+                                            },
+                                            Utc::now(),
+                                        ))
+                                    }),
+                                    last_transition: Utc::now(),
                                 },
                                 Vec::new(),
                             ))
@@ -70,18 +95,18 @@ pub fn user_transition(
                         MessageOutcome::IntermediateToolCall { tool_call, .. } => {
                             // LLM decided to call a tool - transition to RunningTool and execute it
                             let mut external = Vec::<UserExternalOperation>::new();
-                            external.push(Box::pin(execute_tool(
-                                env.clone(),
-                                tool_call.clone(),
-                            )));
+                            external.push(Box::pin(execute_tool(env.clone(), tool_call.clone())));
 
                             Ok((
                                 User {
                                     state: UserState::RunningTool {
                                         is_timeout,
-                                        recent_conversation: RecentConversation { summary: summary.clone() },
+                                        recent_conversation: RecentConversation {
+                                            summary: summary.clone(),
+                                        },
                                         previous_tool_calls: previous_tool_calls.clone(),
                                     },
+                                    last_transition: Utc::now(),
                                 },
                                 external,
                             ))
@@ -91,11 +116,20 @@ pub fn user_transition(
                 Err(_) => Ok((
                     User {
                         state: UserState::Idle(None),
+                        last_transition: Utc::now(),
                     },
                     Vec::new(),
                 )),
             },
-            (UserState::RunningTool { recent_conversation, previous_tool_calls, is_timeout, .. }, UserAction::ToolResult(res)) => {
+            (
+                UserState::RunningTool {
+                    recent_conversation,
+                    previous_tool_calls,
+                    is_timeout,
+                    ..
+                },
+                UserAction::ToolResult(res),
+            ) => {
                 match &**res {
                     Ok(tool_result) => {
                         // Add tool result to previous tool calls
@@ -118,6 +152,7 @@ pub fn user_transition(
                                     is_timeout,
                                     previous_tool_calls: updated_tool_calls,
                                 },
+                                last_transition: Utc::now(),
                             },
                             external,
                         ))
@@ -125,11 +160,12 @@ pub fn user_transition(
                     Err(_) => Ok((
                         User {
                             state: UserState::Idle(None),
+                            last_transition: Utc::now(),
                         },
                         Vec::new(),
                     )),
                 }
-            },
+            }
             (UserState::Idle(Some((recent_conversation, _))), UserAction::Timeout) => {
                 println!("Timed Out");
 
@@ -145,7 +181,11 @@ pub fn user_transition(
 
                 Ok((
                     User {
-                        state: UserState::awaiting_llm_decision(true),
+                        state: UserState::AwaitingLLMDecision {
+                            is_timeout: true,
+                            previous_tool_calls: Vec::new(),
+                        },
+                        last_transition: Utc::now(),
                     },
                     external,
                 ))
@@ -156,15 +196,22 @@ pub fn user_transition(
 }
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
+    let mut schedules = Vec::new();
     match user.state {
-        UserState::Idle(Some((_, last_activity))) => {
-            vec![Scheduled {
-                at: last_activity + ChronoDuration::milliseconds(300_000),
-                action: UserAction::Timeout,
-            }]
+        UserState::Idle(Some((_, last_activity))) => schedules.push(Scheduled {
+            at: last_activity + ChronoDuration::milliseconds(300_000),
+            action: UserAction::Timeout,
+        }),
+        UserState::AwaitingLLMDecision { .. } | UserState::RunningTool { .. } => {
+            schedules.push(Scheduled {
+                at: user.last_transition + ChronoDuration::milliseconds(120_000),
+                action: UserAction::ForceReset,
+            })
         }
-        _ => Vec::new(),
+        _ => {}
     }
+
+    schedules
 }
 
 pub static USER_LIFE_CYCLE: Lazy<lib_hive::LifeCycleHandle<UserId, UserAction>> =
