@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
-    models::user::{MessageOutcome, RecentConversation, ToolCall, User, UserAction, UserId, UserState},
+    models::user::{MessageOutcome, RecentConversation, User, UserAction, UserId, UserState},
     Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -10,7 +10,7 @@ use lib_hive::{
 };
 use once_cell::sync::Lazy;
 
-use crate::connectors::llm_connector::handle_bot_message;
+use crate::connectors::{llm_connector::handle_bot_message, tool_call_connector::execute_tool};
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -68,26 +68,20 @@ pub fn user_transition(
                             ))
                         }
                         MessageOutcome::IntermediateToolCall { tool_call, .. } => {
-                            // Execute tool (fake for now) and loop back
-                            let tool_result = execute_tool_fake(tool_call);
-                            let mut updated_tool_calls = previous_tool_calls.clone();
-                            updated_tool_calls.push(tool_result);
-
-                            // Continue the loop - call handle_bot_message again with updated tool calls
+                            // Transition to RunningTool and spawn tool execution
                             let mut external = Vec::<UserExternalOperation>::new();
-                            external.push(Box::pin(handle_bot_message(
+                            external.push(Box::pin(execute_tool(
                                 env.clone(),
-                                user_id.clone(),
-                                "Continue conversation".to_string(), // Dummy message for tool call continuation
-                                summary.clone(),
-                                updated_tool_calls.clone(),
+                                tool_call.clone(),
                             )));
 
                             Ok((
                                 User {
-                                    state: UserState::SendingMessage {
+                                    state: UserState::RunningTool {
+                                        tool_call: tool_call.clone(),
+                                        summary: summary.clone(),
+                                        previous_tool_calls: previous_tool_calls.clone(),
                                         is_timeout,
-                                        previous_tool_calls: updated_tool_calls,
                                     },
                                 },
                                 external,
@@ -101,6 +95,41 @@ pub fn user_transition(
                     },
                     Vec::new(),
                 )),
+            },
+            (UserState::RunningTool { summary, previous_tool_calls, is_timeout, .. }, UserAction::ToolResult(res)) => {
+                match &**res {
+                    Ok(tool_result) => {
+                        // Add tool result to previous tool calls
+                        let mut updated_tool_calls = previous_tool_calls.clone();
+                        updated_tool_calls.push(tool_result.clone());
+
+                        // Transition back to SendingMessage and continue the conversation
+                        let mut external = Vec::<UserExternalOperation>::new();
+                        external.push(Box::pin(handle_bot_message(
+                            env.clone(),
+                            user_id.clone(),
+                            "Continue conversation".to_string(), // Dummy message for tool call continuation
+                            summary.clone(),
+                            updated_tool_calls.clone(),
+                        )));
+
+                        Ok((
+                            User {
+                                state: UserState::SendingMessage {
+                                    is_timeout,
+                                    previous_tool_calls: updated_tool_calls,
+                                },
+                            },
+                            external,
+                        ))
+                    }
+                    Err(_) => Ok((
+                        User {
+                            state: UserState::Idle(None),
+                        },
+                        Vec::new(),
+                    )),
+                }
             },
             (UserState::Idle(Some((recent_conversation, _))), UserAction::Timeout) => {
                 println!("Timed Out");
@@ -136,14 +165,6 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
             }]
         }
         _ => Vec::new(),
-    }
-}
-
-fn execute_tool_fake(tool_call: &ToolCall) -> String {
-    match tool_call {
-        ToolCall::DeviceControl { device, property, value } => {
-            format!("Tool call set {} {} {} | Result: Success", device, property, value)
-        }
     }
 }
 

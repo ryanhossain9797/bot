@@ -32,6 +32,12 @@ pub enum UserState {
         is_timeout: bool,
         previous_tool_calls: Vec<String>,
     },
+    RunningTool {
+        tool_call: ToolCall,
+        summary: String,
+        previous_tool_calls: Vec<String>,
+        is_timeout: bool,
+    },
 }
 impl Default for UserState {
     fn default() -> Self {
@@ -81,4 +87,5 @@ pub enum UserAction {
     },
     Timeout,
     SendResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
+    ToolResult(Arc<anyhow::Result<String>>),
 }
