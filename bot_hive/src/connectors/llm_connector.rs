@@ -66,7 +66,7 @@ OUTCOME RULES:
    - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
 2. IntermediateToolCall: For commands that require tool execution (device control or weather lookup). Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
    - DeviceControl: For controlling smart devices (AC, lights, etc.)
-   - GetWeather: For getting weather information for a location (city name, coordinates, etc.)
+   - GetWeather: For getting weather information. IMPORTANT: Only use GetWeather when the user provides a SPECIFIC location (city name, place name, etc.). Do NOT use GetWeather with vague terms like \"current location\", \"my location\", \"here\", or empty strings. If the user asks for weather without specifying a location, respond with Final asking them to provide a specific location first.
    - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\" or \"Checking weather for London\"). Use null for silent execution.
    - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
 
@@ -88,6 +88,9 @@ User: \"Set AC to 27 degrees\"
 
 User: \"What's the weather like in London?\"
 {{\"updated_summary\":\"User asked about weather in London\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"London\"}}}}}}}}}}
+
+User: \"What's the weather like?\"
+{{\"updated_summary\":\"User asked about weather without specifying location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\"}}}}}}
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
@@ -116,7 +119,7 @@ OUTCOME RULES:
    - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
 2. IntermediateToolCall: For commands that require tool execution (device control or weather lookup). Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
    - DeviceControl: For controlling smart devices (AC, lights, etc.)
-   - GetWeather: For getting weather information for a location (city name, coordinates, etc.)
+   - GetWeather: For getting weather information. IMPORTANT: Only use GetWeather when the user provides a SPECIFIC location (city name, place name, etc.). Do NOT use GetWeather with vague terms like \"current location\", \"my location\", \"here\", or empty strings. If the user asks for weather without specifying a location, respond with Final asking them to provide a specific location first.
    - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\" or \"Checking weather for London\"). Use null for silent execution.
    - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
 
@@ -138,6 +141,9 @@ User: \"Set AC to 27 degrees\"
 
 User: \"What's the weather like in London?\"
 {{\"updated_summary\":\"User asked about weather in London\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"London\"}}}}}}}}}}
+
+User: \"What's the weather like?\"
+{{\"updated_summary\":\"User asked about weather without specifying location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\"}}}}}}
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
