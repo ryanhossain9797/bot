@@ -10,7 +10,7 @@ use lib_hive::{
 };
 use once_cell::sync::Lazy;
 
-use crate::connectors::user_connector::handle_bot_message;
+use crate::connectors::llm_connector::handle_bot_message;
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
