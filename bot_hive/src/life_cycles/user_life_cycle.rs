@@ -78,9 +78,9 @@ pub fn user_transition(
                             Ok((
                                 User {
                                     state: UserState::RunningTool {
-                                        summary: summary.clone(),
-                                        previous_tool_calls: previous_tool_calls.clone(),
                                         is_timeout,
+                                        recent_conversation: RecentConversation { summary: summary.clone() },
+                                        previous_tool_calls: previous_tool_calls.clone(),
                                     },
                                 },
                                 external,
@@ -95,7 +95,7 @@ pub fn user_transition(
                     Vec::new(),
                 )),
             },
-            (UserState::RunningTool { summary, previous_tool_calls, is_timeout, .. }, UserAction::ToolResult(res)) => {
+            (UserState::RunningTool { recent_conversation, previous_tool_calls, is_timeout, .. }, UserAction::ToolResult(res)) => {
                 match &**res {
                     Ok(tool_result) => {
                         // Add tool result to previous tool calls
@@ -108,7 +108,7 @@ pub fn user_transition(
                             env.clone(),
                             user_id.clone(),
                             "Continue conversation".to_string(), // Dummy message for tool call continuation
-                            summary.clone(),
+                            recent_conversation.summary.clone(),
                             updated_tool_calls.clone(),
                         )));
 

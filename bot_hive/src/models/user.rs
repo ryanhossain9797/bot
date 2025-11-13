@@ -33,9 +33,9 @@ pub enum UserState {
         previous_tool_calls: Vec<String>,
     },
     RunningTool {
-        summary: String,
-        previous_tool_calls: Vec<String>,
         is_timeout: bool,
+        recent_conversation: RecentConversation,
+        previous_tool_calls: Vec<String>,
     },
 }
 impl Default for UserState {
