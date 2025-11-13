@@ -10,7 +10,7 @@ use lib_hive::{
 };
 use once_cell::sync::Lazy;
 
-use crate::connectors::{llm_connector::handle_bot_message, tool_call_connector::execute_tool};
+use crate::connectors::{llm_connector::get_llm_decision, tool_call_connector::execute_tool};
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -38,7 +38,7 @@ pub fn user_transition(
                     None => "".to_string(),
                 };
 
-                external.push(Box::pin(handle_bot_message(
+                external.push(Box::pin(get_llm_decision(
                     env.clone(),
                     user_id.clone(),
                     msg.clone(),
@@ -47,19 +47,19 @@ pub fn user_transition(
                 )));
 
                 let user = User {
-                    state: UserState::sending_message(false),
+                    state: UserState::awaiting_llm_decision(false),
                 };
 
                 println!("Id: {0} {1:?}", user_id.1, user.state);
 
                 Ok((user, external))
             }
-            (UserState::SendingMessage { is_timeout, previous_tool_calls }, UserAction::SendResult(res)) => 
+            (UserState::AwaitingLLMDecision { is_timeout, previous_tool_calls }, UserAction::LLMDecisionResult(res)) => 
             match &**res {
                 Ok((summary, outcome)) => {
                     match outcome {
                         MessageOutcome::Final { .. } => {
-                            // Final response - transition to Idle
+                            // LLM decided on final response - transition to Idle
                             Ok((
                                 User {
                                     state: UserState::Idle(if is_timeout { None } else { Some((RecentConversation { summary: summary.clone() }, Utc::now())) }),
@@ -68,7 +68,7 @@ pub fn user_transition(
                             ))
                         }
                         MessageOutcome::IntermediateToolCall { tool_call, .. } => {
-                            // Transition to RunningTool and spawn tool execution
+                            // LLM decided to call a tool - transition to RunningTool and execute it
                             let mut external = Vec::<UserExternalOperation>::new();
                             external.push(Box::pin(execute_tool(
                                 env.clone(),
@@ -103,9 +103,9 @@ pub fn user_transition(
                         let mut updated_tool_calls = previous_tool_calls.clone();
                         updated_tool_calls.push(tool_result.clone());
 
-                        // Transition back to SendingMessage and continue the conversation
+                        // Tool execution complete - get next LLM decision with tool results
                         let mut external = Vec::<UserExternalOperation>::new();
-                        external.push(Box::pin(handle_bot_message(
+                        external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             user_id.clone(),
                             "Continue conversation".to_string(), // Dummy message for tool call continuation
@@ -115,7 +115,7 @@ pub fn user_transition(
 
                         Ok((
                             User {
-                                state: UserState::SendingMessage {
+                                state: UserState::AwaitingLLMDecision {
                                     is_timeout,
                                     previous_tool_calls: updated_tool_calls,
                                 },
@@ -136,7 +136,7 @@ pub fn user_transition(
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
-                external.push(Box::pin(handle_bot_message(
+                external.push(Box::pin(get_llm_decision(
                     env.clone(),
                     user_id.clone(),
                     "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string(),
@@ -146,7 +146,7 @@ pub fn user_transition(
 
                 Ok((
                     User {
-                        state: UserState::sending_message(true),
+                        state: UserState::awaiting_llm_decision(true),
                     },
                     external,
                 ))
