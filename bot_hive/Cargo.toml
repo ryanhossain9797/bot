@@ -25,3 +25,5 @@ regex = "1.12"
 chrono = "0.4"
 llama-cpp-2 = "0.1"
 num_cpus = "1.17"
+reqwest = { version = "0.12", features = ["json"] }
+urlencoding = "2.1"
