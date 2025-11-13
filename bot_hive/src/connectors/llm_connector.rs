@@ -211,7 +211,7 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
     }
 }
 
-pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, summary: String, previous_tool_calls: Vec<String>) -> UserAction {
+pub async fn get_llm_decision(env: Arc<Env>, user_id: UserId, msg: String, summary: String, previous_tool_calls: Vec<String>) -> UserAction {
     let user_id_result = match user_id.0 {
         UserChannel::Discord => {
             let user_id_result = user_id.1.parse::<u64>();
@@ -223,7 +223,7 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, sum
         _ => panic!("Telegram not yet implemented"),
     };
     match user_id_result {
-        Err(err) => UserAction::SendResult(Arc::new(Err(err))),
+        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
         Ok(user_id) => {
             let dm_channel_result = match user_id.to_user(&env.discord_http).await {
                 Ok(user) => user.create_dm_channel(&env.discord_http).await,
@@ -232,13 +232,13 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, sum
 
             match dm_channel_result {
                 Ok(channel) => {
-                    // Wrap LLM processing in a scope to ensure all non-Send types are dropped
+                    // Get decision from LLM - wrap processing in a scope to ensure all non-Send types are dropped
                     let llm_result = get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await; // End of scope - all non-Send types are dropped here
 
-                    // Debug print the full LLM result
+                    // Debug print the full LLM decision result
                     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 
-                    // Now send the message after llama-cpp objects are dropped
+                    // Send any intermediate message to user, then return the LLM decision
                     match llm_result {
                         Ok(llm_response) => {
                             // Extract message to send from either outcome type
@@ -261,30 +261,30 @@ pub async fn handle_bot_message(env: Arc<Env>, user_id: UserId, msg: String, sum
 
                                     match res {
                                         Ok(_) => {
-                                            // Return the LLM-managed summary and outcome
-                                            UserAction::SendResult(Arc::new(Ok((
+                                            // Return the LLM decision with updated summary and outcome
+                                            UserAction::LLMDecisionResult(Arc::new(Ok((
                                                 llm_response.updated_summary,
                                                 llm_response.outcome,
                                             ))))
                                         }
                                         Err(err) => {
-                                            UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err))))
+                                            UserAction::LLMDecisionResult(Arc::new(Err(anyhow::anyhow!(err))))
                                         }
                                     }
                                 }
                                 None => {
-                                    // No message to send (silent tool call), just return success with summary and outcome
-                                    UserAction::SendResult(Arc::new(Ok((
+                                    // No intermediate message (silent tool call), return LLM decision with summary and outcome
+                                    UserAction::LLMDecisionResult(Arc::new(Ok((
                                         llm_response.updated_summary,
                                         llm_response.outcome,
                                     ))))
                                 }
                             }
                         }
-                        Err(err) => UserAction::SendResult(Arc::new(Err(err))),
+                        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
                     }
                 }
-                Err(err) => UserAction::SendResult(Arc::new(Err(anyhow::anyhow!(err)))),
+                Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(anyhow::anyhow!(err)))),
             }
         }
     }

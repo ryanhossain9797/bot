@@ -28,8 +28,13 @@ pub struct RecentConversation {
 #[derive(Clone, Debug)]
 pub enum UserState {
     Idle(Option<(RecentConversation, DateTime<Utc>)>),
-    SendingMessage {
+    AwaitingLLMDecision {
         is_timeout: bool,
+        previous_tool_calls: Vec<String>,
+    },
+    RunningTool {
+        is_timeout: bool,
+        recent_conversation: RecentConversation,
         previous_tool_calls: Vec<String>,
     },
 }
@@ -39,18 +44,10 @@ impl Default for UserState {
     }
 }
 
-impl UserState {
-    pub fn sending_message(is_timeout: bool) -> Self {
-        UserState::SendingMessage {
-            is_timeout,
-            previous_tool_calls: Vec::new(),
-        }
-    }
-}
-
 #[derive(Clone, Default)]
 pub struct User {
     pub state: UserState,
+    pub last_transition: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,10 +72,12 @@ pub enum MessageOutcome {
 
 #[derive(Clone, Debug)]
 pub enum UserAction {
+    ForceReset,
     NewMessage {
         msg: String,
         start_conversation: bool,
     },
     Timeout,
-    SendResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
+    LLMDecisionResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
+    ToolResult(Arc<anyhow::Result<String>>),
 }
