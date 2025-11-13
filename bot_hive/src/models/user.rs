@@ -33,7 +33,6 @@ pub enum UserState {
         previous_tool_calls: Vec<String>,
     },
     RunningTool {
-        tool_call: ToolCall,
         summary: String,
         previous_tool_calls: Vec<String>,
         is_timeout: bool,

@@ -78,7 +78,6 @@ pub fn user_transition(
                             Ok((
                                 User {
                                     state: UserState::RunningTool {
-                                        tool_call: tool_call.clone(),
                                         summary: summary.clone(),
                                         previous_tool_calls: previous_tool_calls.clone(),
                                         is_timeout,
