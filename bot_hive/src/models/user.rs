@@ -57,6 +57,9 @@ pub enum ToolCall {
         property: String,
         value: String,
     },
+    GetWeather {
+        location: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

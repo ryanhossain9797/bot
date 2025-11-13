@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, sync::Arc, io::Write};
+use std::{io::Write, num::NonZeroU32, sync::Arc};
 
 use llama_cpp_2::{
     context::params::LlamaContextParams,
@@ -52,20 +52,22 @@ async fn get_response_from_llm(
 
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
-  \"outcome\": {{\"Final\": {{\"response\": \"Your response to the user\"}}}} OR {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message like 'I'm doing X'\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
+  \"outcome\": {{\"Final\": {{\"response\": \"Your response to the user\"}}}} OR {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message like 'I'm doing X'\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
 }}
 
 FIELD DESCRIPTIONS:
 - updated_summary: A brief summary of the conversation context for your own future reference. Keep it concise but informative. Prioritize important context and recent details.
 - outcome: Exactly ONE outcome variant:
   - Final: Use when you have a complete response for the user. Format: {{\"Final\": {{\"response\": \"Your response text\"}}}}
-  - IntermediateToolCall: Use when you need to call a tool (like controlling a device) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}}}}}
+  - IntermediateToolCall: Use when you need to call a tool (like controlling a device or getting weather) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}} OR {{\"GetWeather\": {{\"location\": \"city name or location\"}}}}}}}}
 
 OUTCOME RULES:
 1. Final: For general conversation, questions, greetings, or when you have all information needed and are ready to respond to the user. Use {{\"Final\": {{\"response\": \"...\"}}}}
    - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
-2. IntermediateToolCall: For device control commands that require tool execution. Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
-   - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\"). Use null for silent execution.
+2. IntermediateToolCall: For commands that require tool execution (device control or weather lookup). Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
+   - DeviceControl: For controlling smart devices (AC, lights, etc.)
+   - GetWeather: For getting weather information for a location (city name, coordinates, etc.)
+   - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\" or \"Checking weather for London\"). Use null for silent execution.
    - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
 
 TOOL CALL RESULTS:
@@ -84,8 +86,8 @@ User: \"Hello!\"
 User: \"Set AC to 27 degrees\"
 {{\"updated_summary\":\"User wants AC set to 27 degrees\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Setting AC to 27 degrees\",\"tool_call\":{{\"DeviceControl\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}}}}}
 
-User: \"What's the weather like?\"
-{{\"updated_summary\":\"User asked about weather, I don't have access\",\"outcome\":{{\"Final\":{{\"response\":\"I don't have access to weather information, but I can help you control your devices!\"}}}}}}
+User: \"What's the weather like in London?\"
+{{\"updated_summary\":\"User asked about weather in London\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"London\"}}}}}}}}}}
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
@@ -100,20 +102,22 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
-  \"outcome\": {{\"Final\": {{\"response\": \"Your response to the user\"}}}} OR {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message like 'I'm doing X'\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
+  \"outcome\": {{\"Final\": {{\"response\": \"Your response to the user\"}}}} OR {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message like 'I'm doing X'\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
 }}
 
 FIELD DESCRIPTIONS:
 - updated_summary: A brief summary of the conversation context for your own future reference. Keep it concise but informative. Prioritize important context and recent details.
 - outcome: Exactly ONE outcome variant:
   - Final: Use when you have a complete response for the user. Format: {{\"Final\": {{\"response\": \"Your response text\"}}}}
-  - IntermediateToolCall: Use when you need to call a tool (like controlling a device) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}}}}}}
+  - IntermediateToolCall: Use when you need to call a tool (like controlling a device or getting weather) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"name\", \"property\": \"property\", \"value\": value}}}} OR {{\"GetWeather\": {{\"location\": \"city name or location\"}}}}}}}}
 
 OUTCOME RULES:
 1. Final: For general conversation, questions, greetings, or when you have all information needed and are ready to respond to the user. Use {{\"Final\": {{\"response\": \"...\"}}}}
    - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
-2. IntermediateToolCall: For device control commands that require tool execution. Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}}}}}}
-   - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\"). Use null for silent execution.
+2. IntermediateToolCall: For commands that require tool execution (device control or weather lookup). Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
+   - DeviceControl: For controlling smart devices (AC, lights, etc.)
+   - GetWeather: For getting weather information for a location (city name, coordinates, etc.)
+   - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\" or \"Checking weather for London\"). Use null for silent execution.
    - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
 
 TOOL CALL RESULTS:
@@ -132,8 +136,8 @@ User: \"Hello!\"
 User: \"Set AC to 27 degrees\"
 {{\"updated_summary\":\"User wants AC set to 27 degrees\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Setting AC to 27 degrees\",\"tool_call\":{{\"DeviceControl\":{{\"device\":\"AC\",\"property\":\"temperature\",\"value\":\"27\"}}}}}}}}}}
 
-User: \"What's the weather like?\"
-{{\"updated_summary\":\"User asked about weather, I don't have access\",\"outcome\":{{\"Final\":{{\"response\":\"I don't have access to weather information, but I can help you control your devices!\"}}}}}}
+User: \"What's the weather like in London?\"
+{{\"updated_summary\":\"User asked about weather in London\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"London\"}}}}}}}}}}
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
@@ -206,12 +210,18 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 
             let parsed_response: LLMResponse = serde_json::from_str(&response)?;
             Ok(parsed_response)
-        },
+        }
         Err(err) => Err(anyhow::anyhow!(err)),
     }
 }
 
-pub async fn get_llm_decision(env: Arc<Env>, user_id: UserId, msg: String, summary: String, previous_tool_calls: Vec<String>) -> UserAction {
+pub async fn get_llm_decision(
+    env: Arc<Env>,
+    user_id: UserId,
+    msg: String,
+    summary: String,
+    previous_tool_calls: Vec<String>,
+) -> UserAction {
     let user_id_result = match user_id.0 {
         UserChannel::Discord => {
             let user_id_result = user_id.1.parse::<u64>();
@@ -233,7 +243,13 @@ pub async fn get_llm_decision(env: Arc<Env>, user_id: UserId, msg: String, summa
             match dm_channel_result {
                 Ok(channel) => {
                     // Get decision from LLM - wrap processing in a scope to ensure all non-Send types are dropped
-                    let llm_result = get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await; // End of scope - all non-Send types are dropped here
+                    let llm_result = get_response_from_llm(
+                        env.llm.as_ref(),
+                        &msg,
+                        &summary,
+                        &previous_tool_calls,
+                    )
+                    .await; // End of scope - all non-Send types are dropped here
 
                     // Debug print the full LLM decision result
                     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
@@ -244,9 +260,10 @@ pub async fn get_llm_decision(env: Arc<Env>, user_id: UserId, msg: String, summa
                             // Extract message to send from either outcome type
                             let maybe_message_to_send = match &llm_response.outcome {
                                 MessageOutcome::Final { response } => Some(response.as_str()),
-                                MessageOutcome::IntermediateToolCall { maybe_intermediate_response, .. } => {
-                                    maybe_intermediate_response.as_deref()
-                                }
+                                MessageOutcome::IntermediateToolCall {
+                                    maybe_intermediate_response,
+                                    ..
+                                } => maybe_intermediate_response.as_deref(),
                             };
 
                             // Send message if there is one
@@ -267,9 +284,9 @@ pub async fn get_llm_decision(env: Arc<Env>, user_id: UserId, msg: String, summa
                                                 llm_response.outcome,
                                             ))))
                                         }
-                                        Err(err) => {
-                                            UserAction::LLMDecisionResult(Arc::new(Err(anyhow::anyhow!(err))))
-                                        }
+                                        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(
+                                            anyhow::anyhow!(err),
+                                        ))),
                                     }
                                 }
                                 None => {
