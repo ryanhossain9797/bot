@@ -10,6 +10,7 @@ use llama_cpp_2::{
 use serde::Deserialize;
 
 use crate::models::user::{MessageOutcome, UserAction};
+use crate::Env;
 
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
@@ -218,17 +219,14 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 }
 
 pub async fn get_llm_decision(
-    llm: Arc<(
-        llama_cpp_2::model::LlamaModel,
-        llama_cpp_2::llama_backend::LlamaBackend,
-    )>,
+    env: Arc<Env>,
     msg: String,
     summary: String,
     previous_tool_calls: Vec<String>,
 ) -> UserAction {
     // Get decision from LLM
     let llm_result =
-        get_response_from_llm(llm.as_ref(), &msg, &summary, &previous_tool_calls).await;
+        get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await;
 
     // Debug print the full LLM decision result
     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);

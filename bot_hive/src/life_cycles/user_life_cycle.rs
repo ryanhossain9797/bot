@@ -48,7 +48,7 @@ pub fn user_transition(
                 };
 
                 external.push(Box::pin(get_llm_decision(
-                    env.llm.clone(),
+                    env.clone(),
                     msg.clone(),
                     summary,
                     Vec::new(), // No previous tool calls for new messages
@@ -99,7 +99,6 @@ pub fn user_transition(
                                 User {
                                     state: UserState::SendingMessage {
                                         is_timeout,
-                                        message,
                                         outcome: outcome.clone(),
                                         recent_conversation: RecentConversation {
                                             summary: summary.clone(),
@@ -170,7 +169,6 @@ pub fn user_transition(
             (
                 UserState::SendingMessage {
                     is_timeout,
-                    message: _,
                     outcome,
                     recent_conversation,
                     previous_tool_calls,
@@ -242,7 +240,7 @@ pub fn user_transition(
                         // Tool execution complete - get next LLM decision with tool results
                         let mut external = Vec::<UserExternalOperation>::new();
                         external.push(Box::pin(get_llm_decision(
-                            env.llm.clone(),
+                            env.clone(),
                             "Continue conversation".to_string(), // Dummy message for tool call continuation
                             recent_conversation.summary.clone(),
                             updated_tool_calls.clone(),
@@ -274,7 +272,7 @@ pub fn user_transition(
                 let mut external = Vec::<UserExternalOperation>::new();
 
                 external.push(Box::pin(get_llm_decision(
-                    env.llm.clone(),
+                    env.clone(),
                     "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string(),
                     recent_conversation.summary.clone(),
                     Vec::new(), // No previous tool calls for timeout
