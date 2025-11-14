@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!models/README.md
+
+# Other models (only include Qwen)
+models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+
+# Configuration (must exist before building - copy from template)
+# src/configuration.rs
+
+# Debug files
+flycheck0/
+
