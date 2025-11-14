@@ -1,0 +1,23 @@
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: bot_hive/Dockerfile
+    image: bot-hive:latest
+    container_name: bot-hive
+    restart: unless-stopped
+    environment:
+      # Model path (defaults to /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf)
+      - MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+      # Logging level
+      - RUST_LOG=info
+    # Note: DISCORD_TOKEN must be set in configuration.rs before building
+    # Configuration is compiled into the binary, so mounting at runtime won't work
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+
