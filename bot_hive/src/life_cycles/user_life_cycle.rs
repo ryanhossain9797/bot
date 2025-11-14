@@ -10,7 +10,10 @@ use lib_hive::{
 };
 use once_cell::sync::Lazy;
 
-use crate::connectors::{llm_connector::get_llm_decision, tool_call_connector::execute_tool};
+use crate::connectors::{
+    llm_connector::get_llm_decision, message_connector::send_message,
+    tool_call_connector::execute_tool,
+};
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -45,8 +48,7 @@ pub fn user_transition(
                 };
 
                 external.push(Box::pin(get_llm_decision(
-                    env.clone(),
-                    user_id.clone(),
+                    env.llm.clone(),
                     msg.clone(),
                     summary,
                     Vec::new(), // No previous tool calls for new messages
@@ -72,35 +74,33 @@ pub fn user_transition(
                 UserAction::LLMDecisionResult(res),
             ) => match &**res {
                 Ok((summary, outcome)) => {
-                    match outcome {
-                        MessageOutcome::Final { .. } => {
-                            // LLM decided on final response - transition to Idle
-                            Ok((
-                                User {
-                                    state: UserState::Idle(if is_timeout {
-                                        None
-                                    } else {
-                                        Some((
-                                            RecentConversation {
-                                                summary: summary.clone(),
-                                            },
-                                            Utc::now(),
-                                        ))
-                                    }),
-                                    last_transition: Utc::now(),
-                                },
-                                Vec::new(),
-                            ))
-                        }
-                        MessageOutcome::IntermediateToolCall { tool_call, .. } => {
-                            // LLM decided to call a tool - transition to RunningTool and execute it
+                    // Extract message to send from outcome
+                    let message_to_send = match outcome {
+                        MessageOutcome::Final { response } => Some(response.clone()),
+                        MessageOutcome::IntermediateToolCall {
+                            maybe_intermediate_response,
+                            ..
+                        } => maybe_intermediate_response.clone(),
+                    };
+
+                    // If there's a message to send, go to SendingMessage state
+                    // Otherwise (silent tool call), go directly to RunningTool
+                    match message_to_send {
+                        Some(message) => {
+                            // Transition to SendingMessage state and trigger message sending
                             let mut external = Vec::<UserExternalOperation>::new();
-                            external.push(Box::pin(execute_tool(env.clone(), tool_call.clone())));
+                            external.push(Box::pin(send_message(
+                                env.clone(),
+                                user_id.clone(),
+                                message.clone(),
+                            )));
 
                             Ok((
                                 User {
-                                    state: UserState::RunningTool {
+                                    state: UserState::SendingMessage {
                                         is_timeout,
+                                        message,
+                                        outcome: outcome.clone(),
                                         recent_conversation: RecentConversation {
                                             summary: summary.clone(),
                                         },
@@ -110,6 +110,52 @@ pub fn user_transition(
                                 },
                                 external,
                             ))
+                        }
+                        None => {
+                            // Silent tool call - go directly to RunningTool
+                            match outcome {
+                                MessageOutcome::IntermediateToolCall { tool_call, .. } => {
+                                    let mut external = Vec::<UserExternalOperation>::new();
+                                    external.push(Box::pin(execute_tool(
+                                        env.clone(),
+                                        tool_call.clone(),
+                                    )));
+
+                                    Ok((
+                                        User {
+                                            state: UserState::RunningTool {
+                                                is_timeout,
+                                                recent_conversation: RecentConversation {
+                                                    summary: summary.clone(),
+                                                },
+                                                previous_tool_calls: previous_tool_calls.clone(),
+                                            },
+                                            last_transition: Utc::now(),
+                                        },
+                                        external,
+                                    ))
+                                }
+                                MessageOutcome::Final { .. } => {
+                                    // This shouldn't happen (Final always has a message)
+                                    // But handle it gracefully
+                                    Ok((
+                                        User {
+                                            state: UserState::Idle(if is_timeout {
+                                                None
+                                            } else {
+                                                Some((
+                                                    RecentConversation {
+                                                        summary: summary.clone(),
+                                                    },
+                                                    Utc::now(),
+                                                ))
+                                            }),
+                                            last_transition: Utc::now(),
+                                        },
+                                        Vec::new(),
+                                    ))
+                                }
+                            }
                         }
                     }
                 }
@@ -121,6 +167,63 @@ pub fn user_transition(
                     Vec::new(),
                 )),
             },
+            (
+                UserState::SendingMessage {
+                    is_timeout,
+                    message: _,
+                    outcome,
+                    recent_conversation,
+                    previous_tool_calls,
+                },
+                UserAction::MessageSent(res),
+            ) => {
+                match &**res {
+                    Ok(_) => {
+                        // Message sent successfully - check outcome to determine next state
+                        match outcome {
+                            MessageOutcome::Final { .. } => {
+                                // Final response sent - transition to Idle
+                                Ok((
+                                    User {
+                                        state: UserState::Idle(if is_timeout {
+                                            None
+                                        } else {
+                                            Some((recent_conversation.clone(), Utc::now()))
+                                        }),
+                                        last_transition: Utc::now(),
+                                    },
+                                    Vec::new(),
+                                ))
+                            }
+                            MessageOutcome::IntermediateToolCall { tool_call, .. } => {
+                                // Intermediate message sent - now execute the tool
+                                let mut external = Vec::<UserExternalOperation>::new();
+                                external
+                                    .push(Box::pin(execute_tool(env.clone(), tool_call.clone())));
+
+                                Ok((
+                                    User {
+                                        state: UserState::RunningTool {
+                                            is_timeout,
+                                            recent_conversation: recent_conversation.clone(),
+                                            previous_tool_calls: previous_tool_calls.clone(),
+                                        },
+                                        last_transition: Utc::now(),
+                                    },
+                                    external,
+                                ))
+                            }
+                        }
+                    }
+                    Err(_) => Ok((
+                        User {
+                            state: UserState::Idle(None),
+                            last_transition: Utc::now(),
+                        },
+                        Vec::new(),
+                    )),
+                }
+            }
             (
                 UserState::RunningTool {
                     recent_conversation,
@@ -139,8 +242,7 @@ pub fn user_transition(
                         // Tool execution complete - get next LLM decision with tool results
                         let mut external = Vec::<UserExternalOperation>::new();
                         external.push(Box::pin(get_llm_decision(
-                            env.clone(),
-                            user_id.clone(),
+                            env.llm.clone(),
                             "Continue conversation".to_string(), // Dummy message for tool call continuation
                             recent_conversation.summary.clone(),
                             updated_tool_calls.clone(),
@@ -172,8 +274,7 @@ pub fn user_transition(
                 let mut external = Vec::<UserExternalOperation>::new();
 
                 external.push(Box::pin(get_llm_decision(
-                    env.clone(),
-                    user_id.clone(),
+                    env.llm.clone(),
                     "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string(),
                     recent_conversation.summary.clone(),
                     Vec::new(), // No previous tool calls for timeout
@@ -202,12 +303,12 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
             at: last_activity + ChronoDuration::milliseconds(300_000),
             action: UserAction::Timeout,
         }),
-        UserState::AwaitingLLMDecision { .. } | UserState::RunningTool { .. } => {
-            schedules.push(Scheduled {
-                at: user.last_transition + ChronoDuration::milliseconds(120_000),
-                action: UserAction::ForceReset,
-            })
-        }
+        UserState::AwaitingLLMDecision { .. }
+        | UserState::SendingMessage { .. }
+        | UserState::RunningTool { .. } => schedules.push(Scheduled {
+            at: user.last_transition + ChronoDuration::milliseconds(120_000),
+            action: UserAction::ForceReset,
+        }),
         _ => {}
     }
 

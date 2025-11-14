@@ -8,12 +8,8 @@ use llama_cpp_2::{
     sampling::LlamaSampler,
 };
 use serde::Deserialize;
-use serenity::all::CreateMessage;
 
-use crate::{
-    models::user::{MessageOutcome, UserAction, UserChannel, UserId},
-    Env,
-};
+use crate::models::user::{MessageOutcome, UserAction};
 
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
@@ -222,93 +218,27 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 }
 
 pub async fn get_llm_decision(
-    env: Arc<Env>,
-    user_id: UserId,
+    llm: Arc<(
+        llama_cpp_2::model::LlamaModel,
+        llama_cpp_2::llama_backend::LlamaBackend,
+    )>,
     msg: String,
     summary: String,
     previous_tool_calls: Vec<String>,
 ) -> UserAction {
-    let user_id_result = match user_id.0 {
-        UserChannel::Discord => {
-            let user_id_result = user_id.1.parse::<u64>();
-            match user_id_result {
-                Ok(user_id) => Ok(serenity::all::UserId::new(user_id)),
-                Err(err) => Err(anyhow::anyhow!(err)),
-            }
-        }
-        _ => panic!("Telegram not yet implemented"),
-    };
-    match user_id_result {
+    // Get decision from LLM
+    let llm_result =
+        get_response_from_llm(llm.as_ref(), &msg, &summary, &previous_tool_calls).await;
+
+    // Debug print the full LLM decision result
+    eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
+
+    // Return the LLM decision with updated summary and outcome
+    match llm_result {
+        Ok(llm_response) => UserAction::LLMDecisionResult(Arc::new(Ok((
+            llm_response.updated_summary,
+            llm_response.outcome,
+        )))),
         Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
-        Ok(user_id) => {
-            let dm_channel_result = match user_id.to_user(&env.discord_http).await {
-                Ok(user) => user.create_dm_channel(&env.discord_http).await,
-                Err(e) => Err(e),
-            };
-
-            match dm_channel_result {
-                Ok(channel) => {
-                    // Get decision from LLM - wrap processing in a scope to ensure all non-Send types are dropped
-                    let llm_result = get_response_from_llm(
-                        env.llm.as_ref(),
-                        &msg,
-                        &summary,
-                        &previous_tool_calls,
-                    )
-                    .await; // End of scope - all non-Send types are dropped here
-
-                    // Debug print the full LLM decision result
-                    eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
-
-                    // Send any intermediate message to user, then return the LLM decision
-                    match llm_result {
-                        Ok(llm_response) => {
-                            // Extract message to send from either outcome type
-                            let maybe_message_to_send = match &llm_response.outcome {
-                                MessageOutcome::Final { response } => Some(response.as_str()),
-                                MessageOutcome::IntermediateToolCall {
-                                    maybe_intermediate_response,
-                                    ..
-                                } => maybe_intermediate_response.as_deref(),
-                            };
-
-                            // Send message if there is one
-                            match maybe_message_to_send {
-                                Some(message) => {
-                                    let res = channel
-                                        .send_message(
-                                            &env.discord_http,
-                                            CreateMessage::new().content(message),
-                                        )
-                                        .await;
-
-                                    match res {
-                                        Ok(_) => {
-                                            // Return the LLM decision with updated summary and outcome
-                                            UserAction::LLMDecisionResult(Arc::new(Ok((
-                                                llm_response.updated_summary,
-                                                llm_response.outcome,
-                                            ))))
-                                        }
-                                        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(
-                                            anyhow::anyhow!(err),
-                                        ))),
-                                    }
-                                }
-                                None => {
-                                    // No intermediate message (silent tool call), return LLM decision with summary and outcome
-                                    UserAction::LLMDecisionResult(Arc::new(Ok((
-                                        llm_response.updated_summary,
-                                        llm_response.outcome,
-                                    ))))
-                                }
-                            }
-                        }
-                        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
-                    }
-                }
-                Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(anyhow::anyhow!(err)))),
-            }
-        }
     }
 }
