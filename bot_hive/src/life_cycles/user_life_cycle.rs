@@ -18,6 +18,50 @@ use crate::connectors::{
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
 
+/// Handle the outcome after a message is sent (or skipped for silent tool calls).
+/// Returns the next state transition based on the outcome.
+fn handle_outcome(
+    env: Arc<Env>,
+    is_timeout: bool,
+    outcome: MessageOutcome,
+    recent_conversation: RecentConversation,
+    previous_tool_calls: Vec<String>,
+) -> UserTransitionResult {
+    match outcome {
+        MessageOutcome::Final { .. } => {
+            // Final response sent - transition to Idle
+            Ok((
+                User {
+                    state: UserState::Idle(if is_timeout {
+                        None
+                    } else {
+                        Some((recent_conversation, Utc::now()))
+                    }),
+                    last_transition: Utc::now(),
+                },
+                Vec::new(),
+            ))
+        }
+        MessageOutcome::IntermediateToolCall { tool_call, .. } => {
+            // Intermediate message sent - now execute the tool
+            let mut external = Vec::<UserExternalOperation>::new();
+            external.push(Box::pin(execute_tool(env, tool_call.clone())));
+
+            Ok((
+                User {
+                    state: UserState::RunningTool {
+                        is_timeout,
+                        recent_conversation,
+                        previous_tool_calls,
+                    },
+                    last_transition: Utc::now(),
+                },
+                external,
+            ))
+        }
+    }
+}
+
 pub fn user_transition(
     env: Arc<Env>,
     user_id: UserId,
@@ -111,50 +155,16 @@ pub fn user_transition(
                             ))
                         }
                         None => {
-                            // Silent tool call - go directly to RunningTool
-                            match outcome {
-                                MessageOutcome::IntermediateToolCall { tool_call, .. } => {
-                                    let mut external = Vec::<UserExternalOperation>::new();
-                                    external.push(Box::pin(execute_tool(
-                                        env.clone(),
-                                        tool_call.clone(),
-                                    )));
-
-                                    Ok((
-                                        User {
-                                            state: UserState::RunningTool {
-                                                is_timeout,
-                                                recent_conversation: RecentConversation {
-                                                    summary: summary.clone(),
-                                                },
-                                                previous_tool_calls: previous_tool_calls.clone(),
-                                            },
-                                            last_transition: Utc::now(),
-                                        },
-                                        external,
-                                    ))
-                                }
-                                MessageOutcome::Final { .. } => {
-                                    // This shouldn't happen (Final always has a message)
-                                    // But handle it gracefully
-                                    Ok((
-                                        User {
-                                            state: UserState::Idle(if is_timeout {
-                                                None
-                                            } else {
-                                                Some((
-                                                    RecentConversation {
-                                                        summary: summary.clone(),
-                                                    },
-                                                    Utc::now(),
-                                                ))
-                                            }),
-                                            last_transition: Utc::now(),
-                                        },
-                                        Vec::new(),
-                                    ))
-                                }
-                            }
+                            // Silent tool call - go directly to handle outcome
+                            handle_outcome(
+                                env.clone(),
+                                is_timeout,
+                                outcome.clone(),
+                                RecentConversation {
+                                    summary: summary.clone(),
+                                },
+                                previous_tool_calls.clone(),
+                            )
                         }
                     }
                 }
@@ -177,39 +187,13 @@ pub fn user_transition(
             ) => {
                 // Ignore errors from message sending - continue with normal flow regardless
                 // Message sent (or failed, but we don't care) - check outcome to determine next state
-                match outcome {
-                    MessageOutcome::Final { .. } => {
-                        // Final response sent - transition to Idle
-                        Ok((
-                            User {
-                                state: UserState::Idle(if is_timeout {
-                                    None
-                                } else {
-                                    Some((recent_conversation.clone(), Utc::now()))
-                                }),
-                                last_transition: Utc::now(),
-                            },
-                            Vec::new(),
-                        ))
-                    }
-                    MessageOutcome::IntermediateToolCall { tool_call, .. } => {
-                        // Intermediate message sent - now execute the tool
-                        let mut external = Vec::<UserExternalOperation>::new();
-                        external.push(Box::pin(execute_tool(env.clone(), tool_call.clone())));
-
-                        Ok((
-                            User {
-                                state: UserState::RunningTool {
-                                    is_timeout,
-                                    recent_conversation: recent_conversation.clone(),
-                                    previous_tool_calls: previous_tool_calls.clone(),
-                                },
-                                last_transition: Utc::now(),
-                            },
-                            external,
-                        ))
-                    }
-                }
+                handle_outcome(
+                    env.clone(),
+                    is_timeout,
+                    outcome.clone(),
+                    recent_conversation.clone(),
+                    previous_tool_calls.clone(),
+                )
             }
             (
                 UserState::RunningTool {
