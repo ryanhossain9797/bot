@@ -37,11 +37,11 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/target/release/bot /app/bot
 
-# Copy model file
-COPY --from=builder /app/bot_hive/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+# Copy model file directly from build context (not needed in builder stage)
+COPY bot_hive/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
 
 # Copy grammar file (included at compile time, but kept for reference)
-COPY --from=builder /app/bot_hive/grammars/response.gbnf /app/grammars/response.gbnf
+COPY bot_hive/grammars/response.gbnf /app/grammars/response.gbnf
 
 # Set environment variables
 ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
