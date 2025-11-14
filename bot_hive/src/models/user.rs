@@ -32,6 +32,12 @@ pub enum UserState {
         is_timeout: bool,
         previous_tool_calls: Vec<String>,
     },
+    SendingMessage {
+        is_timeout: bool,
+        outcome: MessageOutcome,
+        recent_conversation: RecentConversation,
+        previous_tool_calls: Vec<String>,
+    },
     RunningTool {
         is_timeout: bool,
         recent_conversation: RecentConversation,
@@ -82,5 +88,6 @@ pub enum UserAction {
     },
     Timeout,
     LLMDecisionResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
+    MessageSent(Arc<anyhow::Result<()>>),
     ToolResult(Arc<anyhow::Result<String>>),
 }

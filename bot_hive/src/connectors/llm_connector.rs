@@ -8,12 +8,9 @@ use llama_cpp_2::{
     sampling::LlamaSampler,
 };
 use serde::Deserialize;
-use serenity::all::CreateMessage;
 
-use crate::{
-    models::user::{MessageOutcome, UserAction, UserChannel, UserId},
-    Env,
-};
+use crate::models::user::{MessageOutcome, UserAction};
+use crate::Env;
 
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
@@ -66,7 +63,7 @@ OUTCOME RULES:
    - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
 2. IntermediateToolCall: For commands that require tool execution (device control or weather lookup). Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
    - DeviceControl: For controlling smart devices (AC, lights, etc.)
-   - GetWeather: For getting weather information. IMPORTANT: Only use GetWeather when the user provides a SPECIFIC location (city name, place name, etc.). Do NOT use GetWeather with vague terms like \"current location\", \"my location\", \"here\", or empty strings. If the user asks for weather without specifying a location, respond with Final asking them to provide a specific location first.
+   - GetWeather: For getting weather information. IMPORTANT: Only use GetWeather when the user provides a SPECIFIC GEOGRAPHIC LOCATION (city name, place name, etc.). Do NOT use GetWeather with vague terms like \"current location\", \"my location\", \"here\", time-related terms like \"today\", \"tomorrow\", \"now\", or empty strings. The location must be a place name (e.g., \"London\", \"New York\", \"Tokyo\"), NOT a time reference. If the user asks for weather without specifying a valid location, respond with Final asking them to provide a specific location first.
    - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\" or \"Checking weather for London\"). Use null for silent execution.
    - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
 
@@ -91,6 +88,9 @@ User: \"What's the weather like in London?\"
 
 User: \"What's the weather like?\"
 {{\"updated_summary\":\"User asked about weather without specifying location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\"}}}}}}
+
+User: \"What's the weather today?\"
+{{\"updated_summary\":\"User asked about weather with time reference instead of location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! However, I need a specific location (like a city name) to look up the weather. Which city or place would you like to know about?\"}}}}}}
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
@@ -119,7 +119,7 @@ OUTCOME RULES:
    - Use Final when you have completed all necessary tool calls and can provide a complete response to the user.
 2. IntermediateToolCall: For commands that require tool execution (device control or weather lookup). Use {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"I'm setting the AC...\" | null, \"tool_call\": {{\"DeviceControl\": {{\"device\": \"...\", \"property\": \"...\", \"value\": \"...\"}}}} OR {{\"GetWeather\": {{\"location\": \"...\"}}}}}}}}
    - DeviceControl: For controlling smart devices (AC, lights, etc.)
-   - GetWeather: For getting weather information. IMPORTANT: Only use GetWeather when the user provides a SPECIFIC location (city name, place name, etc.). Do NOT use GetWeather with vague terms like \"current location\", \"my location\", \"here\", or empty strings. If the user asks for weather without specifying a location, respond with Final asking them to provide a specific location first.
+   - GetWeather: For getting weather information. IMPORTANT: Only use GetWeather when the user provides a SPECIFIC GEOGRAPHIC LOCATION (city name, place name, etc.). Do NOT use GetWeather with vague terms like \"current location\", \"my location\", \"here\", time-related terms like \"today\", \"tomorrow\", \"now\", or empty strings. The location must be a place name (e.g., \"London\", \"New York\", \"Tokyo\"), NOT a time reference. If the user asks for weather without specifying a valid location, respond with Final asking them to provide a specific location first.
    - maybe_intermediate_response: Optional message to show user while tool executes (e.g., \"Setting AC to 27 degrees\" or \"Checking weather for London\"). Use null for silent execution.
    - You can chain multiple tool calls if needed - make one tool call, wait for results, then make another if necessary.
 
@@ -144,6 +144,9 @@ User: \"What's the weather like in London?\"
 
 User: \"What's the weather like?\"
 {{\"updated_summary\":\"User asked about weather without specifying location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\"}}}}}}
+
+User: \"What's the weather today?\"
+{{\"updated_summary\":\"User asked about weather with time reference instead of location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! However, I need a specific location (like a city name) to look up the weather. Which city or place would you like to know about?\"}}}}}}
 
 User: \"Turn on the lights\"
 {{\"updated_summary\":\"User wants lights turned on\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":null,\"tool_call\":{{\"DeviceControl\":{{\"device\":\"light\",\"property\":\"power\",\"value\":\"on\"}}}}}}}}}}
@@ -223,92 +226,23 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
 
 pub async fn get_llm_decision(
     env: Arc<Env>,
-    user_id: UserId,
     msg: String,
     summary: String,
     previous_tool_calls: Vec<String>,
 ) -> UserAction {
-    let user_id_result = match user_id.0 {
-        UserChannel::Discord => {
-            let user_id_result = user_id.1.parse::<u64>();
-            match user_id_result {
-                Ok(user_id) => Ok(serenity::all::UserId::new(user_id)),
-                Err(err) => Err(anyhow::anyhow!(err)),
-            }
-        }
-        _ => panic!("Telegram not yet implemented"),
-    };
-    match user_id_result {
+    // Get decision from LLM
+    let llm_result =
+        get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await;
+
+    // Debug print the full LLM decision result
+    eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
+
+    // Return the LLM decision with updated summary and outcome
+    match llm_result {
+        Ok(llm_response) => UserAction::LLMDecisionResult(Arc::new(Ok((
+            llm_response.updated_summary,
+            llm_response.outcome,
+        )))),
         Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
-        Ok(user_id) => {
-            let dm_channel_result = match user_id.to_user(&env.discord_http).await {
-                Ok(user) => user.create_dm_channel(&env.discord_http).await,
-                Err(e) => Err(e),
-            };
-
-            match dm_channel_result {
-                Ok(channel) => {
-                    // Get decision from LLM - wrap processing in a scope to ensure all non-Send types are dropped
-                    let llm_result = get_response_from_llm(
-                        env.llm.as_ref(),
-                        &msg,
-                        &summary,
-                        &previous_tool_calls,
-                    )
-                    .await; // End of scope - all non-Send types are dropped here
-
-                    // Debug print the full LLM decision result
-                    eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
-
-                    // Send any intermediate message to user, then return the LLM decision
-                    match llm_result {
-                        Ok(llm_response) => {
-                            // Extract message to send from either outcome type
-                            let maybe_message_to_send = match &llm_response.outcome {
-                                MessageOutcome::Final { response } => Some(response.as_str()),
-                                MessageOutcome::IntermediateToolCall {
-                                    maybe_intermediate_response,
-                                    ..
-                                } => maybe_intermediate_response.as_deref(),
-                            };
-
-                            // Send message if there is one
-                            match maybe_message_to_send {
-                                Some(message) => {
-                                    let res = channel
-                                        .send_message(
-                                            &env.discord_http,
-                                            CreateMessage::new().content(message),
-                                        )
-                                        .await;
-
-                                    match res {
-                                        Ok(_) => {
-                                            // Return the LLM decision with updated summary and outcome
-                                            UserAction::LLMDecisionResult(Arc::new(Ok((
-                                                llm_response.updated_summary,
-                                                llm_response.outcome,
-                                            ))))
-                                        }
-                                        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(
-                                            anyhow::anyhow!(err),
-                                        ))),
-                                    }
-                                }
-                                None => {
-                                    // No intermediate message (silent tool call), return LLM decision with summary and outcome
-                                    UserAction::LLMDecisionResult(Arc::new(Ok((
-                                        llm_response.updated_summary,
-                                        llm_response.outcome,
-                                    ))))
-                                }
-                            }
-                        }
-                        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
-                    }
-                }
-                Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(anyhow::anyhow!(err)))),
-            }
-        }
     }
 }
