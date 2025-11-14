@@ -2,69 +2,95 @@
 
 ## Overview
 
-Bot Hive is a Discord chatbot powered by a local Large Language Model (LLM) that provides conversational AI capabilities with conversation context management. It uses a type-safe state machine framework (`lib_hive`) to manage user interactions through distinct states and transitions.
+Bot Hive is a Discord chatbot powered by a local Large Language Model (LLM) that provides conversational AI capabilities with tool calling support. It uses a type-safe state machine framework (`lib_hive`) to manage user interactions through distinct states and transitions.
 
 The bot uses **Qwen2.5-14B-Instruct** (quantized Q4_K_M) running locally via `llama-cpp-2`, enabling private, offline AI conversations without relying on external APIs.
 
 ## Key Features
 
 - **Local LLM Integration** - Uses Qwen2.5-14B-Instruct running locally via llama.cpp
-- **Conversation Context** - Maintains compact conversation summaries for multi-turn conversations
-- **Structured Output** - Uses GBNF grammar to ensure valid JSON responses with intent detection
-- **Device Control Intents** - Can detect device control commands (extensible for smart home integration)
+- **Tool Calling** - Supports multi-turn tool execution with weather lookup functionality
+- **Conversation Context** - Maintains conversation summaries for multi-turn conversations
+- **Structured Output** - Uses GBNF grammar to ensure valid JSON responses
 - **Type-Safe State Machine** - Built on `lib_hive` framework for compile-time safety
 - **DM-Only Bot** - Responds only to direct messages or when mentioned
 - **Automatic Timeouts** - Sends goodbye messages after 5 minutes of inactivity
 - **Multi-User Support** - Each user has independent conversation state
+- **Error Recovery** - Force reset mechanism prevents stuck states
 
 ## User States
 
-Defined in `src/models/user.rs:28-31`:
+Defined in `src/models/user.rs:28-46`:
 
 1. **Idle** - Default state, waiting for user interaction
    - May contain optional conversation summary and timestamp
    - Automatically schedules timeout after 5 minutes of inactivity
    
-2. **SendingMessage** - Processing user message and sending LLM response
-   - Tracks whether this is a timeout-triggered goodbye message
+2. **AwaitingLLMDecision** - Waiting for LLM to decide on response or tool call
+   - Tracks whether this is a timeout-triggered request
+   - Maintains history of previous tool calls and results
+
+3. **SendingMessage** - Sending a message to the user
+   - Stores the outcome (Final or IntermediateToolCall) to determine next state
+   - Tracks conversation context and tool call history
+
+4. **RunningTool** - Executing a tool call
+   - Maintains conversation context and tool call history
+   - Transitions back to AwaitingLLMDecision after tool completion
 
 ## User Actions
 
-Defined in `src/models/user.rs:44-51`:
+Defined in `src/models/user.rs:82-93`:
 
+- **ForceReset** - Force reset to Idle state (used for stuck state recovery)
 - **NewMessage** - User sends a message with `start_conversation` flag
 - **Timeout** - Scheduled timeout event (5 minutes after last activity)
-- **SendResult** - Result of sending a message (contains updated conversation summary or error)
+- **LLMDecisionResult** - Result from LLM connector (contains updated summary and outcome)
+- **MessageSent** - Result from message connector (success or failure, errors are ignored)
+- **ToolResult** - Result from tool execution (contains tool output)
 
 ## State Flow
 
 ```
-Idle → SendingMessage → Idle
+Idle → AwaitingLLMDecision → SendingMessage → Idle
+         ↑                        ↓
+         └─── RunningTool ────────┘
          ↑                ↓
-         └─── Timeout ────┘
+         └─── ToolResult ─┘
 ```
 
 ### Transitions
 
-1. **Idle → SendingMessage** (`src/life_cycles/user_life_cycle.rs:26-54`)
-   - Trigger: `NewMessage` with `start_conversation: true`
+1. **Idle → AwaitingLLMDecision** (`src/life_cycles/user_life_cycle.rs:36-67`)
+   - Trigger: `NewMessage` with `start_conversation: true` or `Timeout`
    - Action: 
      - Retrieves previous conversation summary (if exists)
-     - Spawns external operation to generate and send LLM response
-     - Transitions to `SendingMessage(false)`
+     - Spawns external operation to get LLM decision
+     - Transitions to `AwaitingLLMDecision`
 
-2. **SendingMessage → Idle** (`src/life_cycles/user_life_cycle.rs:56-72`)
-   - Trigger: `SendResult` (response sent)
+2. **AwaitingLLMDecision → SendingMessage or RunningTool** (`src/life_cycles/user_life_cycle.rs:69-168`)
+   - Trigger: `LLMDecisionResult`
    - Action:
-     - If successful: Stores updated conversation summary and timestamp, returns to `Idle`
-     - If error: Returns to `Idle` without saving summary
-     - If timeout-triggered: Clears conversation summary
+     - If outcome is `Final` with message → go to `SendingMessage`
+     - If outcome is `IntermediateToolCall` with message → go to `SendingMessage`
+     - If outcome is `IntermediateToolCall` without message (silent) → go directly to `RunningTool`
 
-3. **Idle → SendingMessage (Timeout)** (`src/life_cycles/user_life_cycle.rs:73-91`)
-   - Trigger: `Timeout` (5 minutes after last activity)
+3. **SendingMessage → Idle or RunningTool** (`src/life_cycles/user_life_cycle.rs:169-197`)
+   - Trigger: `MessageSent` (errors are ignored)
    - Action:
-     - Sends goodbye message mentioning relevant conversation context
-     - Transitions to `SendingMessage(true)`
+     - If outcome is `Final` → transition to `Idle` (preserving conversation if not timeout)
+     - If outcome is `IntermediateToolCall` → transition to `RunningTool` and execute tool
+
+4. **RunningTool → AwaitingLLMDecision** (`src/life_cycles/user_life_cycle.rs:198-240`)
+   - Trigger: `ToolResult`
+   - Action:
+     - Adds tool result to previous tool calls history
+     - Spawns external operation to get next LLM decision with tool results
+     - Transitions back to `AwaitingLLMDecision` (tool call loop continues)
+
+5. **Force Reset** (`src/life_cycles/user_life_cycle.rs:26-32`)
+   - Trigger: `ForceReset` (scheduled after 120s in AwaitingLLMDecision, SendingMessage, or RunningTool)
+   - Action: Resets to `Idle(None)` to prevent stuck states
 
 ## LLM Integration
 
@@ -82,33 +108,71 @@ The LLM generates structured JSON responses with:
 
 ```json
 {
-  "updated_summary": "Compact conversation summary (machine-readable)",
-  "response": "Human-readable response text",
-  "intent": {
-    "BasicConversation": {} | null,
-    "ControlDevice": {"device": "...", "property": "...", "value": "..."} | null
+  "updated_summary": "Brief conversation summary",
+  "outcome": {
+    "Final": {
+      "response": "Your response to the user"
+    }
   }
 }
 ```
 
-- **updated_summary**: Extremely compact, machine-readable format for context (e.g., `"usr:greet|dev:AC>temp=27"`)
-- **response**: Natural language response to send to the user
-- **intent**: One of two intents (exactly one must be non-null):
-  - `BasicConversation`: General conversation, questions, greetings
-  - `ControlDevice`: Device control commands (extensible for smart home)
+Or for tool calls:
+
+```json
+{
+  "updated_summary": "Brief conversation summary",
+  "outcome": {
+    "IntermediateToolCall": {
+      "maybe_intermediate_response": "Checking weather for London" | null,
+      "tool_call": {
+        "GetWeather": {
+          "location": "London"
+        }
+      }
+    }
+  }
+}
+```
+
+- **updated_summary**: Brief summary of conversation context for future reference
+- **outcome**: Either `Final` (complete response) or `IntermediateToolCall` (requires tool execution)
+  - `Final`: Contains the response string to send to user
+  - `IntermediateToolCall`: Contains optional intermediate message and tool call to execute
 
 ### Grammar Constraints
 
-Uses GBNF grammar (`grammars/response.gbnf`) to ensure valid JSON output and enforce the oneof intent pattern. This guarantees:
+Uses GBNF grammar (`grammars/response.gbnf`) to ensure valid JSON output. This guarantees:
 - Valid JSON structure
-- Exactly one intent is non-null
-- Proper device control structure when applicable
+- Proper outcome format (Final or IntermediateToolCall)
+- Valid tool call structure
+
+### Tool Calling
+
+The bot supports a multi-turn tool calling flow:
+
+1. User asks for weather → LLM decides to call `GetWeather`
+2. Bot sends optional intermediate message (e.g., "Checking weather for London")
+3. Tool executes → fetches weather from wttr.in API
+4. Tool result added to conversation history
+5. LLM receives tool result and generates final response
+6. Bot sends final response to user
+
+The LLM can chain multiple tool calls if needed, accumulating results until it can provide a final response.
+
+### Available Tools
+
+- **GetWeather**: Fetches weather information for a specific location
+  - Requires a specific geographic location (city name, place name)
+  - Uses wttr.in API (free, no API key required)
+  - Returns formatted weather data (condition, temperature, wind, humidity)
 
 ### Conversation Context
 
 - **First message**: No summary provided, LLM starts fresh
-- **Subsequent messages**: Previous compact summary included in prompt
-- **Summary format**: Machine-readable shorthand (e.g., `"usr:greet|dev:AC=27|lights:on"`)
+- **Subsequent messages**: Previous summary included in prompt
+- **Tool call history**: Previous tool calls and results are included in context
+- **Summary format**: Brief, informative summary maintained across conversation
 - **Timeout handling**: Goodbye messages reference conversation context
 
 ## Discord Communication
@@ -117,7 +181,7 @@ Uses **Serenity v0.12** for Discord integration via WebSocket (incoming) and HTT
 
 ### Initialization
 
-`src/external_connections/discord.rs:10-23` and `src/main.rs:40-54`
+`src/external_connections/discord.rs` and `src/main.rs`
 
 - Token from `configuration::client_tokens::DISCORD_TOKEN`
 - Gateway Intent: `DIRECT_MESSAGES` only (DM-only bot)
@@ -127,7 +191,7 @@ Uses **Serenity v0.12** for Discord integration via WebSocket (incoming) and HTT
 
 ### Incoming Messages
 
-`src/external_connections/discord.rs:39-51` and `filter()` function (lines 59-84)
+`src/external_connections/discord.rs`
 
 **Pipeline:**
 1. Discord WebSocket → `Handler::message()`
@@ -144,15 +208,14 @@ Uses **Serenity v0.12** for Discord integration via WebSocket (incoming) and HTT
 
 ### Outgoing Messages
 
-`src/connectors/user_connector.rs:189-240`
+`src/connectors/message_connector.rs`
 
 **Pipeline:**
 1. Parse `UserId` string → Discord `UserId` (u64)
 2. Fetch user via HTTP API
 3. Create/get DM channel
-4. Generate LLM response with conversation context
-5. Send message via HTTP API
-6. Return `SendResult` with updated summary or error
+4. Send message via HTTP API
+5. Return `MessageSent` action (errors are ignored)
 
 ### Communication Flow
 
@@ -167,18 +230,44 @@ user_life_cycle.act()
     ↓
 State Machine
     ↓ spawn external operation
-handle_bot_message()
+get_llm_decision()
     ↓ LLM Processing
 get_response_from_llm()
     ↓ Grammar-constrained generation
 Structured JSON Response
+    ↓ LLMDecisionResult
+State Machine
+    ↓ if message exists
+send_message()
     ↓ HTTP API
 Discord Server (message delivered)
-    ↓ SendResult (with updated_summary)
+    ↓ MessageSent
 State Machine (next state)
+    ↓ if tool call
+execute_tool()
+    ↓ Tool execution
+ToolResult
+    ↓ back to LLM
+State Machine (loop until Final)
 ```
 
 ## Architecture
+
+### Connectors
+
+The bot uses a connector-based architecture for external operations:
+
+- **llm_connector** (`src/connectors/llm_connector.rs`): Handles LLM decision-making
+  - Takes message, summary, and tool call history
+  - Returns `LLMDecisionResult` with updated summary and outcome
+
+- **message_connector** (`src/connectors/message_connector.rs`): Handles sending messages
+  - Takes user ID and message content
+  - Returns `MessageSent` action (errors are ignored)
+
+- **tool_call_connector** (`src/connectors/tool_call_connector.rs`): Handles tool execution
+  - Executes tool calls (currently only GetWeather)
+  - Returns `ToolResult` with tool output
 
 ### State Machine Framework
 
@@ -189,7 +278,7 @@ State Machine (next state)
 - **Channel-based** - mpsc channels for thread-safe state management
 - **External operations** - Side effects separated from state logic
 - **Per-user isolation** - Each user has independent state
-- **Scheduled events** - Automatic timeout management
+- **Scheduled events** - Automatic timeout and force reset management
 
 ### Key Design Decisions
 
@@ -199,6 +288,8 @@ State Machine (next state)
 - **Deterministic** - Each state-action has exactly one outcome
 - **Error handling** - Invalid transitions return errors, failed sends don't crash the bot
 - **Shared LLM** - Single model instance shared across all users (initialized at startup)
+- **Tool call loop** - LLM can chain multiple tool calls until final response
+- **Force reset** - Prevents stuck states with 120-second timeout
 
 ## File Structure
 
@@ -211,18 +302,20 @@ bot_hive/
 │   │   ├── discord.rs               - Client setup, event handler, message filtering
 │   │   └── llm.rs                   - LLM model loading and initialization
 │   ├── connectors/
-│   │   └── user_connector.rs        - Message sender, LLM response generation
+│   │   ├── llm_connector.rs         - LLM decision-making
+│   │   ├── message_connector.rs     - Message sending
+│   │   └── tool_call_connector.rs  - Tool execution
 │   ├── life_cycles/
 │   │   └── user_life_cycle.rs       - State transitions, scheduling, timeout logic
 │   └── models/
-│       ├── user.rs                  - User states, actions, UserId, conversation summary
+│       ├── user.rs                  - User states, actions, UserId, ToolCall, MessageOutcome
 │       └── bot.rs                   - Bot handle (currently minimal)
 ├── grammars/
 │   └── response.gbnf                - GBNF grammar for structured JSON output
 ├── models/
 │   ├── Qwen2.5-14B-Instruct-Q4_K_M.gguf  - Default LLM model
 │   └── README.md                    - Model information
-└── Cargo.toml                       - Dependencies (Serenity, llama-cpp-2, tokio, etc.)
+└── Cargo.toml                       - Dependencies (Serenity, llama-cpp-2, tokio, reqwest, etc.)
 
 lib_hive/
 └── src/
@@ -243,26 +336,29 @@ Copy `src/configuration.rs.template` to `src/configuration.rs` and set:
 
 ### Timeout Configuration
 
-- **Goodbye delay**: 5 minutes (`src/life_cycles/user_life_cycle.rs:101`)
-- Modify via `ChronoDuration::milliseconds(300_000)`
+- **Goodbye delay**: 5 minutes (`src/life_cycles/user_life_cycle.rs:273`)
+- **Force reset delay**: 120 seconds (`src/life_cycles/user_life_cycle.rs:280`)
+- Modify via `ChronoDuration::milliseconds(...)`
 
 ## Example Flow
 
-1. User sends "Hello" via Discord DM
-2. Handler normalizes to "hello", creates `NewMessage` action with `start_conversation: true`
-3. `Idle(None)` → `SendingMessage(false)`, spawns LLM response generation
-4. LLM generates: `{"updated_summary": "usr:greet", "response": "Hello! How can I help you?", ...}`
-5. Response sent: "Hello! How can I help you?"
-6. `SendingMessage(false)` → `Idle(Some(summary, timestamp))`
-7. User sends "Set AC to 27 degrees"
-8. LLM receives previous summary, generates: `{"updated_summary": "usr:greet|dev:AC>temp=27", "response": "Setting AC to 27 degrees", "intent": {"ControlDevice": {...}}}`
-9. Response sent, summary updated
-10. 5 minutes pass with no activity
-11. `Timeout` fires
-12. `Idle(Some(...))` → `SendingMessage(true)`, spawns goodbye message
-13. LLM generates goodbye referencing conversation context
-14. Goodbye sent, `SendingMessage(true)` → `Idle(None)` (summary cleared)
-15. Ready for next conversation
+1. User sends "What's the weather in London?" via Discord DM
+2. Handler normalizes message, creates `NewMessage` action with `start_conversation: true`
+3. `Idle(None)` → `AwaitingLLMDecision(false)`, spawns LLM decision
+4. LLM generates: `{"updated_summary": "User asked about weather in London", "outcome": {"IntermediateToolCall": {"maybe_intermediate_response": "Checking weather for London", "tool_call": {"GetWeather": {"location": "London"}}}}}}`
+5. `AwaitingLLMDecision` → `SendingMessage`, sends "Checking weather for London"
+6. `SendingMessage` → `RunningTool`, executes GetWeather tool
+7. Tool fetches weather: "Clear +15°C 10km/h 65%"
+8. `RunningTool` → `AwaitingLLMDecision`, spawns LLM decision with tool result
+9. LLM generates: `{"updated_summary": "User asked about weather in London, got weather data", "outcome": {"Final": {"response": "The weather in London is clear with a temperature of 15°C, wind at 10km/h, and 65% humidity."}}}`
+10. `AwaitingLLMDecision` → `SendingMessage`, sends final response
+11. `SendingMessage` → `Idle(Some(summary, timestamp))`
+12. 5 minutes pass with no activity
+13. `Timeout` fires
+14. `Idle(Some(...))` → `AwaitingLLMDecision(true)`, spawns goodbye message
+15. LLM generates goodbye referencing conversation context
+16. Goodbye sent, `SendingMessage(true)` → `Idle(None)` (summary cleared)
+17. Ready for next conversation
 
 ## Dependencies
 
@@ -272,13 +368,15 @@ Copy `src/configuration.rs.template` to `src/configuration.rs` and set:
 - **lib_hive**: Type-safe state machine framework
 - **serde/serde_json**: JSON serialization
 - **chrono**: Time handling for timeouts
-- **regex**: Message normalization
+- **reqwest**: HTTP client for weather API
+- **urlencoding**: URL encoding for API requests
 - **anyhow**: Error handling
 
 ## Future Enhancements
 
 - Telegram connector implementation
-- Actual device control integration (currently only detects intents)
+- Additional tool integrations
 - Multiple model support/configurable models
 - Conversation history persistence
 - Admin commands and configuration
+- Context pooling for faster LLM inference

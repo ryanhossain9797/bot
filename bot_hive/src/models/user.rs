@@ -58,14 +58,7 @@ pub struct User {
 
 #[derive(Debug, Clone, Deserialize)]
 pub enum ToolCall {
-    DeviceControl {
-        device: String,
-        property: String,
-        value: String,
-    },
-    GetWeather {
-        location: String,
-    },
+    GetWeather { location: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]

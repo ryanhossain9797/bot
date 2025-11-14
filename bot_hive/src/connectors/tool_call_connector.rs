@@ -7,17 +7,6 @@ use crate::{
 
 pub async fn execute_tool(_env: Arc<Env>, tool_call: ToolCall) -> UserAction {
     let result = match tool_call {
-        ToolCall::DeviceControl {
-            device,
-            property,
-            value,
-        } => {
-            // Fake tool execution for now
-            format!(
-                "Tool call set {} {} {} | Result: Success",
-                device, property, value
-            )
-        }
         ToolCall::GetWeather { location } => {
             // Actually fetch weather using wttr.in API
             match fetch_weather(&location).await {

@@ -1,7 +1,7 @@
 # GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
 # Schema: {
 #   "updated_summary": string,
-#   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"DeviceControl": {device, property, value}}}}
+#   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"GetWeather": {location}}}}
 # }
 # MessageOutcome enum (Serde's default externally tagged format for nested enums)
 
@@ -23,22 +23,13 @@ intermediate-tool-call-value ::= "{" ws "\"maybe_intermediate_response\"" ws ":"
 optional-string ::= null | string
 
 # ToolCall is an externally tagged enum
-tool-call-object ::= device-control-tool-call | get-weather-tool-call
-
-# DeviceControl tool call: {"DeviceControl": {device, property, value}}
-device-control-tool-call ::= "{" ws "\"DeviceControl\"" ws ":" ws device-control-value "}" ws
-
-# DeviceControl struct fields
-device-control-value ::= "{" ws "\"device\"" ws ":" ws string "," ws "\"property\"" ws ":" ws string "," ws "\"value\"" ws ":" ws value "}" ws
+tool-call-object ::= get-weather-tool-call
 
 # GetWeather tool call: {"GetWeather": {location}}
 get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
 
 # GetWeather struct fields
 get-weather-value ::= "{" ws "\"location\"" ws ":" ws string "}" ws
-
-# Value can be either string or number
-value ::= string | number
 
 # Basic JSON types
 string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
