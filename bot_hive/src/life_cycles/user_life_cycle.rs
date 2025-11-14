@@ -173,53 +173,42 @@ pub fn user_transition(
                     recent_conversation,
                     previous_tool_calls,
                 },
-                UserAction::MessageSent(res),
+                UserAction::MessageSent(_res),
             ) => {
-                match &**res {
-                    Ok(_) => {
-                        // Message sent successfully - check outcome to determine next state
-                        match outcome {
-                            MessageOutcome::Final { .. } => {
-                                // Final response sent - transition to Idle
-                                Ok((
-                                    User {
-                                        state: UserState::Idle(if is_timeout {
-                                            None
-                                        } else {
-                                            Some((recent_conversation.clone(), Utc::now()))
-                                        }),
-                                        last_transition: Utc::now(),
-                                    },
-                                    Vec::new(),
-                                ))
-                            }
-                            MessageOutcome::IntermediateToolCall { tool_call, .. } => {
-                                // Intermediate message sent - now execute the tool
-                                let mut external = Vec::<UserExternalOperation>::new();
-                                external
-                                    .push(Box::pin(execute_tool(env.clone(), tool_call.clone())));
-
-                                Ok((
-                                    User {
-                                        state: UserState::RunningTool {
-                                            is_timeout,
-                                            recent_conversation: recent_conversation.clone(),
-                                            previous_tool_calls: previous_tool_calls.clone(),
-                                        },
-                                        last_transition: Utc::now(),
-                                    },
-                                    external,
-                                ))
-                            }
-                        }
+                // Ignore errors from message sending - continue with normal flow regardless
+                // Message sent (or failed, but we don't care) - check outcome to determine next state
+                match outcome {
+                    MessageOutcome::Final { .. } => {
+                        // Final response sent - transition to Idle
+                        Ok((
+                            User {
+                                state: UserState::Idle(if is_timeout {
+                                    None
+                                } else {
+                                    Some((recent_conversation.clone(), Utc::now()))
+                                }),
+                                last_transition: Utc::now(),
+                            },
+                            Vec::new(),
+                        ))
                     }
-                    Err(_) => Ok((
-                        User {
-                            state: UserState::Idle(None),
-                            last_transition: Utc::now(),
-                        },
-                        Vec::new(),
-                    )),
+                    MessageOutcome::IntermediateToolCall { tool_call, .. } => {
+                        // Intermediate message sent - now execute the tool
+                        let mut external = Vec::<UserExternalOperation>::new();
+                        external.push(Box::pin(execute_tool(env.clone(), tool_call.clone())));
+
+                        Ok((
+                            User {
+                                state: UserState::RunningTool {
+                                    is_timeout,
+                                    recent_conversation: recent_conversation.clone(),
+                                    previous_tool_calls: previous_tool_calls.clone(),
+                                },
+                                last_transition: Utc::now(),
+                            },
+                            external,
+                        ))
+                    }
                 }
             }
             (
