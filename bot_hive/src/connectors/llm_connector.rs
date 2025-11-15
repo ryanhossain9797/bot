@@ -7,6 +7,7 @@ use llama_cpp_2::{
     model::{AddBos, LlamaModel, Special},
     sampling::LlamaSampler,
 };
+use rand::Rng;
 use serde::Deserialize;
 
 use crate::models::user::{MessageOutcome, UserAction};
@@ -25,6 +26,13 @@ async fn get_response_from_llm(
     previous_tool_calls: &[String],
 ) -> anyhow::Result<LLMResponse> {
     let (model, backend) = llm;
+
+    // Generate a random temperature variation for varied response styles
+    // Since seeding isn't directly supported in llama_cpp_2, we vary temperature slightly
+    let temp_variation = rand::rng().random::<f32>() * 0.2 - 0.1; // -0.1 to +0.1
+    let base_temp = 0.3;
+    let varied_temp = (base_temp + temp_variation).max(0.1).min(0.8);
+
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(2048)) // Context size
         .with_n_threads(num_cpus::get() as i32) // Use all CPU cores
@@ -158,8 +166,9 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
             let grammar = include_str!("../../grammars/response.gbnf");
 
             // Create sampler chain with grammar constraint for structured JSON output
+            // Use varied temperature for response style variation
             let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::temp(0.3),
+                LlamaSampler::temp(varied_temp),
                 LlamaSampler::grammar(model, grammar, "root")
                     .expect("Failed to load grammar - check GBNF syntax"),
                 LlamaSampler::dist(0), // Random sampling

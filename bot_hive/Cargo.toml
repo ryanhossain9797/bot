@@ -27,3 +27,4 @@ llama-cpp-2 = "0.1"
 num_cpus = "1.17"
 reqwest = { version = "0.12", features = ["json"] }
 urlencoding = "2.1"
+rand = "0.9"
