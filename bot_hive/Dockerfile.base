@@ -1,0 +1,23 @@
+# Base image with runtime dependencies and model
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy model file (large, rarely changes)
+COPY models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+
+# Copy grammar file
+COPY bot_hive/grammars/response.gbnf /app/grammars/response.gbnf
+
+# Set environment variables
+ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+ENV RUST_LOG=info
+

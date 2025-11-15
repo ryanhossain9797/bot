@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation (keep models README if needed)
+*.md
+!models/README.md
+
+# Models folder - exclude from bot_hive copy (model is in repo root now)
+bot_hive/models/
+
+# Large model file (already in base image, exclude from main build)
+models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+
+# Debug files
+flycheck0/
+

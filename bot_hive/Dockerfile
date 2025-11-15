@@ -21,31 +21,12 @@ COPY bot_hive ./bot_hive
 # Build the project in release mode
 RUN cargo build --release --package bot
 
-# Runtime stage
-FROM debian:bookworm-slim
+# Runtime stage - uses base image from Docker Hub
+# Replace 'zireael9797' with your actual Docker Hub username
+FROM zireael9797/bot-base:latest
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
-WORKDIR /app
-
-# Copy binary from builder
+# Copy binary from builder (only this changes on code updates)
 COPY --from=builder /app/target/release/bot /app/bot
-
-# Copy model file directly from build context (not needed in builder stage)
-COPY bot_hive/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
-
-# Copy grammar file (included at compile time, but kept for reference)
-COPY bot_hive/grammars/response.gbnf /app/grammars/response.gbnf
-
-# Set environment variables
-ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
-ENV RUST_LOG=info
 
 # Note: configuration.rs must be provided at build time
 # The DISCORD_TOKEN is read from configuration::client_tokens::DISCORD_TOKEN at compile time

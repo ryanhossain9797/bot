@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 
 pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
     let model_path = std::env::var("MODEL_PATH")
-        .unwrap_or_else(|_| "models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".to_string());
+        .unwrap_or_else(|_| "../models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".to_string());
 
     println!("Loading model from: {}", model_path);
 
