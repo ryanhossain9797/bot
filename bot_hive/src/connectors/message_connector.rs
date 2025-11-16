@@ -11,14 +11,14 @@ pub async fn send_message(env: Arc<Env>, user_id: UserId, message: String) -> Us
             let user_id_result = user_id.1.parse::<u64>();
             match user_id_result {
                 Ok(user_id) => Ok(serenity::all::UserId::new(user_id)),
-                Err(err) => Err(anyhow::anyhow!(err)),
+                Err(err) => Err(err.to_string()),
             }
         }
         _ => panic!("Telegram not yet implemented"),
     };
 
     match user_id_result {
-        Err(err) => UserAction::MessageSent(Arc::new(Err(err))),
+        Err(err) => UserAction::MessageSent(Err(err)),
         Ok(user_id) => {
             let dm_channel_result = match user_id.to_user(&env.discord_http).await {
                 Ok(user) => user.create_dm_channel(&env.discord_http).await,
@@ -32,11 +32,11 @@ pub async fn send_message(env: Arc<Env>, user_id: UserId, message: String) -> Us
                         .await;
 
                     match res {
-                        Ok(_) => UserAction::MessageSent(Arc::new(Ok(()))),
-                        Err(err) => UserAction::MessageSent(Arc::new(Err(anyhow::anyhow!(err)))),
+                        Ok(_) => UserAction::MessageSent(Ok(())),
+                        Err(err) => UserAction::MessageSent(Err(err.to_string())),
                     }
                 }
-                Err(err) => UserAction::MessageSent(Arc::new(Err(anyhow::anyhow!(err)))),
+                Err(err) => UserAction::MessageSent(Err(err.to_string())),
             }
         }
     }

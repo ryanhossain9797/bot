@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -80,10 +78,7 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
-    #[serde(skip)]
-    LLMDecisionResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
-    #[serde(skip)]
-    MessageSent(Arc<anyhow::Result<()>>),
-    #[serde(skip)]
-    ToolResult(Arc<anyhow::Result<String>>),
+    LLMDecisionResult(Result<(String, MessageOutcome), String>),
+    MessageSent(Result<(), String>),
+    ToolResult(Result<String, String>),
 }

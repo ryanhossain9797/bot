@@ -116,7 +116,7 @@ pub fn user_transition(
                     previous_tool_calls,
                 },
                 UserAction::LLMDecisionResult(res),
-            ) => match &**res {
+            ) => match res {
                 Ok((summary, outcome)) => {
                     // Extract message to send from outcome
                     let message_to_send = match outcome {
@@ -204,7 +204,7 @@ pub fn user_transition(
                 },
                 UserAction::ToolResult(res),
             ) => {
-                match &**res {
+                match res {
                     Ok(tool_result) => {
                         // Add tool result to previous tool calls
                         let mut updated_tool_calls = previous_tool_calls.clone();

@@ -175,10 +175,9 @@ pub async fn get_llm_decision(
     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 
     match llm_result {
-        Ok(llm_response) => UserAction::LLMDecisionResult(Arc::new(Ok((
-            llm_response.updated_summary,
-            llm_response.outcome,
-        )))),
-        Err(err) => UserAction::LLMDecisionResult(Arc::new(Err(err))),
+        Ok(llm_response) => {
+            UserAction::LLMDecisionResult(Ok((llm_response.updated_summary, llm_response.outcome)))
+        }
+        Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
     }
 }
