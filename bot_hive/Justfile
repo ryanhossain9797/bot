@@ -1,0 +1,7 @@
+# Build and push Docker image to Docker Hub
+build_push tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    docker build -f Dockerfile -t zireael9797/bot:{{tag}} ..
+    docker push zireael9797/bot:{{tag}}
+
