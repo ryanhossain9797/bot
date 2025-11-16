@@ -1,9 +1,9 @@
-use std::{fmt::Display, sync::Arc};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
     Telegram,
     Discord,
@@ -17,15 +17,15 @@ impl UserChannel {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct UserId(pub UserChannel, pub String);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentConversation {
     pub summary: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UserState {
     Idle(Option<(RecentConversation, DateTime<Utc>)>),
     AwaitingLLMDecision {
@@ -50,18 +50,18 @@ impl Default for UserState {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct User {
     pub state: UserState,
     pub last_transition: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCall {
     GetWeather { location: String },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageOutcome {
     IntermediateToolCall {
         maybe_intermediate_response: Option<String>,
@@ -72,7 +72,7 @@ pub enum MessageOutcome {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum UserAction {
     ForceReset,
     NewMessage {
@@ -80,7 +80,10 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
+    #[serde(skip)]
     LLMDecisionResult(Arc<anyhow::Result<(String, MessageOutcome)>>),
+    #[serde(skip)]
     MessageSent(Arc<anyhow::Result<()>>),
+    #[serde(skip)]
     ToolResult(Arc<anyhow::Result<String>>),
 }
