@@ -21,6 +21,11 @@ pub trait LifeCycleItem: Send + Sync + Clone {}
 
 impl<T: Send + Sync + Clone> LifeCycleItem for T {}
 
+/// Extension of LifeCycleItem that supports persistence via JSON serialization
+pub trait PersistedLifeCycleItem: LifeCycleItem + serde::Serialize {}
+
+impl<T> PersistedLifeCycleItem for T where T: LifeCycleItem + serde::Serialize {}
+
 #[derive(Clone)]
 pub struct Transition<Id, State, Action, Env>(
     pub  fn(
@@ -40,16 +45,16 @@ pub struct Scheduled<Action> {
 #[derive(Clone)]
 pub struct Schedule<State, Action>(pub fn(&State) -> Vec<Scheduled<Action>>);
 
-pub enum Activity<Action: LifeCycleItem + 'static> {
+pub enum Activity<Action: PersistedLifeCycleItem + 'static> {
     LifeCycleAction(Action),
     ScheduledWakeup,
     DeleteSelf,
 }
 
 async fn run_entity<
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + std::fmt::Debug + 'static,
+    Id: PersistedLifeCycleItem + Ord + 'static,
+    State: PersistedLifeCycleItem + Default + 'static,
+    Action: PersistedLifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
@@ -166,9 +171,9 @@ async fn run_entity<
 }
 
 async fn start_life_cycle<
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + std::fmt::Debug + 'static,
+    Id: PersistedLifeCycleItem + Ord + 'static,
+    State: PersistedLifeCycleItem + Default + 'static,
+    Action: PersistedLifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,

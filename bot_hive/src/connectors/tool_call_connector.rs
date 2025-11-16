@@ -6,17 +6,18 @@ use crate::{
 };
 
 pub async fn execute_tool(_env: Arc<Env>, tool_call: ToolCall) -> UserAction {
-    let result = match tool_call {
+    match tool_call {
         ToolCall::GetWeather { location } => {
             // Actually fetch weather using wttr.in API
             match fetch_weather(&location).await {
-                Ok(weather_info) => format!("Weather for {}: {}", location, weather_info),
-                Err(e) => format!("Failed to get weather for {}: {}", location, e),
+                Ok(weather_info) => UserAction::ToolResult(Ok(format!(
+                    "Weather for {}: {}",
+                    location, weather_info
+                ))),
+                Err(e) => UserAction::ToolResult(Err(e.to_string())),
             }
         }
-    };
-
-    UserAction::ToolResult(Arc::new(Ok(result)))
+    }
 }
 
 async fn fetch_weather(location: &str) -> anyhow::Result<String> {

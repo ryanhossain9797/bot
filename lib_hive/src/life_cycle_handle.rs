@@ -2,21 +2,21 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use crate::{start_life_cycle, LifeCycleItem, Schedule, Transition};
+use crate::{start_life_cycle, LifeCycleItem, PersistedLifeCycleItem, Schedule, Transition};
 
 #[derive(Clone)]
 pub struct LifeCycleHandle<Id, Action>
 where
-    Id: LifeCycleItem,
-    Action: LifeCycleItem,
+    Id: PersistedLifeCycleItem,
+    Action: PersistedLifeCycleItem,
 {
     pub sender: mpsc::Sender<(Id, Action)>,
 }
 
 impl<Id, Action> LifeCycleHandle<Id, Action>
 where
-    Id: LifeCycleItem + Ord + 'static,
-    Action: LifeCycleItem + 'static,
+    Id: PersistedLifeCycleItem + Ord + 'static,
+    Action: PersistedLifeCycleItem + 'static,
 {
     pub async fn act(&self, user_id: Id, user_action: Action) {
         let _ = self
@@ -28,9 +28,9 @@ where
 }
 
 pub fn new_life_cycle<
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + Default + 'static,
-    Action: LifeCycleItem + std::fmt::Debug + 'static,
+    Id: PersistedLifeCycleItem + Ord + 'static,
+    State: PersistedLifeCycleItem + Default + 'static,
+    Action: PersistedLifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
