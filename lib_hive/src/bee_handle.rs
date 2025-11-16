@@ -2,19 +2,22 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use crate::{run_entity, Activity, LifeCycleHandle, LifeCycleItem, Schedule, Transition};
+use crate::{
+    run_entity, Activity, LifeCycleHandle, LifeCycleItem, PersistedLifeCycleItem, Schedule,
+    Transition,
+};
 
 #[derive(Clone)]
 pub struct Handle<Action>
 where
-    Action: LifeCycleItem + 'static,
+    Action: PersistedLifeCycleItem + 'static,
 {
     pub sender: mpsc::Sender<Activity<Action>>,
 }
 
 impl<Action> Handle<Action>
 where
-    Action: LifeCycleItem + 'static,
+    Action: PersistedLifeCycleItem + 'static,
 {
     pub async fn act(&self, action: Action) {
         let _ = self
@@ -26,9 +29,9 @@ where
 }
 
 pub fn new_entity<
-    Id: LifeCycleItem + Ord + 'static,
-    State: LifeCycleItem + 'static + Default,
-    Action: LifeCycleItem + std::fmt::Debug + 'static,
+    Id: PersistedLifeCycleItem + Ord + 'static,
+    State: PersistedLifeCycleItem + 'static + Default,
+    Action: PersistedLifeCycleItem + std::fmt::Debug + 'static,
     Env: LifeCycleItem + 'static,
 >(
     env: Arc<Env>,
