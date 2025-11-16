@@ -13,53 +13,27 @@ use serde::Deserialize;
 use crate::models::user::{MessageOutcome, UserAction};
 use crate::Env;
 
-#[derive(Debug, Deserialize)]
-struct LLMResponse {
-    updated_summary: String,
-    outcome: MessageOutcome,
-}
+fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[String]) -> String {
+    let conversation_summary = format!(
+        "Previous conversation summary:\n{}",
+        if summary.is_empty() {
+            "NO PREVIOUS CONVERSATION"
+        } else {
+            summary
+        }
+    );
 
-async fn get_response_from_llm(
-    llm: &(LlamaModel, LlamaBackend),
-    msg: &str,
-    summary: &str,
-    previous_tool_calls: &[String],
-) -> anyhow::Result<LLMResponse> {
-    let (model, backend) = llm;
+    let tool_call_history = format!(
+        "Previous tool calls and results:\n{}",
+        if previous_tool_calls.is_empty() {
+            "NO PREVIOUS TOOL CALLS".to_string()
+        } else {
+            previous_tool_calls.join("\n")
+        }
+    );
 
-    // Generate a random temperature variation for varied response styles
-    // Since seeding isn't directly supported in llama_cpp_2, we vary temperature slightly
-    let temp_variation = rand::rng().random::<f32>() * 0.2 - 0.1; // -0.1 to +0.1
-    let base_temp = 0.3;
-    let varied_temp = (base_temp + temp_variation).max(0.1).min(0.8);
-
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(2048)) // Context size
-        .with_n_threads(num_cpus::get() as i32) // Use all CPU cores
-        .with_n_threads_batch(num_cpus::get() as i32);
-
-    let ctx_result = model.new_context(backend, ctx_params);
-
-    match ctx_result {
-        Ok(mut ctx) => {
-            let tool_call_history = if previous_tool_calls.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\n\nPrevious tool calls and results:\n{}",
-                    previous_tool_calls.join("\n")
-                )
-            };
-
-            // Default to "NO PREVIOUS CONVERSATION" if summary is empty
-            let conversation_summary = if summary.is_empty() {
-                "NO PREVIOUS CONVERSATION"
-            } else {
-                summary
-            };
-
-            let conversation_prompt = format!(
-                "<|im_start|>system\nYou are a conversational assistant that can look up weather information. Respond with ONLY a JSON object with this exact structure:
+    format!(
+        "<|im_start|>system\nYou are a conversational assistant that can look up weather information. Respond with ONLY a JSON object with this exact structure:
 
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
@@ -100,15 +74,43 @@ User: \"What's the weather like?\"
 User: \"What's the weather today?\"
 {{\"updated_summary\":\"User asked about weather with time reference instead of location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! However, I need a specific location (like a city name) to look up the weather. Which city or place would you like to know about?\"}}}}}}
 
-Previous conversation summary:
-{conversation_summary}{tool_call_history}
+{conversation_summary}\n{tool_call_history}
 Based on the previous summary above, update it to reflect the new exchange. Keep it brief but informative. Drop old trivial details, keep important context, prioritize recent for non-important items.
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
-            );
+    )
+}
+
+#[derive(Debug, Deserialize)]
+struct LLMResponse {
+    updated_summary: String,
+    outcome: MessageOutcome,
+}
+
+async fn get_response_from_llm(
+    llm: &(LlamaModel, LlamaBackend),
+    msg: &str,
+    summary: &str,
+    previous_tool_calls: &[String],
+) -> anyhow::Result<LLMResponse> {
+    let (model, backend) = llm;
+
+    let temp_variation = rand::rng().random::<f32>() * 0.2 - 0.1; // -0.1 to +0.1
+    let base_temp = 0.3;
+    let varied_temp = (base_temp + temp_variation).max(0.1).min(0.8);
+
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(2048))
+        .with_n_threads(num_cpus::get() as i32)
+        .with_n_threads_batch(num_cpus::get() as i32);
+
+    let ctx_result = model.new_context(backend, ctx_params);
+
+    match ctx_result {
+        Ok(mut ctx) => {
+            let conversation_prompt = build_conversation_prompt(msg, summary, previous_tool_calls);
             let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
 
-            // Create a batch and add tokens (large size to handle long prompts with conversation history)
             let mut batch = LlamaBatch::new(8192, 1);
 
             for (i, token) in tokens.iter().enumerate() {
@@ -116,54 +118,43 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
                 batch.add(*token, i as i32, &[0], is_last)?;
             }
 
-            // Process the prompt
             ctx.decode(&mut batch)?;
 
-            // Load grammar for structured JSON output
             let grammar = include_str!("../../grammars/response.gbnf");
 
-            // Create sampler chain with grammar constraint for structured JSON output
-            // Use varied temperature for response style variation
             let mut sampler = LlamaSampler::chain_simple([
                 LlamaSampler::temp(varied_temp),
                 LlamaSampler::grammar(model, grammar, "root")
                     .expect("Failed to load grammar - check GBNF syntax"),
-                LlamaSampler::dist(0), // Random sampling
+                LlamaSampler::dist(0),
             ]);
 
-            // Generate tokens
             let max_tokens = 1000;
             let mut n_cur = batch.n_tokens();
             let mut response = String::new();
 
             for _ in 0..max_tokens {
-                // Sample next token using the sampler chain
                 let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
-                // Check for end of generation
                 if model.is_eog_token(new_token) {
                     break;
                 }
 
-                // Convert token to string and add to response
                 let output = model.token_to_str(new_token, Special::Tokenize)?;
 
-                // Print token as it's generated
                 print!("{}", output);
                 std::io::stdout().flush().unwrap();
 
                 response.push_str(&output);
 
-                // Prepare next batch
                 batch.clear();
                 batch.add(new_token, n_cur, &[0], true)?;
                 n_cur += 1;
 
-                // Decode
                 ctx.decode(&mut batch)?;
             }
 
-            println!(); // Newline after streaming tokens
+            println!();
 
             let parsed_response: LLMResponse = serde_json::from_str(&response)?;
             Ok(parsed_response)
@@ -178,14 +169,11 @@ pub async fn get_llm_decision(
     summary: String,
     previous_tool_calls: Vec<String>,
 ) -> UserAction {
-    // Get decision from LLM
     let llm_result =
         get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await;
 
-    // Debug print the full LLM decision result
     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 
-    // Return the LLM decision with updated summary and outcome
     match llm_result {
         Ok(llm_response) => UserAction::LLMDecisionResult(Arc::new(Ok((
             llm_response.updated_summary,
