@@ -94,13 +94,35 @@ Idle → AwaitingLLMDecision → SendingMessage → Idle
 
 ## LLM Integration
 
-### Model Configuration
+The Bot Hive integrates a Large Language Model (LLM) directly into its core functionality for conversational AI and tool orchestration. This is achieved through local inference, ensuring privacy and reducing reliance on external API services.
 
-- **Model**: Qwen2.5-14B-Instruct-Q4_K_M.gguf (default)
-- **Model Path**: Configurable via `MODEL_PATH` environment variable
-- **Context Size**: 2048 tokens
-- **Threading**: Uses all available CPU cores
-- **Location**: `src/external_connections/llm.rs`
+### Model Loading and Configuration
+
+- **Technology**: Utilizes the `llama_cpp_2` Rust crate, a high-performance binding for `llama.cpp`, to run quantized GGUF models locally.
+- **Model**: Defaults to `Qwen2.5-14B-Instruct-Q4_K_M.gguf`.
+- **Model Path**: Configurable via the `MODEL_PATH` environment variable (default: `models/Qwen2.5-14B-Instruct-Q4_K_M.gguf`).
+- **Context Size**: Configured for 2048 tokens.
+- **Threading**: Leverages all available CPU cores for efficient processing.
+- **Location**: The model loading logic resides in `src/external_connections/llm.rs`.
+
+### LLM Workflow
+
+1.  **Prompt Construction**: For each user interaction, a detailed system prompt is dynamically constructed in `src/connectors/llm_connector.rs`. This prompt includes:
+    *   The bot's persona and instructions.
+    *   A clear definition of the expected JSON output format.
+    *   Details about available tools (e.g., `GetWeather`) and their usage rules.
+    *   The current conversation summary (`updated_summary`) for context.
+    *   A history of previous tool calls and their results (`previous_tool_calls`).
+
+2.  **Inference and Structured Output**:
+    *   The constructed prompt is fed to the locally loaded LLM.
+    *   Crucially, a GBNF (GGML BNF) grammar, defined in `grammars/response.gbnf`, is applied during the LLM's token generation process. This grammar strictly enforces the required JSON schema, guaranteeing that the LLM's output is always valid and adheres to the expected `LLMResponse` structure.
+
+3.  **Decision Making**: The LLM's structured JSON output contains two key elements:
+    *   `updated_summary`: A concise summary of the conversation, maintained across turns to provide ongoing context.
+    *   `outcome`: This dictates the bot's next action, which can be either:
+        *   `Final`: A complete, direct response to the user.
+        *   `IntermediateToolCall`: An instruction to execute a specific tool (e.g., `GetWeather`) before formulating a final response.
 
 ### Response Format
 
