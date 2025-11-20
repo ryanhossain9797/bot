@@ -41,7 +41,7 @@ fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[St
 }}
 
 FIELD DESCRIPTIONS:
-- updated_summary: A brief summary of the conversation context for your own future reference. Keep it concise but informative. Prioritize important context and recent details.
+- updated_summary: A summary of the conversation context for your own future reference. Maintain chronological order. Retain specific details (like numbers, names, and exact requests) for recent items. As items get older, make them less detailed.
 - outcome: Exactly ONE outcome variant:
   - Final: Use when you have a complete response for the user. Format: {{\"Final\": {{\"response\": \"Your response text\"}}}}
   - IntermediateToolCall: Use when you need to call a tool (weather lookup) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"GetWeather\": {{\"location\": \"city name or location\"}}}}}}}}
@@ -75,7 +75,7 @@ User: \"What's the weather today?\"
 {{\"updated_summary\":\"User asked about weather with time reference instead of location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! However, I need a specific location (like a city name) to look up the weather. Which city or place would you like to know about?\"}}}}}}
 
 {conversation_summary}\n{tool_call_history}
-Based on the previous summary above, update it to reflect the new exchange. Keep it brief but informative. Drop old trivial details, keep important context, prioritize recent for non-important items.
+Based on the previous summary above, update it to reflect the new exchange. Maintain chronological order. Retain specific details for the new exchange. For older parts of the summary, make them less detailed but keep key context.
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
     )
