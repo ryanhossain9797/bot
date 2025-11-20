@@ -41,7 +41,17 @@ fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[St
 }}
 
 FIELD DESCRIPTIONS:
-- updated_summary: A summary of the conversation context. Maintain chronological order. For recent items, keep HIGH RESOLUTION details, using a list-like structure of pairs (User/Assistant) to preserve exact context. For older items, use a more condensed summary.
+- updated_summary: CRITICAL - This is NOT a brief summary. Keep the FULL RECENT CONVERSATION HISTORY in structured format. Use this format for recent exchanges (last 5-10 turns):
+  \"Recent conversation:\\n1. User: [exact user message]\\nAssistant: [exact assistant response]\\n2. User: [exact user message]\\nAssistant: [exact assistant response]\\n...\"
+  Only compress very old messages (10+ turns ago) into brief summaries. NEVER compress recent messages - keep them VERBATIM with exact wording.
+  
+  GOOD updated_summary example:
+  \"Recent conversation:\\n1. User: Hello!\\nAssistant: Hello! How can I help you today?\\n2. User: What's the weather in London?\\nAssistant: Checking weather for London\\n3. User: Thanks!\\nAssistant: The weather in London is clear with 15°C.\"
+  
+  BAD updated_summary example (too compressed):
+  \"User greeted me, asked about London weather, I provided it.\"
+  
+  Remember: Keep exact messages for recent turns, including the current exchange. Your updated_summary should include the NEW user message and your NEW response.
 - outcome: Exactly ONE outcome variant:
   - Final: Use when you have a complete response for the user. Format: {{\"Final\": {{\"response\": \"Your response text\"}}}}
   - IntermediateToolCall: Use when you need to call a tool (weather lookup) before giving a final response. Format: {{\"IntermediateToolCall\": {{\"maybe_intermediate_response\": \"Optional message\" | null, \"tool_call\": {{\"GetWeather\": {{\"location\": \"city name or location\"}}}}}}}}
@@ -62,20 +72,24 @@ TOOL CALL RESULTS:
 
 EXAMPLES:
 
+EXAMPLE 1 (First message in conversation):
 User: \"Hello!\"
-{{\"updated_summary\":\"User greeted me\",\"outcome\":{{\"Final\":{{\"response\":\"Hello! How can I help you today?\"}}}}}}
+{{\"updated_summary\":\"Recent conversation:\\n1. User: Hello!\\nAssistant: Hello! How can I help you today?\",\"outcome\":{{\"Final\":{{\"response\":\"Hello! How can I help you today?\"}}}}}}
 
+EXAMPLE 2 (Second message - building on previous):
+Previous summary: \"Recent conversation:\\n1. User: Hello!\\nAssistant: Hello! How can I help you today?\"
 User: \"What's the weather like in London?\"
-{{\"updated_summary\":\"User asked about weather in London\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"London\"}}}}}}}}}}
+{{\"updated_summary\":\"Recent conversation:\\n1. User: Hello!\\nAssistant: Hello! How can I help you today?\\n2. User: What's the weather like in London?\\nAssistant: Checking weather for London\",\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"London\"}}}}}}}}}}
 
+EXAMPLE 3 (Vague location - asking for clarification):
 User: \"What's the weather like?\"
-{{\"updated_summary\":\"User asked about weather without specifying location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\"}}}}}}
-
-User: \"What's the weather today?\"
-{{\"updated_summary\":\"User asked about weather with time reference instead of location\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! However, I need a specific location (like a city name) to look up the weather. Which city or place would you like to know about?\"}}}}}}
+{{\"updated_summary\":\"Recent conversation:\\n1. User: What's the weather like?\\nAssistant: I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\",\"outcome\":{{\"Final\":{{\"response\":\"I'd be happy to check the weather for you! Could you please tell me which city or location you'd like to know about?\"}}}}}}
 
 {conversation_summary}\n{tool_call_history}
-Based on the previous summary above, update it to reflect the new exchange. Maintain chronological order. Keep HIGH RESOLUTION details for recent messages (use a list of pairs if convenient). Use a less detailed summary for older messages.
+
+IMPORTANT: Now update the summary to include this NEW exchange. Append it to the Recent conversation section with the next number. Keep ALL recent turns VERBATIM (exact wording). Format as:
+\"Recent conversation:\\n[previous turns]\\n[next number]. User: [exact new message]\\nAssistant: [your exact response]\"
+
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
     )
