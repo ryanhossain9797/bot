@@ -1,5 +1,5 @@
 # Git
-.git
+# .git - kept for commit message extraction
 .gitignore
 
 # Rust build artifacts
