@@ -1,5 +1,6 @@
 # Base image with runtime dependencies and model
-FROM debian:bookworm-slim
+# Always build for linux/amd64 (x86_64)
+FROM --platform=linux/amd64 debian:bookworm-slim
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \

@@ -1,7 +1,27 @@
 # Build and push Docker image to Docker Hub
+# Always builds for linux/amd64 (x86_64) platform
 build_push tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
-    docker build -f Dockerfile -t zireael9797/bot:{{tag}} ..
-    docker push zireael9797/bot:{{tag}}
+    # Create buildx builder if it doesn't exist
+    docker buildx create --name multiarch --use 2>/dev/null || docker buildx use multiarch
+    docker buildx build \
+        --platform linux/amd64 \
+        -f Dockerfile \
+        -t zireael9797/bot:{{tag}} \
+        --push \
+        ..
+
+# Build base image for linux/amd64
+build_base tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    # Create buildx builder if it doesn't exist
+    docker buildx create --name multiarch --use 2>/dev/null || docker buildx use multiarch
+    docker buildx build \
+        --platform linux/amd64 \
+        -f Dockerfile.base \
+        -t zireael9797/bot-base:{{tag}} \
+        --push \
+        .
 

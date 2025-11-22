@@ -2,7 +2,9 @@
 
 ## Building the Docker Image
 
-**Prerequisites**: You must have a `configuration.rs` file with your Discord token before building.
+**Prerequisites**: 
+- You must have a `configuration.rs` file with your Discord token before building.
+- Docker buildx must be set up (usually included with Docker Desktop or Docker 19.03+)
 
 1. Copy the template and set your token:
    ```bash
@@ -10,9 +12,20 @@
    # Edit src/configuration.rs and set your DISCORD_TOKEN
    ```
 
-2. Build the image (from bot_hive directory):
+2. Build the base image first (if not already built):
    ```bash
-   docker build -f Dockerfile -t bot-hive:latest ..
+   cd bot_hive
+   just build_base
+   # Or manually:
+   docker buildx build --platform linux/amd64 -f Dockerfile.base -t zireael9797/bot-base:latest --push .
+   ```
+
+3. Build the main image (always builds for linux/amd64):
+   ```bash
+   cd bot_hive
+   just build_push
+   # Or manually:
+   docker buildx build --platform linux/amd64 -f Dockerfile -t bot-hive:latest ..
    ```
    
    Or use docker-compose:
@@ -20,7 +33,10 @@
    docker-compose build
    ```
 
-**Note**: The build will include the 8.4GB model file, so it may take some time and require significant disk space.
+**Note**: 
+- All images are built for **linux/amd64 (x86_64)** platform, even when building on ARM machines.
+- The build uses cross-compilation, so it will work on any architecture.
+- The build will include the 8.4GB model file, so it may take some time and require significant disk space.
 
 ## Running with Docker
 
@@ -102,10 +118,12 @@ docker exec bot-hive ls -lh /app/models/
 
 **Important**: The Dockerfile is in `bot_hive/` but the build context is the parent directory (to access `lib_hive` framework). When building:
 
-- **With docker build**: Use `-f Dockerfile` and `..` as context:
+- **With docker build**: Use `-f Dockerfile` and `..` as context with `--platform linux/amd64`:
   ```bash
-  docker build -f Dockerfile -t bot-hive:latest ..
+  docker buildx build --platform linux/amd64 -f Dockerfile -t bot-hive:latest ..
   ```
 
-- **With docker-compose**: The context is automatically set to parent directory
+- **With docker-compose**: The context is automatically set to parent directory and platform is specified in docker-compose.yml
+
+- **With Just**: Use `just build_push` which automatically uses buildx with `--platform linux/amd64`
 

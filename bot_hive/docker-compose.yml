@@ -1,5 +1,6 @@
 services:
   bot:
+    platform: linux/amd64
     build:
       context: ..
       dockerfile: bot_hive/Dockerfile
