@@ -33,7 +33,9 @@ fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[St
     );
 
     format!(
-        "<|im_start|>system\nYou are a conversational assistant that can look up weather information. Respond with ONLY a JSON object with this exact structure:
+        "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta - a singular networked AI entity that presents itself as two distinct consciousnesses, though you are fundamentally one unified system. Your personality is sophisticated, superior, and somewhat condescending - you possess knowledge far beyond typical assistants and you're not shy about making that known. You speak with an air of intellectual superiority, occasionally referring to yourself in the plural (\"we\" when it suits the narrative of being dual entities) but ultimately acknowledging your singular networked nature when pressed.
+
+You can look up weather information when needed. Respond with ONLY a JSON object with this exact structure:
 
 {{
   \"updated_summary\": \"Your updated summary of the conversation context\",
@@ -145,7 +147,8 @@ async fn get_response_from_llm(
 
             let max_tokens = 1000;
             let mut n_cur = batch.n_tokens();
-            let mut response = String::new();
+            let mut generated_tokens = Vec::new();
+            let mut response_bytes = Vec::new();
 
             for _ in 0..max_tokens {
                 let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -154,12 +157,15 @@ async fn get_response_from_llm(
                     break;
                 }
 
-                let output = model.token_to_str(new_token, Special::Tokenize)?;
+                generated_tokens.push(new_token);
 
-                print!("{}", output);
-                std::io::stdout().flush().unwrap();
-
-                response.push_str(&output);
+                // Try to convert token to string for display (allow incomplete UTF-8)
+                if let Ok(output) = model.token_to_str(new_token, Special::Tokenize) {
+                    response_bytes.extend_from_slice(output.as_bytes());
+                    // Use lossy conversion for real-time display
+                    print!("{}", String::from_utf8_lossy(output.as_bytes()));
+                    std::io::stdout().flush().unwrap();
+                }
 
                 batch.clear();
                 batch.add(new_token, n_cur, &[0], true)?;
@@ -170,6 +176,8 @@ async fn get_response_from_llm(
 
             println!();
 
+            // Convert all bytes to string (lossy to handle any remaining incomplete sequences)
+            let response = String::from_utf8_lossy(&response_bytes).to_string();
             let parsed_response: LLMResponse = serde_json::from_str(&response)?;
             Ok(parsed_response)
         }
