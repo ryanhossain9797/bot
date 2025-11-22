@@ -1,5 +1,5 @@
 # Build stage
-# Always cross-compile to x86_64 using cross tool
+# Manual cross-compilation to x86_64 (robust against Docker-in-Docker issues)
 FROM rustlang/rust:nightly-bookworm AS builder
 
 # Install build dependencies and cross-compilation toolchain
@@ -11,10 +11,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     gcc-x86-64-linux-gnu \
+    g++-x86-64-linux-gnu \
     && rm -rf /var/lib/apt/lists/*
-
-# Install cross tool
-RUN cargo install cross
 
 # Add x86_64 target
 RUN rustup target add x86_64-unknown-linux-gnu
@@ -28,10 +26,14 @@ COPY lib_hive ./lib_hive
 COPY bot_hive ./bot_hive
 COPY .git ./.git
 
-# Build the project in release mode for x86_64 using cross
-# Use passthrough mode since we're already in Docker
-RUN CROSS_DOCKER_IN_DOCKER=false \
-    cross build --release --target x86_64-unknown-linux-gnu --package bot
+# Configure environment for cross-compilation
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+    CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
+    CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++ \
+    AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
+
+# Build the project in release mode for x86_64
+RUN cargo build --release --target x86_64-unknown-linux-gnu --package bot
 
 # Capture git commit message
 RUN git log -1 --pretty=%B > /app/commit.txt || echo "unknown" > /app/commit.txt
