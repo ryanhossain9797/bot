@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. **Docker** installed and running
+1. **Docker** with buildx installed and running (Docker Desktop or Docker 19.03+)
 2. **configuration.rs** file exists with your Discord token (already exists in your repo)
 
 ## Step 1: Build the Docker Image
@@ -10,17 +10,22 @@
 From the `bot_hive` directory:
 
 ```bash
-# Using docker build
-docker build -f Dockerfile -t bot-hive:latest ..
+# Using Just (recommended - automatically uses buildx with linux/amd64)
+just build_push
 
-# Or using docker-compose (recommended)
+# Or using docker buildx directly
+docker buildx build --platform linux/amd64 -f Dockerfile -t bot-hive:latest ..
+
+# Or using docker-compose (automatically uses linux/amd64)
 docker-compose build
 ```
 
-**Note**: This will take a while (10-30 minutes) as it:
-- Downloads Rust toolchain
-- Compiles the entire project
-- Includes the 8.4GB model file
+**Note**: 
+- All images are built for **linux/amd64 (x86_64)** platform, even on ARM machines
+- This will take a while (10-30 minutes) as it:
+  - Downloads Rust toolchain
+  - Cross-compiles the entire project for x86_64
+  - Includes the 8.4GB model file
 
 You'll see output like:
 ```
