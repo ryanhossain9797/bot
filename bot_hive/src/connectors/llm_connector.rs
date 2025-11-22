@@ -145,7 +145,8 @@ async fn get_response_from_llm(
 
             let max_tokens = 1000;
             let mut n_cur = batch.n_tokens();
-            let mut response = String::new();
+            let mut generated_tokens = Vec::new();
+            let mut response_bytes = Vec::new();
 
             for _ in 0..max_tokens {
                 let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -154,12 +155,15 @@ async fn get_response_from_llm(
                     break;
                 }
 
-                let output = model.token_to_str(new_token, Special::Tokenize)?;
+                generated_tokens.push(new_token);
 
-                print!("{}", output);
-                std::io::stdout().flush().unwrap();
-
-                response.push_str(&output);
+                // Try to convert token to string for display (allow incomplete UTF-8)
+                if let Ok(output) = model.token_to_str(new_token, Special::Tokenize) {
+                    response_bytes.extend_from_slice(output.as_bytes());
+                    // Use lossy conversion for real-time display
+                    print!("{}", String::from_utf8_lossy(output.as_bytes()));
+                    std::io::stdout().flush().unwrap();
+                }
 
                 batch.clear();
                 batch.add(new_token, n_cur, &[0], true)?;
@@ -170,6 +174,8 @@ async fn get_response_from_llm(
 
             println!();
 
+            // Convert all bytes to string (lossy to handle any remaining incomplete sequences)
+            let response = String::from_utf8_lossy(&response_bytes).to_string();
             let parsed_response: LLMResponse = serde_json::from_str(&response)?;
             Ok(parsed_response)
         }

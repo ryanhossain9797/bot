@@ -32,7 +32,10 @@ get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}
 get-weather-value ::= "{" ws "\"location\"" ws ":" ws string "}" ws
 
 # Basic JSON types
-string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" (["\\bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
+# String with robust UTF-8 support (allows multi-byte characters like Bangla)
+string ::= "\"" string-char* "\""
+string-char ::= [^"\\\x00-\x1F] | "\\" escape-char
+escape-char ::= ["\\bfnrt/] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
 number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
 null ::= "null"
 ws ::= [ \t\n]*
