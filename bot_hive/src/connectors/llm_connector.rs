@@ -1,7 +1,7 @@
 use std::{io::Write, num::NonZeroU32, sync::Arc};
 
 use llama_cpp_2::{
-    context::params::LlamaContextParams,
+    context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{AddBos, LlamaModel, Special},
@@ -98,6 +98,26 @@ Respond ONLY with valid JSON, no additional text.<|im_end|>\n<|im_start|>user\n{
     )
 }
 
+fn capture_context_state_bytes(ctx: &LlamaContext<'_>) -> anyhow::Result<Vec<u8>> {
+    let size = ctx.get_state_size();
+    if size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut buffer = vec![0_u8; size];
+    let bytes_written = unsafe { ctx.copy_state_data(buffer.as_mut_ptr()) };
+
+    if bytes_written > buffer.len() {
+        return Err(anyhow::anyhow!(
+            "llama_copy_state_data returned {bytes_written} bytes, exceeding allocated {}",
+            buffer.len()
+        ));
+    }
+
+    buffer.truncate(bytes_written);
+    Ok(buffer)
+}
+
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
     updated_summary: String,
@@ -172,6 +192,19 @@ async fn get_response_from_llm(
             }
 
             println!();
+
+            match capture_context_state_bytes(&ctx) {
+                Ok(state_bytes) => {
+                    eprintln!(
+                        "[DEBUG] Captured LLM state snapshot ({} bytes)",
+                        state_bytes.len()
+                    );
+                    drop(state_bytes);
+                }
+                Err(err) => {
+                    eprintln!("[WARN] Failed to capture LLM state snapshot: {err}");
+                }
+            }
 
             // Convert all bytes to string (lossy to handle any remaining incomplete sequences)
             let response = String::from_utf8_lossy(&response_bytes).to_string();
