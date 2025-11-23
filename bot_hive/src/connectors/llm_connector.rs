@@ -7,11 +7,12 @@ use llama_cpp_2::{
     model::{AddBos, LlamaModel, Special},
     sampling::LlamaSampler,
 };
-use rand::Rng;
 use serde::Deserialize;
 
 use crate::models::user::{MessageOutcome, UserAction};
 use crate::Env;
+
+const TEMP: f32 = 0.3;
 
 fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[String]) -> String {
     let conversation_summary = format!(
@@ -111,10 +112,6 @@ async fn get_response_from_llm(
 ) -> anyhow::Result<LLMResponse> {
     let (model, backend) = llm;
 
-    let temp_variation = rand::rng().random::<f32>() * 0.2 - 0.1; // -0.1 to +0.1
-    let base_temp = 0.3;
-    let varied_temp = (base_temp + temp_variation).max(0.1).min(0.8);
-
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(2048))
         .with_n_threads(num_cpus::get() as i32)
@@ -139,7 +136,7 @@ async fn get_response_from_llm(
             let grammar = include_str!("../../grammars/response.gbnf");
 
             let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::temp(varied_temp),
+                LlamaSampler::temp(TEMP),
                 LlamaSampler::grammar(model, grammar, "root")
                     .expect("Failed to load grammar - check GBNF syntax"),
                 LlamaSampler::dist(0),
