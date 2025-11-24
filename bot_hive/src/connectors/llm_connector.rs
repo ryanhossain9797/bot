@@ -124,6 +124,14 @@ pub fn generate_base_prompt_state(llm: &(LlamaModel, LlamaBackend)) -> anyhow::R
 
     ctx.decode(&mut batch)?;
 
+    // Verify the KV cache position after decoding
+    let kv_pos = ctx.kv_cache_seq_pos_max(0);
+    eprintln!(
+        "[DEBUG] Base prompt KV cache position: {} (expected ~{})",
+        kv_pos,
+        tokens.len() - 1
+    );
+
     capture_context_state_bytes(&ctx)
 }
 
@@ -152,13 +160,23 @@ async fn get_response_from_llm(
     match ctx_result {
         Ok(mut ctx) => {
             // Restore the base prompt state
-            unsafe {
-                ctx.set_state_data(base_prompt_state);
-            }
+            let bytes_read = unsafe { ctx.set_state_data(base_prompt_state) };
+            eprintln!(
+                "[DEBUG] State restoration: read {} bytes from {} byte state",
+                bytes_read,
+                base_prompt_state.len()
+            );
 
             // Get the actual KV cache position after restoration
-            let kv_pos = ctx.kv_cache_seq_pos_max(0) + 1;
-            eprintln!("[DEBUG] KV cache position after restoration: {}", kv_pos);
+            let kv_pos = ctx.kv_cache_seq_pos_max(0);
+            eprintln!(
+                "[DEBUG] KV cache max position after restoration: {}",
+                kv_pos
+            );
+            eprintln!(
+                "[DEBUG] Will start adding new tokens at position: {}",
+                kv_pos + 1
+            );
 
             // Build and encode only the dynamic parts
             let conversation_summary = format!(
@@ -185,12 +203,16 @@ async fn get_response_from_llm(
             );
 
             let tokens = model.str_to_token(&dynamic_prompt, AddBos::Never)?;
+            eprintln!("[DEBUG] Dynamic prompt has {} tokens", tokens.len());
 
             let mut batch = LlamaBatch::new(8192, 1);
+            let start_pos = kv_pos + 1;
 
             for (i, token) in tokens.iter().enumerate() {
                 let is_last = i == tokens.len() - 1;
-                batch.add(*token, kv_pos + i as i32, &[0], is_last)?;
+                let pos = start_pos + i as i32;
+                eprintln!("[DEBUG] Adding token {} at position {}", i, pos);
+                batch.add(*token, pos, &[0], is_last)?;
             }
 
             ctx.decode(&mut batch)?;
