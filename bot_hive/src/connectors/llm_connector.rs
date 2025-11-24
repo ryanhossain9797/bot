@@ -80,34 +80,6 @@ Respond ONLY with valid JSON, no additional text.
     )
 }
 
-fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[String]) -> String {
-    let conversation_summary = format!(
-        "Previous conversation summary:\n{}",
-        if summary.is_empty() {
-            "NO PREVIOUS CONVERSATION"
-        } else {
-            summary
-        }
-    );
-
-    let tool_call_history = format!(
-        "Previous tool calls and results:\n{}",
-        if previous_tool_calls.is_empty() {
-            "NO PREVIOUS TOOL CALLS".to_string()
-        } else {
-            previous_tool_calls.join("\n")
-        }
-    );
-
-    format!(
-        "{}{}\n{}\n<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-        build_base_prompt(),
-        conversation_summary,
-        tool_call_history,
-        msg
-    )
-}
-
 fn capture_context_state_bytes(ctx: &LlamaContext<'_>) -> anyhow::Result<Vec<u8>> {
     let size = ctx.get_state_size();
     if size == 0 {
@@ -184,6 +156,10 @@ async fn get_response_from_llm(
                 ctx.set_state_data(base_prompt_state);
             }
 
+            // Get the actual KV cache position after restoration
+            let kv_pos = ctx.kv_cache_seq_pos_max(0) + 1;
+            eprintln!("[DEBUG] KV cache position after restoration: {}", kv_pos);
+
             // Build and encode only the dynamic parts
             let conversation_summary = format!(
                 "Previous conversation summary:\n{}",
@@ -214,7 +190,7 @@ async fn get_response_from_llm(
 
             for (i, token) in tokens.iter().enumerate() {
                 let is_last = i == tokens.len() - 1;
-                batch.add(*token, i as i32, &[0], is_last)?;
+                batch.add(*token, kv_pos + i as i32, &[0], is_last)?;
             }
 
             ctx.decode(&mut batch)?;

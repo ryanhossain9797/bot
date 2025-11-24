@@ -285,6 +285,5 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
 
     schedules
 }
-
 pub static USER_LIFE_CYCLE: Lazy<lib_hive::LifeCycleHandle<UserId, UserAction>> =
     Lazy::new(|| new_life_cycle(ENV.clone(), Transition(user_transition), Schedule(schedule)));

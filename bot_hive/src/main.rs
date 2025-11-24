@@ -19,10 +19,31 @@ use tokio::task::JoinSet;
 
 use crate::models::user::UserAction;
 use crate::{
-    connectors::llm_connector::generate_base_prompt_state,
-    external_connections::llm::prepare_llm,
+    connectors::llm_connector::generate_base_prompt_state, external_connections::llm::prepare_llm,
     life_cycles::user_life_cycle::schedule,
 };
+
+fn initialize_env() -> Arc<Env> {
+    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
+
+    println!("Loading LLM...");
+    let llm = Arc::new(prepare_llm().expect("Failed to initialize LLM"));
+
+    println!("Generating base prompt state...");
+    let base_prompt_state =
+        generate_base_prompt_state(llm.as_ref()).expect("Failed to generate base prompt state");
+    println!(
+        "Base prompt state cached ({} bytes)",
+        base_prompt_state.len()
+    );
+
+    Arc::new(Env {
+        discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
+        bot_singleton_handle: BotHandle::new(),
+        llm,
+        base_prompt_state,
+    })
+}
 
 #[derive(Clone)]
 pub struct Env {
@@ -32,22 +53,7 @@ pub struct Env {
     base_prompt_state: Vec<u8>,
 }
 
-static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
-    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
-    let llm = Arc::new(prepare_llm().expect("Failed to initialize LLM"));
-    
-    println!("Generating base prompt state...");
-    let base_prompt_state = generate_base_prompt_state(llm.as_ref())
-        .expect("Failed to generate base prompt state");
-    println!("Base prompt state cached ({} bytes)", base_prompt_state.len());
-    
-    Arc::new(Env {
-        discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
-        bot_singleton_handle: BotHandle::new(),
-        llm,
-        base_prompt_state,
-    })
-});
+static ENV: Lazy<Arc<Env>> = Lazy::new(initialize_env);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
