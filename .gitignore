@@ -2,3 +2,4 @@
 configuration.json
 configuration.rs
 *.gguf
+*.session

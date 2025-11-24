@@ -33,11 +33,25 @@ struct Env {
 
 static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
+    let (model, backend) = prepare_llm().expect("Failed to initialize LLM");
+    let base_prompt = BasePrompt::new();
+
+    // Create session file for the base prompt
+    if let Err(e) = crate::external_connections::llm::create_session_file(
+        &model,
+        &backend,
+        base_prompt.as_str(),
+        base_prompt.session_path(),
+    ) {
+        eprintln!("Warning: Failed to create session file: {}", e);
+        eprintln!("The bot will continue without session file caching.");
+    }
+
     Arc::new(Env {
         discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
         bot_singleton_handle: BotHandle::new(),
-        llm: Arc::new(prepare_llm().expect("Failed to initialize LLM")),
-        base_prompt: Arc::new(BasePrompt::new()),
+        llm: Arc::new((model, backend)),
+        base_prompt: Arc::new(base_prompt),
     })
 });
 
