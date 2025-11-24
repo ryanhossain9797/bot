@@ -230,13 +230,31 @@ pub fn user_transition(
                             external,
                         ))
                     }
-                    Err(_) => Ok((
-                        User {
-                            state: UserState::Idle(None),
-                            last_transition: Utc::now(),
-                        },
-                        Vec::new(),
-                    )),
+                    Err(error_msg) => {
+                        // Add error message to tool call history so LLM can inform the user
+                        let mut updated_tool_calls = previous_tool_calls.clone();
+                        updated_tool_calls.push(format!("Tool execution failed: {}", error_msg));
+
+                        // Let LLM handle the error and inform the user
+                        let mut external = Vec::<UserExternalOperation>::new();
+                        external.push(Box::pin(get_llm_decision(
+                            env.clone(),
+                            "Continue conversation".to_string(), // Dummy message for tool call continuation
+                            recent_conversation.summary.clone(),
+                            updated_tool_calls.clone(),
+                        )));
+
+                        Ok((
+                            User {
+                                state: UserState::AwaitingLLMDecision {
+                                    is_timeout,
+                                    previous_tool_calls: updated_tool_calls,
+                                },
+                                last_transition: Utc::now(),
+                            },
+                            external,
+                        ))
+                    }
                 }
             }
             (UserState::Idle(Some((recent_conversation, _))), UserAction::Timeout) => {

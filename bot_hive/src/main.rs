@@ -18,13 +18,17 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::models::user::UserAction;
-use crate::{external_connections::llm::prepare_llm, life_cycles::user_life_cycle::schedule};
+use crate::{
+    external_connections::llm::{prepare_llm, BasePrompt},
+    life_cycles::user_life_cycle::schedule,
+};
 
 #[derive(Clone)]
 struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
     llm: Arc<(LlamaModel, LlamaBackend)>,
+    base_prompt: Arc<BasePrompt>,
 }
 
 static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
@@ -33,6 +37,7 @@ static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
         discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
         bot_singleton_handle: BotHandle::new(),
         llm: Arc::new(prepare_llm().expect("Failed to initialize LLM")),
+        base_prompt: Arc::new(BasePrompt::new()),
     })
 });
 
