@@ -60,7 +60,7 @@ struct LLMResponse {
 
 async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
-    base_prompt: &str,
+    session_path: &str,
     msg: &str,
     summary: &str,
     previous_tool_calls: &[String],
@@ -71,8 +71,9 @@ async fn get_response_from_llm(
     let base_temp = 0.3;
     let varied_temp = (base_temp + temp_variation).max(0.1).min(0.8);
 
+    const CONTEXT_SIZE: u32 = 2048;
     let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(2048))
+        .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE))
         .with_n_threads(num_cpus::get() as i32)
         .with_n_threads_batch(num_cpus::get() as i32);
 
@@ -80,15 +81,43 @@ async fn get_response_from_llm(
 
     match ctx_result {
         Ok(mut ctx) => {
-            let conversation_prompt =
-                build_conversation_prompt(base_prompt, msg, summary, previous_tool_calls);
-            let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
+            // Try to load session file - if it fails, fall back to full prompt
+            let session_load_result = ctx.load_session_file(session_path, CONTEXT_SIZE as usize);
 
+            let (base_tokens, dynamic_tokens) = match session_load_result {
+                Ok(base_tokens) => {
+                    // Session loaded successfully - only tokenize dynamic part
+                    let dynamic_prompt = build_dynamic_prompt(msg, summary, previous_tool_calls);
+                    let dynamic_tokens = model.str_to_token(&dynamic_prompt, AddBos::Never)?;
+                    (base_tokens, dynamic_tokens)
+                }
+                Err(e) => {
+                    // Session load failed - use full prompt
+                    eprintln!(
+                        "Warning: Failed to load session file '{}': {}",
+                        session_path, e
+                    );
+                    eprintln!("Falling back to full prompt evaluation (slower)");
+                    let base_prompt = crate::external_connections::llm::BasePrompt::new();
+                    let conversation_prompt = build_conversation_prompt(
+                        base_prompt.as_str(),
+                        msg,
+                        summary,
+                        previous_tool_calls,
+                    );
+                    let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
+                    (vec![], tokens) // Empty base_tokens, full prompt in dynamic_tokens
+                }
+            };
+
+            // Add tokens to batch (starting after base tokens if session was loaded)
             let mut batch = LlamaBatch::new(8192, 1);
+            let start_pos = base_tokens.len() as i32;
 
-            for (i, token) in tokens.iter().enumerate() {
-                let is_last = i == tokens.len() - 1;
-                batch.add(*token, i as i32, &[0], is_last)?;
+            for (i, token) in dynamic_tokens.iter().enumerate() {
+                let is_last = i == dynamic_tokens.len() - 1;
+                let pos = start_pos + i as i32;
+                batch.add(*token, pos, &[0], is_last)?;
             }
 
             ctx.decode(&mut batch)?;
@@ -103,7 +132,8 @@ async fn get_response_from_llm(
             ]);
 
             let max_tokens = 1000;
-            let mut n_cur = batch.n_tokens();
+            // Track absolute position: base + dynamic tokens
+            let mut n_cur = (base_tokens.len() + dynamic_tokens.len()) as i32;
             let mut generated_tokens = Vec::new();
             let mut response_bytes = Vec::new();
 
@@ -150,7 +180,7 @@ pub async fn get_llm_decision(
 ) -> UserAction {
     let llm_result = get_response_from_llm(
         env.llm.as_ref(),
-        env.base_prompt.as_str(),
+        env.base_prompt.session_path(),
         &msg,
         &summary,
         &previous_tool_calls,
