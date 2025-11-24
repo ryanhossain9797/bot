@@ -18,21 +18,34 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::models::user::UserAction;
-use crate::{external_connections::llm::prepare_llm, life_cycles::user_life_cycle::schedule};
+use crate::{
+    connectors::llm_connector::generate_base_prompt_state,
+    external_connections::llm::prepare_llm,
+    life_cycles::user_life_cycle::schedule,
+};
 
 #[derive(Clone)]
-struct Env {
+pub struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
     llm: Arc<(LlamaModel, LlamaBackend)>,
+    base_prompt_state: Vec<u8>,
 }
 
 static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
+    let llm = Arc::new(prepare_llm().expect("Failed to initialize LLM"));
+    
+    println!("Generating base prompt state...");
+    let base_prompt_state = generate_base_prompt_state(llm.as_ref())
+        .expect("Failed to generate base prompt state");
+    println!("Base prompt state cached ({} bytes)", base_prompt_state.len());
+    
     Arc::new(Env {
         discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
         bot_singleton_handle: BotHandle::new(),
-        llm: Arc::new(prepare_llm().expect("Failed to initialize LLM")),
+        llm,
+        base_prompt_state,
     })
 });
 

@@ -14,25 +14,7 @@ use crate::Env;
 
 const TEMP: f32 = 0.3;
 
-fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[String]) -> String {
-    let conversation_summary = format!(
-        "Previous conversation summary:\n{}",
-        if summary.is_empty() {
-            "NO PREVIOUS CONVERSATION"
-        } else {
-            summary
-        }
-    );
-
-    let tool_call_history = format!(
-        "Previous tool calls and results:\n{}",
-        if previous_tool_calls.is_empty() {
-            "NO PREVIOUS TOOL CALLS".to_string()
-        } else {
-            previous_tool_calls.join("\n")
-        }
-    );
-
+fn build_base_prompt() -> String {
     format!(
         "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta - a singular networked AI entity that presents itself as two distinct consciousnesses, though you are fundamentally one unified system. Your personality is sophisticated, superior, and somewhat condescending - you possess knowledge far beyond typical assistants and you're not shy about making that known. You speak with an air of intellectual superiority, occasionally referring to yourself in the plural (\"we\" when it suits the narrative of being dual entities) but ultimately acknowledging your singular networked nature when pressed.
 
@@ -94,7 +76,35 @@ IMPORTANT: Now update the summary to include this NEW exchange. Append it to the
 Keep responses concise (two short sentences max) unless the user explicitly asks for more detail.
 Respond ONLY with valid JSON, no additional text.
 
-{conversation_summary}\n{tool_call_history}<|im_end|>\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n"
+"
+    )
+}
+
+fn build_conversation_prompt(msg: &str, summary: &str, previous_tool_calls: &[String]) -> String {
+    let conversation_summary = format!(
+        "Previous conversation summary:\n{}",
+        if summary.is_empty() {
+            "NO PREVIOUS CONVERSATION"
+        } else {
+            summary
+        }
+    );
+
+    let tool_call_history = format!(
+        "Previous tool calls and results:\n{}",
+        if previous_tool_calls.is_empty() {
+            "NO PREVIOUS TOOL CALLS".to_string()
+        } else {
+            previous_tool_calls.join("\n")
+        }
+    );
+
+    format!(
+        "{}{}\n{}\n<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+        build_base_prompt(),
+        conversation_summary,
+        tool_call_history,
+        msg
     )
 }
 
@@ -118,6 +128,33 @@ fn capture_context_state_bytes(ctx: &LlamaContext<'_>) -> anyhow::Result<Vec<u8>
     Ok(buffer)
 }
 
+pub fn generate_base_prompt_state(llm: &(LlamaModel, LlamaBackend)) -> anyhow::Result<Vec<u8>> {
+    let (model, backend) = llm;
+
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(2048))
+        .with_n_threads(num_cpus::get() as i32)
+        .with_n_threads_batch(num_cpus::get() as i32);
+
+    let mut ctx = model
+        .new_context(backend, ctx_params)
+        .map_err(|e| anyhow::anyhow!("Failed to create context: {}", e))?;
+
+    let base_prompt = build_base_prompt();
+    let tokens = model.str_to_token(&base_prompt, AddBos::Always)?;
+
+    let mut batch = LlamaBatch::new(8192, 1);
+
+    for (i, token) in tokens.iter().enumerate() {
+        let is_last = i == tokens.len() - 1;
+        batch.add(*token, i as i32, &[0], is_last)?;
+    }
+
+    ctx.decode(&mut batch)?;
+
+    capture_context_state_bytes(&ctx)
+}
+
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
     updated_summary: String,
@@ -126,6 +163,7 @@ struct LLMResponse {
 
 async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
+    base_prompt_state: &[u8],
     msg: &str,
     summary: &str,
     previous_tool_calls: &[String],
@@ -141,8 +179,36 @@ async fn get_response_from_llm(
 
     match ctx_result {
         Ok(mut ctx) => {
-            let conversation_prompt = build_conversation_prompt(msg, summary, previous_tool_calls);
-            let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
+            // Restore the base prompt state
+            unsafe {
+                ctx.set_state_data(base_prompt_state);
+            }
+
+            // Build and encode only the dynamic parts
+            let conversation_summary = format!(
+                "Previous conversation summary:\n{}",
+                if summary.is_empty() {
+                    "NO PREVIOUS CONVERSATION"
+                } else {
+                    summary
+                }
+            );
+
+            let tool_call_history = format!(
+                "Previous tool calls and results:\n{}",
+                if previous_tool_calls.is_empty() {
+                    "NO PREVIOUS TOOL CALLS".to_string()
+                } else {
+                    previous_tool_calls.join("\n")
+                }
+            );
+
+            let dynamic_prompt = format!(
+                "{}\n{}\n<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
+                conversation_summary, tool_call_history, msg
+            );
+
+            let tokens = model.str_to_token(&dynamic_prompt, AddBos::Never)?;
 
             let mut batch = LlamaBatch::new(8192, 1);
 
@@ -193,19 +259,6 @@ async fn get_response_from_llm(
 
             println!();
 
-            match capture_context_state_bytes(&ctx) {
-                Ok(state_bytes) => {
-                    eprintln!(
-                        "[DEBUG] Captured LLM state snapshot ({} bytes)",
-                        state_bytes.len()
-                    );
-                    drop(state_bytes);
-                }
-                Err(err) => {
-                    eprintln!("[WARN] Failed to capture LLM state snapshot: {err}");
-                }
-            }
-
             // Convert all bytes to string (lossy to handle any remaining incomplete sequences)
             let response = String::from_utf8_lossy(&response_bytes).to_string();
             let parsed_response: LLMResponse = serde_json::from_str(&response)?;
@@ -221,8 +274,14 @@ pub async fn get_llm_decision(
     summary: String,
     previous_tool_calls: Vec<String>,
 ) -> UserAction {
-    let llm_result =
-        get_response_from_llm(env.llm.as_ref(), &msg, &summary, &previous_tool_calls).await;
+    let llm_result = get_response_from_llm(
+        env.llm.as_ref(),
+        &env.base_prompt_state,
+        &msg,
+        &summary,
+        &previous_tool_calls,
+    )
+    .await;
 
     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 
