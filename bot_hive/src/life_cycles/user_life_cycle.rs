@@ -49,7 +49,7 @@ fn handle_outcome(
         LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
             // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
-            external.push(Box::pin(execute_tool(env, tool_call.clone())));
+            external.push(Box::pin(execute_tool(env, tool_call)));
 
             Ok((
                 User {
@@ -109,8 +109,8 @@ pub fn user_transition(
                 let user = User {
                     state: UserState::AwaitingLLMDecision {
                         is_timeout: false,
-                        recent_conversation: recent_conversation.clone(),
-                        current_input: current_input.clone(),
+                        recent_conversation,
+                        current_input,
                     },
                     last_transition: Utc::now(),
                 };
@@ -129,8 +129,8 @@ pub fn user_transition(
             ) => match res {
                 Ok(outcome) => {
                     // Add the input and output to history
-                    let mut updated_history = recent_conversation.history.clone();
-                    updated_history.push(HistoryEntry::Input(current_input.clone()));
+                    let mut updated_history = recent_conversation.history;
+                    updated_history.push(HistoryEntry::Input(current_input));
                     updated_history.push(HistoryEntry::Output(outcome.clone()));
 
                     let updated_conversation = RecentConversation {
@@ -138,7 +138,7 @@ pub fn user_transition(
                     };
 
                     // Extract message to send from outcome
-                    let message_to_send = match outcome {
+                    let message_to_send = match &outcome {
                         LLMDecisionType::Final { response } => Some(response.clone()),
                         LLMDecisionType::IntermediateToolCall {
                             maybe_intermediate_response,
@@ -155,7 +155,7 @@ pub fn user_transition(
                             external.push(Box::pin(send_message(
                                 env.clone(),
                                 user_id.clone(),
-                                message.clone(),
+                                message,
                             )));
 
                             Ok((
@@ -201,12 +201,7 @@ pub fn user_transition(
             ) => {
                 // Ignore errors from message sending - continue with normal flow regardless
                 // Message sent (or failed, but we don't care) - check outcome to determine next state
-                handle_outcome(
-                    env.clone(),
-                    is_timeout,
-                    outcome.clone(),
-                    recent_conversation.clone(),
-                )
+                handle_outcome(env.clone(), is_timeout, outcome, recent_conversation)
             }
             (
                 UserState::RunningTool {
@@ -231,7 +226,7 @@ pub fn user_transition(
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    recent_conversation: recent_conversation.clone(),
+                                    recent_conversation,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -241,7 +236,7 @@ pub fn user_transition(
                     }
                     Err(error_msg) => {
                         let error_result = format!("Tool execution failed: {}", error_msg);
-                        let current_input = LLMInput::ToolResult(error_result.clone());
+                        let current_input = LLMInput::ToolResult(error_result);
 
                         // Let LLM handle the error and inform the user
                         let mut external = Vec::<UserExternalOperation>::new();
@@ -255,7 +250,7 @@ pub fn user_transition(
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    recent_conversation: recent_conversation.clone(),
+                                    recent_conversation,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -274,7 +269,7 @@ pub fn user_transition(
                 println!("Timed Out");
 
                 let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
-                let current_input = LLMInput::UserMessage(timeout_message.clone());
+                let current_input = LLMInput::UserMessage(timeout_message);
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
@@ -288,7 +283,7 @@ pub fn user_transition(
                     User {
                         state: UserState::AwaitingLLMDecision {
                             is_timeout: true,
-                            recent_conversation: recent_conversation.clone(),
+                            recent_conversation,
                             current_input,
                         },
                         last_transition: Utc::now(),
