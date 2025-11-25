@@ -1,7 +1,10 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
-    models::user::{LLMDecisionType, RecentConversation, User, UserAction, UserId, UserState},
+    models::user::{
+        HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
+        UserState,
+    },
     Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -25,18 +28,19 @@ fn handle_outcome(
     is_timeout: bool,
     outcome: LLMDecisionType,
     recent_conversation: RecentConversation,
-    previous_tool_calls: Vec<String>,
 ) -> UserTransitionResult {
     match outcome {
         LLMDecisionType::Final { .. } => {
             // Final response sent - transition to Idle
             Ok((
                 User {
-                    state: UserState::Idle(if is_timeout {
-                        None
-                    } else {
-                        Some((recent_conversation, Utc::now()))
-                    }),
+                    state: UserState::Idle {
+                        recent_conversation: if is_timeout {
+                            None
+                        } else {
+                            Some((recent_conversation, Utc::now()))
+                        },
+                    },
                     last_transition: Utc::now(),
                 },
                 Vec::new(),
@@ -52,7 +56,6 @@ fn handle_outcome(
                     state: UserState::RunningTool {
                         is_timeout,
                         recent_conversation,
-                        previous_tool_calls,
                     },
                     last_transition: Utc::now(),
                 },
@@ -78,7 +81,9 @@ pub fn user_transition(
                 Vec::new(),
             )),
             (
-                UserState::Idle(last_conversation),
+                UserState::Idle {
+                    recent_conversation: last_conversation,
+                },
                 UserAction::NewMessage {
                     msg,
                     start_conversation: true,
@@ -86,22 +91,28 @@ pub fn user_transition(
             ) => {
                 let mut external = Vec::<UserExternalOperation>::new();
 
-                let summary = match last_conversation {
-                    Some((recent_conversation, _)) => recent_conversation.summary.clone(),
-                    None => "".to_string(),
+                let recent_conversation = match last_conversation {
+                    Some((conv, _)) => conv,
+                    None => RecentConversation {
+                        history: Vec::new(),
+                    },
                 };
 
+                let current_input = LLMInput::UserMessage(msg.clone());
+
+                // TODO: Update get_llm_decision signature - for now pass empty summary
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
                     msg.clone(),
-                    summary,
-                    Vec::new(), // No previous tool calls for new messages
+                    String::new(), // Will be replaced with history later
+                    Vec::new(),    // Will be removed later
                 )));
 
                 let user = User {
                     state: UserState::AwaitingLLMDecision {
                         is_timeout: false,
-                        previous_tool_calls: Vec::new(),
+                        recent_conversation: recent_conversation.clone(),
+                        current_input: current_input.clone(),
                     },
                     last_transition: Utc::now(),
                 };
@@ -113,11 +124,21 @@ pub fn user_transition(
             (
                 UserState::AwaitingLLMDecision {
                     is_timeout,
-                    previous_tool_calls,
+                    recent_conversation,
+                    current_input,
                 },
                 UserAction::LLMDecisionResult(res),
             ) => match res {
-                Ok((summary, outcome)) => {
+                Ok((_summary, outcome)) => {
+                    // Add the input and output to history
+                    let mut updated_history = recent_conversation.history.clone();
+                    updated_history.push(HistoryEntry::Input(current_input.clone()));
+                    updated_history.push(HistoryEntry::Output(outcome.clone()));
+
+                    let updated_conversation = RecentConversation {
+                        history: updated_history,
+                    };
+
                     // Extract message to send from outcome
                     let message_to_send = match outcome {
                         LLMDecisionType::Final { response } => Some(response.clone()),
@@ -144,10 +165,7 @@ pub fn user_transition(
                                     state: UserState::SendingMessage {
                                         is_timeout,
                                         outcome: outcome.clone(),
-                                        recent_conversation: RecentConversation {
-                                            summary: summary.clone(),
-                                        },
-                                        previous_tool_calls: previous_tool_calls.clone(),
+                                        recent_conversation: updated_conversation,
                                     },
                                     last_transition: Utc::now(),
                                 },
@@ -160,17 +178,16 @@ pub fn user_transition(
                                 env.clone(),
                                 is_timeout,
                                 outcome.clone(),
-                                RecentConversation {
-                                    summary: summary.clone(),
-                                },
-                                previous_tool_calls.clone(),
+                                updated_conversation,
                             )
                         }
                     }
                 }
                 Err(_) => Ok((
                     User {
-                        state: UserState::Idle(None),
+                        state: UserState::Idle {
+                            recent_conversation: None,
+                        },
                         last_transition: Utc::now(),
                     },
                     Vec::new(),
@@ -181,7 +198,6 @@ pub fn user_transition(
                     is_timeout,
                     outcome,
                     recent_conversation,
-                    previous_tool_calls,
                 },
                 UserAction::MessageSent(_res),
             ) => {
@@ -192,38 +208,35 @@ pub fn user_transition(
                     is_timeout,
                     outcome.clone(),
                     recent_conversation.clone(),
-                    previous_tool_calls.clone(),
                 )
             }
             (
                 UserState::RunningTool {
                     recent_conversation,
-                    previous_tool_calls,
                     is_timeout,
-                    ..
                 },
                 UserAction::ToolResult(res),
             ) => {
                 match res {
                     Ok(tool_result) => {
-                        // Add tool result to previous tool calls
-                        let mut updated_tool_calls = previous_tool_calls.clone();
-                        updated_tool_calls.push(tool_result.clone());
+                        let current_input = LLMInput::ToolResult(tool_result.clone());
 
                         // Tool execution complete - get next LLM decision with tool results
                         let mut external = Vec::<UserExternalOperation>::new();
+                        // TODO: Update get_llm_decision signature - for now pass empty summary
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
-                            "Continue conversation".to_string(), // Dummy message for tool call continuation
-                            recent_conversation.summary.clone(),
-                            updated_tool_calls.clone(),
+                            tool_result.clone(), // Will be replaced with LLMInput enum later
+                            String::new(),       // Will be replaced with history later
+                            Vec::new(),          // Will be removed later
                         )));
 
                         Ok((
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    previous_tool_calls: updated_tool_calls,
+                                    recent_conversation: recent_conversation.clone(),
+                                    current_input,
                                 },
                                 last_transition: Utc::now(),
                             },
@@ -231,24 +244,25 @@ pub fn user_transition(
                         ))
                     }
                     Err(error_msg) => {
-                        // Add error message to tool call history so LLM can inform the user
-                        let mut updated_tool_calls = previous_tool_calls.clone();
-                        updated_tool_calls.push(format!("Tool execution failed: {}", error_msg));
+                        let error_result = format!("Tool execution failed: {}", error_msg);
+                        let current_input = LLMInput::ToolResult(error_result.clone());
 
                         // Let LLM handle the error and inform the user
                         let mut external = Vec::<UserExternalOperation>::new();
+                        // TODO: Update get_llm_decision signature - for now pass empty summary
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
-                            "Continue conversation".to_string(), // Dummy message for tool call continuation
-                            recent_conversation.summary.clone(),
-                            updated_tool_calls.clone(),
+                            error_result.clone(), // Will be replaced with LLMInput enum later
+                            String::new(),        // Will be replaced with history later
+                            Vec::new(),           // Will be removed later
                         )));
 
                         Ok((
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    previous_tool_calls: updated_tool_calls,
+                                    recent_conversation: recent_conversation.clone(),
+                                    current_input,
                                 },
                                 last_transition: Utc::now(),
                             },
@@ -257,23 +271,33 @@ pub fn user_transition(
                     }
                 }
             }
-            (UserState::Idle(Some((recent_conversation, _))), UserAction::Timeout) => {
+            (
+                UserState::Idle {
+                    recent_conversation: Some((recent_conversation, _)),
+                },
+                UserAction::Timeout,
+            ) => {
                 println!("Timed Out");
+
+                let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
+                let current_input = LLMInput::UserMessage(timeout_message.clone());
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
+                // TODO: Update get_llm_decision signature - for now pass empty summary
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
-                    "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string(),
-                    recent_conversation.summary.clone(),
-                    Vec::new(), // No previous tool calls for timeout
+                    timeout_message.clone(),
+                    String::new(), // Will be replaced with history later
+                    Vec::new(),    // Will be removed later
                 )));
 
                 Ok((
                     User {
                         state: UserState::AwaitingLLMDecision {
                             is_timeout: true,
-                            previous_tool_calls: Vec::new(),
+                            recent_conversation: recent_conversation.clone(),
+                            current_input,
                         },
                         last_transition: Utc::now(),
                     },
@@ -288,7 +312,9 @@ pub fn user_transition(
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     let mut schedules = Vec::new();
     match user.state {
-        UserState::Idle(Some((_, last_activity))) => schedules.push(Scheduled {
+        UserState::Idle {
+            recent_conversation: Some((_, last_activity)),
+        } => schedules.push(Scheduled {
             at: last_activity + ChronoDuration::milliseconds(300_000),
             action: UserAction::Timeout,
         }),

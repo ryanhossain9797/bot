@@ -151,7 +151,7 @@ async fn get_response_from_llm(
                     response_bytes.extend_from_slice(output.as_bytes());
                     // Use lossy conversion for real-time display
                     print!("{}", String::from_utf8_lossy(output.as_bytes()));
-                    std::io::stdout().flush().unwrap();
+                    let _ = std::io::stdout().flush();
                 }
 
                 batch.clear();

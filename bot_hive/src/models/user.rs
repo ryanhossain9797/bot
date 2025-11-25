@@ -20,31 +20,34 @@ pub struct UserId(pub UserChannel, pub String);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentConversation {
-    pub summary: String,
+    pub history: Vec<HistoryEntry>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UserState {
-    Idle(Option<(RecentConversation, DateTime<Utc>)>),
+    Idle {
+        recent_conversation: Option<(RecentConversation, DateTime<Utc>)>,
+    },
     AwaitingLLMDecision {
         is_timeout: bool,
-        previous_tool_calls: Vec<String>,
+        recent_conversation: RecentConversation,
+        current_input: LLMInput,
     },
     SendingMessage {
         is_timeout: bool,
         outcome: LLMDecisionType,
         recent_conversation: RecentConversation,
-        previous_tool_calls: Vec<String>,
     },
     RunningTool {
         is_timeout: bool,
         recent_conversation: RecentConversation,
-        previous_tool_calls: Vec<String>,
     },
 }
 impl Default for UserState {
     fn default() -> Self {
-        UserState::Idle(None)
+        UserState::Idle {
+            recent_conversation: None,
+        }
     }
 }
 
