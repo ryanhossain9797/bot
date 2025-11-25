@@ -100,12 +100,10 @@ pub fn user_transition(
 
                 let current_input = LLMInput::UserMessage(msg.clone());
 
-                // TODO: Update get_llm_decision signature - for now pass empty summary
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
-                    msg.clone(),
-                    String::new(), // Will be replaced with history later
-                    Vec::new(),    // Will be removed later
+                    current_input.clone(),
+                    recent_conversation.history.clone(),
                 )));
 
                 let user = User {
@@ -129,7 +127,7 @@ pub fn user_transition(
                 },
                 UserAction::LLMDecisionResult(res),
             ) => match res {
-                Ok((_summary, outcome)) => {
+                Ok(outcome) => {
                     // Add the input and output to history
                     let mut updated_history = recent_conversation.history.clone();
                     updated_history.push(HistoryEntry::Input(current_input.clone()));
@@ -223,12 +221,10 @@ pub fn user_transition(
 
                         // Tool execution complete - get next LLM decision with tool results
                         let mut external = Vec::<UserExternalOperation>::new();
-                        // TODO: Update get_llm_decision signature - for now pass empty summary
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
-                            tool_result.clone(), // Will be replaced with LLMInput enum later
-                            String::new(),       // Will be replaced with history later
-                            Vec::new(),          // Will be removed later
+                            current_input.clone(),
+                            recent_conversation.history.clone(),
                         )));
 
                         Ok((
@@ -249,12 +245,10 @@ pub fn user_transition(
 
                         // Let LLM handle the error and inform the user
                         let mut external = Vec::<UserExternalOperation>::new();
-                        // TODO: Update get_llm_decision signature - for now pass empty summary
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
-                            error_result.clone(), // Will be replaced with LLMInput enum later
-                            String::new(),        // Will be replaced with history later
-                            Vec::new(),           // Will be removed later
+                            current_input.clone(),
+                            recent_conversation.history.clone(),
                         )));
 
                         Ok((
@@ -284,12 +278,10 @@ pub fn user_transition(
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
-                // TODO: Update get_llm_decision signature - for now pass empty summary
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
-                    timeout_message.clone(),
-                    String::new(), // Will be replaced with history later
-                    Vec::new(),    // Will be removed later
+                    current_input.clone(),
+                    recent_conversation.history.clone(),
                 )));
 
                 Ok((

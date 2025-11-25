@@ -10,60 +10,57 @@ use llama_cpp_2::{
 use rand::Rng;
 use serde::Deserialize;
 
-use crate::models::user::{LLMDecisionType, UserAction};
+use crate::models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction};
 use crate::Env;
 
-/// Builds the dynamic part of the prompt (conversation summary, tool calls, user message)
-fn build_dynamic_prompt(msg: &str, summary: &str, previous_tool_calls: &[String]) -> String {
-    let conversation_summary = format!(
-        "Previous conversation summary:\n{}",
-        if summary.is_empty() {
-            "NO PREVIOUS CONVERSATION"
-        } else {
-            summary
+/// Serialize the current input to a prompt string
+fn serialize_input(input: &LLMInput) -> String {
+    match input {
+        LLMInput::UserMessage(msg) => format!("<|im_start|>user\n{}<|im_end|>", msg),
+        LLMInput::ToolResult(result) => {
+            format!("<|im_start|>user\nTool Result: {}<|im_end|>", result)
         }
-    );
+    }
+}
 
-    let tool_call_history = format!(
-        "Previous tool calls and results:\n{}",
-        if previous_tool_calls.is_empty() {
-            "NO PREVIOUS TOOL CALLS".to_string()
-        } else {
-            previous_tool_calls.join("\n")
-        }
-    );
+/// Builds the dynamic part of the prompt (history + current input)
+fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {
+    let history_json = if history.is_empty() {
+        "[]".to_string()
+    } else {
+        serde_json::to_string_pretty(history).unwrap_or_else(|_| "[]".to_string())
+    };
+
+    let history_section = format!("Conversation History (JSON):\n{}", history_json);
+
+    let current_input_str = serialize_input(current_input);
 
     format!(
-        "\n{conversation_summary}\n{tool_call_history}\n\n<|im_start|>user\n{msg}<|im_end|>\n<|im_start|>assistant\n",
-        conversation_summary = conversation_summary,
-        tool_call_history = tool_call_history,
-        msg = msg
+        "\n{}\n\n{}\n<|im_start|>assistant\n",
+        history_section, current_input_str
     )
 }
 
 /// Builds the complete conversation prompt (static base + dynamic parts)
 fn build_conversation_prompt(
     base_prompt: &str,
-    msg: &str,
-    summary: &str,
-    previous_tool_calls: &[String],
+    current_input: &LLMInput,
+    history: &[HistoryEntry],
 ) -> String {
-    let dynamic_part = build_dynamic_prompt(msg, summary, previous_tool_calls);
+    let dynamic_part = build_dynamic_prompt(current_input, history);
     format!("{}{}", base_prompt, dynamic_part)
 }
 
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
-    updated_summary: String,
     outcome: LLMDecisionType,
 }
 
 async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
     session_path: &str,
-    msg: &str,
-    summary: &str,
-    previous_tool_calls: &[String],
+    current_input: &LLMInput,
+    history: &[HistoryEntry],
 ) -> anyhow::Result<LLMResponse> {
     let (model, backend) = llm;
 
@@ -87,7 +84,7 @@ async fn get_response_from_llm(
             let (base_tokens, dynamic_tokens) = match session_load_result {
                 Ok(base_tokens) => {
                     // Session loaded successfully - only tokenize dynamic part
-                    let dynamic_prompt = build_dynamic_prompt(msg, summary, previous_tool_calls);
+                    let dynamic_prompt = build_dynamic_prompt(current_input, history);
                     let dynamic_tokens = model.str_to_token(&dynamic_prompt, AddBos::Never)?;
                     (base_tokens, dynamic_tokens)
                 }
@@ -99,12 +96,8 @@ async fn get_response_from_llm(
                     );
                     eprintln!("Falling back to full prompt evaluation (slower)");
                     let base_prompt = crate::external_connections::llm::BasePrompt::new();
-                    let conversation_prompt = build_conversation_prompt(
-                        base_prompt.as_str(),
-                        msg,
-                        summary,
-                        previous_tool_calls,
-                    );
+                    let conversation_prompt =
+                        build_conversation_prompt(base_prompt.as_str(), current_input, history);
                     let tokens = model.str_to_token(&conversation_prompt, AddBos::Always)?;
                     (vec![], tokens) // Empty base_tokens, full prompt in dynamic_tokens
                 }
@@ -174,25 +167,21 @@ async fn get_response_from_llm(
 
 pub async fn get_llm_decision(
     env: Arc<Env>,
-    msg: String,
-    summary: String,
-    previous_tool_calls: Vec<String>,
+    current_input: LLMInput,
+    history: Vec<HistoryEntry>,
 ) -> UserAction {
     let llm_result = get_response_from_llm(
         env.llm.as_ref(),
         env.base_prompt.session_path(),
-        &msg,
-        &summary,
-        &previous_tool_calls,
+        &current_input,
+        &history,
     )
     .await;
 
     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 
     match llm_result {
-        Ok(llm_response) => {
-            UserAction::LLMDecisionResult(Ok((llm_response.updated_summary, llm_response.outcome)))
-        }
+        Ok(llm_response) => UserAction::LLMDecisionResult(Ok(llm_response.outcome)),
         Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
     }
 }

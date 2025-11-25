@@ -1,12 +1,11 @@
 # GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
 # Schema: {
-#   "updated_summary": string,
 #   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"GetWeather": {location}}}}
 # }
-# MessageOutcome enum (Serde's default externally tagged format for nested enums)
+# LLMDecisionType enum (Serde's default externally tagged format for nested enums)
 
 root ::= object
-object ::= "{" ws "\"updated_summary\"" ws ":" ws string "," ws "\"outcome\"" ws ":" ws outcome-object "}" ws
+object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "}" ws
 
 # MessageOutcome is an externally tagged enum
 outcome-object ::= final-outcome | intermediate-tool-call-outcome

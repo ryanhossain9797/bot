@@ -100,7 +100,7 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
-    LLMDecisionResult(Result<(String, LLMDecisionType), String>),
+    LLMDecisionResult(Result<LLMDecisionType, String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<String, String>),
 }
