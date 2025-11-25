@@ -32,7 +32,7 @@ pub enum UserState {
     },
     SendingMessage {
         is_timeout: bool,
-        outcome: MessageOutcome,
+        outcome: LLMDecisionType,
         recent_conversation: RecentConversation,
         previous_tool_calls: Vec<String>,
     },
@@ -59,8 +59,17 @@ pub enum ToolCall {
     GetWeather { location: String },
 }
 
+/// Represents the input to the LLM decision-making process
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MessageOutcome {
+pub enum LLMInput {
+    /// A message from the user
+    UserMessage(String),
+    /// Continuation after a tool execution with the tool result
+    ToolResult(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LLMDecisionType {
     IntermediateToolCall {
         maybe_intermediate_response: Option<String>,
         tool_call: ToolCall,
@@ -68,6 +77,16 @@ pub enum MessageOutcome {
     Final {
         response: String,
     },
+}
+
+/// Represents a single entry in the conversation history
+/// History alternates between inputs (LLMInput) and outputs (LLMDecisionType)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HistoryEntry {
+    /// An input to the LLM (user message or tool result)
+    Input(LLMInput),
+    /// An output from the LLM (decision/response)
+    Output(LLMDecisionType),
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -78,7 +97,7 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
-    LLMDecisionResult(Result<(String, MessageOutcome), String>),
+    LLMDecisionResult(Result<(String, LLMDecisionType), String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<String, String>),
 }

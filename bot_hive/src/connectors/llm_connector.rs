@@ -10,7 +10,7 @@ use llama_cpp_2::{
 use rand::Rng;
 use serde::Deserialize;
 
-use crate::models::user::{MessageOutcome, UserAction};
+use crate::models::user::{LLMDecisionType, UserAction};
 use crate::Env;
 
 /// Builds the dynamic part of the prompt (conversation summary, tool calls, user message)
@@ -55,7 +55,7 @@ fn build_conversation_prompt(
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
     updated_summary: String,
-    outcome: MessageOutcome,
+    outcome: LLMDecisionType,
 }
 
 async fn get_response_from_llm(

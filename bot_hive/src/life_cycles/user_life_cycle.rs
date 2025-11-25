@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
-    models::user::{MessageOutcome, RecentConversation, User, UserAction, UserId, UserState},
+    models::user::{LLMDecisionType, RecentConversation, User, UserAction, UserId, UserState},
     Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
@@ -23,12 +23,12 @@ type UserExternalOperation = ExternalOperation<UserAction>;
 fn handle_outcome(
     env: Arc<Env>,
     is_timeout: bool,
-    outcome: MessageOutcome,
+    outcome: LLMDecisionType,
     recent_conversation: RecentConversation,
     previous_tool_calls: Vec<String>,
 ) -> UserTransitionResult {
     match outcome {
-        MessageOutcome::Final { .. } => {
+        LLMDecisionType::Final { .. } => {
             // Final response sent - transition to Idle
             Ok((
                 User {
@@ -42,7 +42,7 @@ fn handle_outcome(
                 Vec::new(),
             ))
         }
-        MessageOutcome::IntermediateToolCall { tool_call, .. } => {
+        LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
             // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
             external.push(Box::pin(execute_tool(env, tool_call.clone())));
@@ -120,8 +120,8 @@ pub fn user_transition(
                 Ok((summary, outcome)) => {
                     // Extract message to send from outcome
                     let message_to_send = match outcome {
-                        MessageOutcome::Final { response } => Some(response.clone()),
-                        MessageOutcome::IntermediateToolCall {
+                        LLMDecisionType::Final { response } => Some(response.clone()),
+                        LLMDecisionType::IntermediateToolCall {
                             maybe_intermediate_response,
                             ..
                         } => maybe_intermediate_response.clone(),
