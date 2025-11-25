@@ -25,12 +25,7 @@ fn serialize_input(input: &LLMInput) -> String {
 
 /// Builds the dynamic part of the prompt (history + current input)
 fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {
-    let history_json = if history.is_empty() {
-        "[]".to_string()
-    } else {
-        serde_json::to_string_pretty(history).unwrap_or_else(|_| "[]".to_string())
-    };
-
+    let history_json = serde_json::to_string_pretty(history).unwrap_or_else(|_| "[]".to_string());
     let history_section = format!("Conversation History (JSON):\n{}", history_json);
 
     let current_input_str = serialize_input(current_input);
