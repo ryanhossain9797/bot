@@ -2,15 +2,13 @@ mod bee_handle;
 mod life_cycle_handle;
 
 use bee_handle::{new_entity, Handle};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 pub use life_cycle_handle::*;
 use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
-
-const ZERO_TIME_DELTA: TimeDelta = TimeDelta::new(0, 0).unwrap();
 
 pub type TransitionResult<Type, Action> =
     anyhow::Result<(Type, Vec<Pin<Box<dyn Future<Output = Action> + Send>>>)>;
@@ -102,19 +100,19 @@ async fn run_entity<
                                 let self_sender = self_sender.clone();
                                 let timer_handle = tokio::spawn(async move {
                                     let sleep_for = scheduled.clone().at - now;
-                                    match sleep_for <= ZERO_TIME_DELTA {
-                                        true => {
+                                    match sleep_for.to_std() {
+                                        Ok(sleep_duration) => {
+                                            tokio::time::sleep(sleep_duration).await;
+                                            while Utc::now() < scheduled.at {
+                                                tokio::time::sleep(Duration::from_millis(10)).await;
+                                            }
                                             let _ = self_sender
                                                 .clone()
                                                 .send(Activity::ScheduledWakeup)
                                                 .await;
                                         }
-                                        false => {
-                                            let sleep_for = sleep_for.to_std().unwrap();
-                                            tokio::time::sleep(sleep_for).await;
-                                            while Utc::now() < scheduled.at {
-                                                tokio::time::sleep(Duration::from_millis(10)).await;
-                                            }
+                                        Err(_negative_time_error) => {
+                                            // Negative duration means the scheduled time has already passed
                                             let _ = self_sender
                                                 .clone()
                                                 .send(Activity::ScheduledWakeup)
@@ -151,14 +149,15 @@ async fn run_entity<
                     Some(scheduled) => {
                         let sleep_for = scheduled.at - now;
 
-                        match sleep_for <= ZERO_TIME_DELTA {
-                            true => {
+                        match sleep_for.to_std() {
+                            Ok(_time_left) => {
+                                println!("Not Ready"); //TODO handle unexpected wakeup
+                            }
+                            Err(_negative_time_error) => {
+                                // Negative duration means the scheduled time has already passed
                                 let _ = self_sender
                                     .send(Activity::LifeCycleAction(scheduled.action))
                                     .await;
-                            }
-                            false => {
-                                println!("Not Ready"); //TODO handle unexpected wakeup
                             }
                         }
                     }
