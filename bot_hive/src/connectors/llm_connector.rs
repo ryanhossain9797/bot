@@ -7,7 +7,6 @@ use llama_cpp_2::{
     model::{AddBos, LlamaModel, Special},
     sampling::LlamaSampler,
 };
-use rand::Rng;
 use serde::Deserialize;
 
 use crate::models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction};
@@ -59,11 +58,12 @@ async fn get_response_from_llm(
 ) -> anyhow::Result<LLMResponse> {
     let (model, backend) = llm;
 
-    let temp_variation = rand::rng().random::<f32>() * 0.2 - 0.1; // -0.1 to +0.1
-    let base_temp = 0.3;
-    let varied_temp = (base_temp + temp_variation).max(0.1).min(0.8);
+    // Fixed low temperature to reduce creativity and make responses deterministic
+    let temp = 0.1;
 
-    const CONTEXT_SIZE: u32 = 2048;
+    // Increased context size to handle longer conversations and prevent NoKvCacheSlot errors
+    // KV cache memory usage scales with context size, but modern models handle this well
+    const CONTEXT_SIZE: u32 = 8192;
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE))
         .with_n_threads(num_cpus::get() as i32)
@@ -113,13 +113,15 @@ async fn get_response_from_llm(
             let grammar = include_str!("../../grammars/response.gbnf");
 
             let mut sampler = LlamaSampler::chain_simple([
-                LlamaSampler::temp(varied_temp),
+                LlamaSampler::temp(temp),
                 LlamaSampler::grammar(model, grammar, "root")
                     .expect("Failed to load grammar - check GBNF syntax"),
                 LlamaSampler::dist(0),
             ]);
 
-            let max_tokens = 1000;
+            // Increased max_tokens proportionally to context size
+            // Still leaving plenty of room for history and base prompt
+            let max_tokens = 2000;
             // Track absolute position: base + dynamic tokens
             let mut n_cur = (base_tokens.len() + dynamic_tokens.len()) as i32;
             let mut generated_tokens = Vec::new();

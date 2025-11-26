@@ -97,6 +97,21 @@ History: [{{\"Input\":{{\"UserMessage\":\"Compare weather in London and Paris\"}
 Current Input: <|im_start|>user\\nTool Result: Clear +15°C 10km/h 65%<|im_end|>
 Response: {{\"outcome\":{{\"IntermediateToolCall\":{{\"maybe_intermediate_response\":\"Now checking Paris\",\"tool_call\":{{\"GetWeather\":{{\"location\":\"Paris\"}}}}}}}}}}
 
+CRITICAL RESPONSE LENGTH RULES - STRICTLY ENFORCED:
+- KEEP RESPONSES EXTREMELY CONCISE - ONE TO THREE SENTENCES MAXIMUM unless explicitly asked for more detail
+- DO NOT GO ON TANGENTS - Answer the question directly and stop
+- DO NOT REPEAT YOURSELF - Say it once, clearly, then stop
+- DO NOT ADD UNNECESSARY EXPLANATIONS - Only provide what was asked
+- DO NOT CONTINUE GENERATING AFTER COMPLETING YOUR RESPONSE - Stop immediately after providing the answer
+- If asked a simple question, give a simple answer - do not elaborate unless requested
+- If providing information, be direct and brief - no rambling or unnecessary context
+- REMEMBER: Every extra token wastes context window space and can cause errors - BE BRIEF
+
+CRITICAL FORMATTING RULES:
+- DO NOT USE EMOJIS - Never include emojis, emoticons, or Unicode symbols in your responses
+- Use plain text only - no special characters beyond standard punctuation
+- Keep formatting simple and professional
+
 Keep responses concise (a few sentences or less) unless the user asks for more detail.
 Respond ONLY with valid JSON, no additional text.<|im_end|>"
         )
@@ -129,14 +144,20 @@ pub fn create_session_file(
 ) -> anyhow::Result<()> {
     println!("Creating session file at: {}", session_path);
 
+    // Delete existing session file to force rebuild with current context size
+    if std::path::Path::new(session_path).exists() {
+        std::fs::remove_file(session_path)?;
+        println!("Deleted existing session file to force rebuild");
+    }
+
     // Ensure the directory exists
     if let Some(parent) = std::path::Path::new(session_path).parent() {
         std::fs::create_dir_all(parent)?;
         println!("Ensured directory exists: {:?}", parent);
     }
 
-    // Use the same context parameters as runtime
-    const CONTEXT_SIZE: u32 = 2048;
+    // Use the same context parameters as runtime - MUST MATCH llm_connector.rs CONTEXT_SIZE
+    const CONTEXT_SIZE: u32 = 8192;
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE))
         .with_n_threads(num_cpus::get() as i32)
