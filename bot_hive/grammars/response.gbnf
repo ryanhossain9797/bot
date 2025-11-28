@@ -1,6 +1,6 @@
 # GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
 # Schema: {
-#   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"GetWeather": {location}}}}
+#   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"GetWeather": {location}} | {"WebSearch": {query}}}}
 # }
 # LLMDecisionType enum (Serde's default externally tagged format for nested enums)
 
@@ -22,13 +22,19 @@ intermediate-tool-call-value ::= "{" ws "\"maybe_intermediate_response\"" ws ":"
 optional-string ::= null | string
 
 # ToolCall is an externally tagged enum
-tool-call-object ::= get-weather-tool-call
+tool-call-object ::= get-weather-tool-call | web-search-tool-call
 
 # GetWeather tool call: {"GetWeather": {location}}
 get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
 
 # GetWeather struct fields
 get-weather-value ::= "{" ws "\"location\"" ws ":" ws string "}" ws
+
+# WebSearch tool call: {"WebSearch": {query}}
+web-search-tool-call ::= "{" ws "\"WebSearch\"" ws ":" ws web-search-value "}" ws
+
+# WebSearch struct fields
+web-search-value ::= "{" ws "\"query\"" ws ":" ws string "}" ws
 
 # Basic JSON types
 # String with robust UTF-8 support (allows multi-byte characters like Bangla)

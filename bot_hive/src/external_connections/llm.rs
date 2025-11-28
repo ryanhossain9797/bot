@@ -42,9 +42,12 @@ RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"GetWeather\":{\"location\":\"Paris\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Searching for information about Rust programming\",\"tool_call\":{\"WebSearch\":{\"query\":\"Rust programming language\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"WebSearch\":{\"query\":\"latest AI developments 2024\"}}}}}
 
 TOOLS:
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
+- WebSearch: Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 
 HISTORY:

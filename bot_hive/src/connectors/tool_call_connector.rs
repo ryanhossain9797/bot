@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
+    configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{ToolCall, UserAction},
     Env,
 };
@@ -18,6 +19,10 @@ pub async fn execute_tool(_env: Arc<Env>, tool_call: ToolCall) -> UserAction {
                 Err(e) => UserAction::ToolResult(Err(e.to_string())),
             }
         }
+        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
+            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
     }
 }
 
@@ -89,6 +94,83 @@ async fn fetch_weather(location: &str) -> anyhow::Result<String> {
     ))
 }
 
+#[derive(Deserialize)]
+struct BraveSearchResponse {
+    query: BraveSearchQuery,
+    web: BraveWebResults,
+}
+
+#[derive(Deserialize)]
+struct BraveSearchQuery {
+    original: String,
+}
+
+#[derive(Deserialize)]
+struct BraveWebResults {
+    results: Vec<BraveSearchResult>,
+}
+
+#[derive(Deserialize)]
+struct BraveSearchResult {
+    description: String,
+}
+
+async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
+    let search_url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}",
+        urlencoding::encode(query)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let response = client
+        .get(&search_url)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", BRAVE_SEARCH_TOKEN)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Brave Search API: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(anyhow::anyhow!(
+            "Brave Search API returned error status {}: {}",
+            status,
+            error_text
+        ));
+    }
+
+    let search_response = response
+        .json::<BraveSearchResponse>()
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to parse Brave Search response: {}. Make sure BRAVE_SEARCH_TOKEN is set correctly.", e)
+        })?;
+
+    let original_query = search_response.query.original;
+    let descriptions: Vec<String> = search_response
+        .web
+        .results
+        .into_iter()
+        .take(5)
+        .map(|result| result.description)
+        .collect();
+
+    let formatted_output = format!(
+        "Search query: {}\n\nResults:\n{}",
+        original_query,
+        descriptions.join("\n\n")
+    );
+
+    Ok(formatted_output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +181,13 @@ mod tests {
         assert!(weather.contains("Temperature"));
         assert!(weather.contains("Humidity"));
         assert!(weather.contains("Wind Speed"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_web_search() {
+        let search_results = fetch_web_search("Rust programming").await.unwrap();
+        assert!(search_results.contains("Search query:"));
+        assert!(search_results.contains("Results:"));
+        assert!(search_results.contains("Rust programming"));
     }
 }
