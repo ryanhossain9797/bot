@@ -128,20 +128,37 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
     let response = client
         .get(&search_url)
         .header("Accept", "application/json")
-        .header("Accept-Encoding", "gzip")
         .header("X-Subscription-Token", BRAVE_SEARCH_TOKEN)
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to Brave Search API: {}", e))?
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Brave Search API: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(anyhow::anyhow!(
+            "Brave Search API returned error status {}: {}",
+            status,
+            error_text
+        ));
+    }
+
+    let search_response = response
         .json::<BraveSearchResponse>()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse Brave Search response: {}", e))?;
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to parse Brave Search response: {}. Make sure BRAVE_SEARCH_TOKEN is set correctly.", e)
+        })?;
 
-    let original_query = response.query.original;
-    let descriptions: Vec<String> = response
+    let original_query = search_response.query.original;
+    let descriptions: Vec<String> = search_response
         .web
         .results
         .into_iter()
+        .take(5)
         .map(|result| result.description)
         .collect();
 
@@ -164,5 +181,13 @@ mod tests {
         assert!(weather.contains("Temperature"));
         assert!(weather.contains("Humidity"));
         assert!(weather.contains("Wind Speed"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_web_search() {
+        let search_results = fetch_web_search("Rust programming").await.unwrap();
+        assert!(search_results.contains("Search query:"));
+        assert!(search_results.contains("Results:"));
+        assert!(search_results.contains("Rust programming"));
     }
 }
