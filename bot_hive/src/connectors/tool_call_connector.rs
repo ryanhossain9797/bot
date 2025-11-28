@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::{
+    configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{ToolCall, UserAction},
     Env,
 };
@@ -18,6 +19,10 @@ pub async fn execute_tool(_env: Arc<Env>, tool_call: ToolCall) -> UserAction {
                 Err(e) => UserAction::ToolResult(Err(e.to_string())),
             }
         }
+        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
+            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
     }
 }
 
@@ -87,6 +92,66 @@ async fn fetch_weather(location: &str) -> anyhow::Result<String> {
         "Temperature: {}°C, Humidity: {}%, Wind Speed: {} km/h",
         weather.temperature_2m, weather.relative_humidity_2m, weather.wind_speed_10m
     ))
+}
+
+#[derive(Deserialize)]
+struct BraveSearchResponse {
+    query: BraveSearchQuery,
+    web: BraveWebResults,
+}
+
+#[derive(Deserialize)]
+struct BraveSearchQuery {
+    original: String,
+}
+
+#[derive(Deserialize)]
+struct BraveWebResults {
+    results: Vec<BraveSearchResult>,
+}
+
+#[derive(Deserialize)]
+struct BraveSearchResult {
+    description: String,
+}
+
+async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
+    let search_url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}",
+        urlencoding::encode(query)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let response = client
+        .get(&search_url)
+        .header("Accept", "application/json")
+        .header("Accept-Encoding", "gzip")
+        .header("X-Subscription-Token", BRAVE_SEARCH_TOKEN)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Brave Search API: {}", e))?
+        .json::<BraveSearchResponse>()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to parse Brave Search response: {}", e))?;
+
+    let original_query = response.query.original;
+    let descriptions: Vec<String> = response
+        .web
+        .results
+        .into_iter()
+        .map(|result| result.description)
+        .collect();
+
+    let formatted_output = format!(
+        "Search query: {}\n\nResults:\n{}",
+        original_query,
+        descriptions.join("\n\n")
+    );
+
+    Ok(formatted_output)
 }
 
 #[cfg(test)]

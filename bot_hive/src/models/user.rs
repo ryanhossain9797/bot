@@ -60,6 +60,7 @@ pub struct User {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCall {
     GetWeather { location: String },
+    WebSearch { query: String },
 }
 
 /// Represents the input to the LLM decision-making process
