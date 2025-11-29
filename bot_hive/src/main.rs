@@ -2,11 +2,10 @@
 
 mod configuration;
 mod connectors;
-mod external_connections;
 mod life_cycles;
 mod models;
+mod services;
 
-use external_connections::discord::*;
 use lib_hive::{new_life_cycle, Schedule, Transition};
 use life_cycles::user_life_cycle::user_transition;
 use llama_cpp_2::{llama_backend::LlamaBackend, model::LlamaModel};
@@ -14,14 +13,11 @@ use models::bot::{BotAction, BotHandle};
 use models::user::{User, UserId};
 use once_cell::sync::Lazy;
 use serenity::all::{Http, HttpBuilder};
+use services::discord::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::models::user::UserAction;
-use crate::{
-    external_connections::llm::{prepare_llm, BasePrompt},
-    life_cycles::user_life_cycle::schedule,
-};
+use crate::services::llm::{prepare_llm, BasePrompt};
 
 #[derive(Clone)]
 struct Env {
@@ -36,8 +32,7 @@ static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
     let (model, backend) = prepare_llm().expect("Failed to initialize LLM");
     let base_prompt = BasePrompt::new();
 
-    // Create session file for the base prompt
-    if let Err(e) = crate::external_connections::llm::create_session_file(
+    if let Err(e) = crate::services::llm::create_session_file(
         &model,
         &backend,
         base_prompt.as_str(),

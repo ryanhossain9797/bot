@@ -5,7 +5,7 @@ use llama_cpp_2::{
     model::params::LlamaModelParams,
     model::{AddBos, LlamaModel},
 };
-use std::num::NonZeroU32;
+use std::num::{NonZero, NonZeroU32};
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
 
@@ -61,18 +61,36 @@ pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
 
     println!("Loading model from: {}", model_path);
 
-    // Initialize the llama.cpp backend
     let backend = LlamaBackend::init()?;
 
-    // Load the model with default parameters
     let model_params = LlamaModelParams::default();
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)?;
 
     Ok((model, backend))
 }
 
-/// Creates a session file with the base prompt pre-evaluated
-/// This saves the KV cache for the static system prompt to avoid re-evaluation
+pub const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
+
+pub fn get_context_params() -> LlamaContextParams {
+    LlamaContextParams::default()
+        .with_n_ctx(Some(CONTEXT_SIZE))
+        .with_n_threads(num_cpus::get() as i32)
+        .with_n_threads_batch(num_cpus::get() as i32)
+}
+
+fn delete_current_system_prompt_session(session_path: &str) -> anyhow::Result<()> {
+    if std::path::Path::new(session_path).exists() {
+        std::fs::remove_file(session_path)?;
+        println!("Deleted existing session file to force rebuild");
+    }
+
+    if let Some(parent) = std::path::Path::new(session_path).parent() {
+        std::fs::create_dir_all(parent)?;
+        println!("Ensured directory exists: {:?}", parent);
+    }
+    Ok(())
+}
+
 pub fn create_session_file(
     model: &LlamaModel,
     backend: &LlamaBackend,
@@ -81,24 +99,9 @@ pub fn create_session_file(
 ) -> anyhow::Result<()> {
     println!("Creating session file at: {}", session_path);
 
-    // Delete existing session file to force rebuild with current context size
-    if std::path::Path::new(session_path).exists() {
-        std::fs::remove_file(session_path)?;
-        println!("Deleted existing session file to force rebuild");
-    }
+    delete_current_system_prompt_session(session_path)?;
 
-    // Ensure the directory exists
-    if let Some(parent) = std::path::Path::new(session_path).parent() {
-        std::fs::create_dir_all(parent)?;
-        println!("Ensured directory exists: {:?}", parent);
-    }
-
-    // Use the same context parameters as runtime - MUST MATCH llm_connector.rs CONTEXT_SIZE
-    const CONTEXT_SIZE: u32 = 8192;
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE))
-        .with_n_threads(num_cpus::get() as i32)
-        .with_n_threads_batch(num_cpus::get() as i32);
+    let ctx_params = get_context_params();
 
     let mut ctx = model.new_context(backend, ctx_params)?;
 
