@@ -1,11 +1,11 @@
 use llama_cpp_2::{
-    context::params::LlamaContextParams,
+    context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::params::LlamaModelParams,
-    model::{AddBos, LlamaModel},
+    model::{params::LlamaModelParams, AddBos, LlamaModel},
+    token::LlamaToken,
 };
-use std::num::{NonZero, NonZeroU32};
+use std::num::NonZero;
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
 
@@ -53,6 +53,34 @@ TOOLS:
 
 HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>"
+    }
+
+    pub fn load_session_and_tokenize_dynamic(
+        &self,
+        ctx: &mut LlamaContext,
+        model: &LlamaModel,
+        dynamic_prompt: &str,
+        context_size: u32,
+    ) -> anyhow::Result<(usize, Vec<LlamaToken>)> {
+        let session_load_result = ctx.load_session_file(self.session_path, context_size as usize);
+
+        match session_load_result {
+            Ok(base_tokens) => {
+                let base_token_count = base_tokens.len();
+                let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
+                Ok((base_token_count, dynamic_tokens))
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to load session file '{}': {}",
+                    self.session_path, e
+                );
+                eprintln!("Falling back to full prompt evaluation (slower)");
+                let full_prompt = format!("{}{}", self.prompt, dynamic_prompt);
+                let tokens = model.str_to_token(&full_prompt, AddBos::Always)?;
+                Ok((0, tokens))
+            }
+        }
     }
 }
 

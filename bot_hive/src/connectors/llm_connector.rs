@@ -1,12 +1,12 @@
 use crate::{
     models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
-    services::llm::{get_context_params, BasePrompt, BASE_PROMPT, CONTEXT_SIZE},
+    services::llm::{get_context_params, BASE_PROMPT, CONTEXT_SIZE},
     Env,
 };
 use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{AddBos, LlamaModel, Special},
+    model::{LlamaModel, Special},
     sampling::LlamaSampler,
 };
 use serde::Deserialize;
@@ -61,38 +61,22 @@ async fn get_response_from_llm(
 
     let mut ctx = model.new_context(backend, ctx_params)?;
 
-    let session_load_result =
-        ctx.load_session_file(BASE_PROMPT.session_path(), CONTEXT_SIZE.get() as usize);
+    let dynamic_prompt = build_dynamic_prompt(current_input, history);
 
-    let (existing_tokens, new_tokens) = match session_load_result {
-        Ok(base_tokens) => {
-            let dynamic_prompt = build_dynamic_prompt(current_input, history);
-            let dynamic_tokens = model.str_to_token(&dynamic_prompt, AddBos::Never)?;
-            (base_tokens, dynamic_tokens)
-        }
-        Err(e) => {
-            eprintln!(
-                "Warning: Failed to load session file '{}': {}",
-                BASE_PROMPT.session_path(),
-                e
-            );
-            eprintln!("Falling back to full prompt evaluation (slower)");
-            let base_prompt = BASE_PROMPT;
-            let dynamic_prompt = build_dynamic_prompt(current_input, history);
-
-            let full_prompt = format!("{}{}", base_prompt.as_str(), dynamic_prompt);
-            let tokens = model.str_to_token(&full_prompt, AddBos::Always)?;
-            (vec![], tokens)
-        }
-    };
+    let (base_token_count, new_tokens) = BASE_PROMPT.load_session_and_tokenize_dynamic(
+        &mut ctx,
+        model,
+        &dynamic_prompt,
+        CONTEXT_SIZE.get(),
+    )?;
 
     let mut batch = LlamaBatch::new(8192, 1);
-    let start_pos = existing_tokens.len() as i32;
+    let start_pos = base_token_count;
 
     for (i, token) in new_tokens.iter().enumerate() {
         let is_last = i == new_tokens.len() - 1;
-        let pos = start_pos + i as i32;
-        batch.add(*token, pos, &[0], is_last)?;
+        let pos = start_pos + i;
+        batch.add(*token, pos as i32, &[0], is_last)?;
     }
 
     ctx.decode(&mut batch)?;
@@ -107,7 +91,7 @@ async fn get_response_from_llm(
     ]);
 
     let max_tokens = 2000;
-    let mut n_cur = (existing_tokens.len() + new_tokens.len()) as i32;
+    let mut n_cur = base_token_count + new_tokens.len();
     let mut generated_tokens = Vec::new();
     let mut response_bytes = Vec::new();
 
@@ -129,7 +113,7 @@ async fn get_response_from_llm(
         }
 
         batch.clear();
-        batch.add(new_token, n_cur, &[0], true)?;
+        batch.add(new_token, n_cur as i32, &[0], true)?;
         n_cur += 1;
 
         ctx.decode(&mut batch)?;
