@@ -17,20 +17,19 @@ use services::discord::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::services::llm::{prepare_llm, BasePrompt};
+use crate::services::llm::{prepare_llm, BASE_PROMPT};
 
 #[derive(Clone)]
 struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
     llm: Arc<(LlamaModel, LlamaBackend)>,
-    base_prompt: Arc<BasePrompt>,
 }
 
 static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
     let (model, backend) = prepare_llm().expect("Failed to initialize LLM");
-    let base_prompt = BasePrompt::new();
+    let base_prompt = BASE_PROMPT;
 
     if let Err(e) = crate::services::llm::create_session_file(
         &model,
@@ -46,7 +45,6 @@ static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
         discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
         bot_singleton_handle: BotHandle::new(),
         llm: Arc::new((model, backend)),
-        base_prompt: Arc::new(base_prompt),
     })
 });
 

@@ -1,6 +1,6 @@
 use crate::{
     models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
-    services::llm::{get_context_params, CONTEXT_SIZE},
+    services::llm::{get_context_params, BasePrompt, BASE_PROMPT, CONTEXT_SIZE},
     Env,
 };
 use llama_cpp_2::{
@@ -52,7 +52,6 @@ struct LLMResponse {
 
 async fn get_response_from_llm(
     llm: &(LlamaModel, LlamaBackend),
-    session_path: &str,
     current_input: &LLMInput,
     history: &[HistoryEntry],
 ) -> anyhow::Result<LLMResponse> {
@@ -62,7 +61,8 @@ async fn get_response_from_llm(
 
     let mut ctx = model.new_context(backend, ctx_params)?;
 
-    let session_load_result = ctx.load_session_file(session_path, CONTEXT_SIZE.get() as usize);
+    let session_load_result =
+        ctx.load_session_file(BASE_PROMPT.session_path(), CONTEXT_SIZE.get() as usize);
 
     let (existing_tokens, new_tokens) = match session_load_result {
         Ok(base_tokens) => {
@@ -73,10 +73,11 @@ async fn get_response_from_llm(
         Err(e) => {
             eprintln!(
                 "Warning: Failed to load session file '{}': {}",
-                session_path, e
+                BASE_PROMPT.session_path(),
+                e
             );
             eprintln!("Falling back to full prompt evaluation (slower)");
-            let base_prompt = crate::services::llm::BasePrompt::new();
+            let base_prompt = BASE_PROMPT;
             let dynamic_prompt = build_dynamic_prompt(current_input, history);
 
             let full_prompt = format!("{}{}", base_prompt.as_str(), dynamic_prompt);
@@ -99,7 +100,7 @@ async fn get_response_from_llm(
     let grammar = include_str!("../../grammars/response.gbnf");
 
     let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(temp),
+        LlamaSampler::temp(TEMPERATURE),
         LlamaSampler::grammar(model, grammar, "root")
             .expect("Failed to load grammar - check GBNF syntax"),
         LlamaSampler::dist(0),
@@ -147,13 +148,7 @@ pub async fn get_llm_decision(
     current_input: LLMInput,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
-    let llm_result = get_response_from_llm(
-        env.llm.as_ref(),
-        env.base_prompt.session_path(),
-        &current_input,
-        &history,
-    )
-    .await;
+    let llm_result = get_response_from_llm(env.llm.as_ref(), &current_input, &history).await;
 
     eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
 

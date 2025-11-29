@@ -9,28 +9,29 @@ use std::num::{NonZero, NonZeroU32};
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
 
+#[derive(Clone, Copy)]
 pub struct BasePrompt {
-    prompt: String,
-    session_path: String,
+    prompt: &'static str,
+    session_path: &'static str,
 }
 
 impl BasePrompt {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             prompt: Self::build_prompt(),
-            session_path: SESSION_FILE_PATH.to_string(),
+            session_path: SESSION_FILE_PATH,
         }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.prompt
+        self.prompt
     }
 
     pub fn session_path(&self) -> &str {
-        &self.session_path
+        self.session_path
     }
 
-    fn build_prompt() -> String {
+    const fn build_prompt() -> &'static str {
         "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta. Respond with ONLY valid JSON.
 
 RULES:
@@ -51,9 +52,11 @@ TOOLS:
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 
 HISTORY:
-You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>".to_string()
+You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>"
     }
 }
+
+pub const BASE_PROMPT: BasePrompt = BasePrompt::new();
 
 pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
     let model_path = std::env::var("MODEL_PATH")
