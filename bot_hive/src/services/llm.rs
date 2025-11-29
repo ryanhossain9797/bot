@@ -1,36 +1,37 @@
 use llama_cpp_2::{
-    context::params::LlamaContextParams,
+    context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::params::LlamaModelParams,
-    model::{AddBos, LlamaModel},
+    model::{params::LlamaModelParams, AddBos, LlamaModel},
+    token::LlamaToken,
 };
-use std::num::NonZeroU32;
+use std::num::NonZero;
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
 
+#[derive(Clone, Copy)]
 pub struct BasePrompt {
-    prompt: String,
-    session_path: String,
+    prompt: &'static str,
+    session_path: &'static str,
 }
 
 impl BasePrompt {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             prompt: Self::build_prompt(),
-            session_path: SESSION_FILE_PATH.to_string(),
+            session_path: SESSION_FILE_PATH,
         }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.prompt
+        self.prompt
     }
 
     pub fn session_path(&self) -> &str {
-        &self.session_path
+        self.session_path
     }
 
-    fn build_prompt() -> String {
+    const fn build_prompt() -> &'static str {
         "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta. Respond with ONLY valid JSON.
 
 RULES:
@@ -51,9 +52,39 @@ TOOLS:
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 
 HISTORY:
-You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>".to_string()
+You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>"
+    }
+
+    pub fn load_session_and_tokenize_dynamic(
+        &self,
+        ctx: &mut LlamaContext,
+        model: &LlamaModel,
+        dynamic_prompt: &str,
+        context_size: u32,
+    ) -> anyhow::Result<(usize, Vec<LlamaToken>)> {
+        let session_load_result = ctx.load_session_file(self.session_path, context_size as usize);
+
+        match session_load_result {
+            Ok(base_tokens) => {
+                let base_token_count = base_tokens.len();
+                let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
+                Ok((base_token_count, dynamic_tokens))
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to load session file '{}': {}",
+                    self.session_path, e
+                );
+                eprintln!("Falling back to full prompt evaluation (slower)");
+                let full_prompt = format!("{}{}", self.prompt, dynamic_prompt);
+                let tokens = model.str_to_token(&full_prompt, AddBos::Always)?;
+                Ok((0, tokens))
+            }
+        }
     }
 }
+
+pub const BASE_PROMPT: BasePrompt = BasePrompt::new();
 
 pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
     let model_path = std::env::var("MODEL_PATH")
@@ -61,18 +92,36 @@ pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
 
     println!("Loading model from: {}", model_path);
 
-    // Initialize the llama.cpp backend
     let backend = LlamaBackend::init()?;
 
-    // Load the model with default parameters
     let model_params = LlamaModelParams::default();
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)?;
 
     Ok((model, backend))
 }
 
-/// Creates a session file with the base prompt pre-evaluated
-/// This saves the KV cache for the static system prompt to avoid re-evaluation
+pub const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
+
+pub fn get_context_params() -> LlamaContextParams {
+    LlamaContextParams::default()
+        .with_n_ctx(Some(CONTEXT_SIZE))
+        .with_n_threads(num_cpus::get() as i32)
+        .with_n_threads_batch(num_cpus::get() as i32)
+}
+
+fn delete_current_system_prompt_session(session_path: &str) -> anyhow::Result<()> {
+    if std::path::Path::new(session_path).exists() {
+        std::fs::remove_file(session_path)?;
+        println!("Deleted existing session file to force rebuild");
+    }
+
+    if let Some(parent) = std::path::Path::new(session_path).parent() {
+        std::fs::create_dir_all(parent)?;
+        println!("Ensured directory exists: {:?}", parent);
+    }
+    Ok(())
+}
+
 pub fn create_session_file(
     model: &LlamaModel,
     backend: &LlamaBackend,
@@ -81,24 +130,9 @@ pub fn create_session_file(
 ) -> anyhow::Result<()> {
     println!("Creating session file at: {}", session_path);
 
-    // Delete existing session file to force rebuild with current context size
-    if std::path::Path::new(session_path).exists() {
-        std::fs::remove_file(session_path)?;
-        println!("Deleted existing session file to force rebuild");
-    }
+    delete_current_system_prompt_session(session_path)?;
 
-    // Ensure the directory exists
-    if let Some(parent) = std::path::Path::new(session_path).parent() {
-        std::fs::create_dir_all(parent)?;
-        println!("Ensured directory exists: {:?}", parent);
-    }
-
-    // Use the same context parameters as runtime - MUST MATCH llm_connector.rs CONTEXT_SIZE
-    const CONTEXT_SIZE: u32 = 8192;
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE))
-        .with_n_threads(num_cpus::get() as i32)
-        .with_n_threads_batch(num_cpus::get() as i32);
+    let ctx_params = get_context_params();
 
     let mut ctx = model.new_context(backend, ctx_params)?;
 
