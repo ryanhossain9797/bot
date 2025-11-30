@@ -3,11 +3,13 @@ use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaModel},
-    token::LlamaToken,
 };
 use std::num::NonZero;
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
+pub const BASE_PROMPT: BasePrompt = BasePrompt::new();
+pub const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
+pub const MAX_GENERATION_TOKENS: usize = 2000;
 
 #[derive(Clone, Copy)]
 pub struct BasePrompt {
@@ -55,20 +57,18 @@ HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>"
     }
 
-    pub fn load_session_and_tokenize_dynamic(
+    pub fn load_base_prompt(
         &self,
         ctx: &mut LlamaContext,
         model: &LlamaModel,
-        dynamic_prompt: &str,
         context_size: u32,
-    ) -> anyhow::Result<(usize, Vec<LlamaToken>)> {
+    ) -> anyhow::Result<usize> {
         let session_load_result = ctx.load_session_file(self.session_path, context_size as usize);
 
         match session_load_result {
             Ok(base_tokens) => {
                 let base_token_count = base_tokens.len();
-                let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
-                Ok((base_token_count, dynamic_tokens))
+                Ok(base_token_count)
             }
             Err(e) => {
                 eprintln!(
@@ -76,15 +76,45 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
                     self.session_path, e
                 );
                 eprintln!("Falling back to full prompt evaluation (slower)");
-                let full_prompt = format!("{}{}", self.prompt, dynamic_prompt);
-                let tokens = model.str_to_token(&full_prompt, AddBos::Always)?;
-                Ok((0, tokens))
+                let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
+
+                let mut batch = LlamaBatch::new(CONTEXT_SIZE.get() as usize, 1);
+                for (i, token) in tokens.iter().enumerate() {
+                    let is_last = i == tokens.len() - 1;
+                    batch.add(*token, i as i32, &[0], is_last)?;
+                }
+
+                ctx.decode(&mut batch)?;
+                Ok(tokens.len())
             }
         }
     }
-}
 
-pub const BASE_PROMPT: BasePrompt = BasePrompt::new();
+    pub fn append_prompt(
+        &self,
+        ctx: &mut LlamaContext,
+        model: &LlamaModel,
+        dynamic_prompt: &str,
+        start_pos: usize,
+    ) -> anyhow::Result<usize> {
+        let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
+
+        let mut batch = LlamaBatch::new(CONTEXT_SIZE.get() as usize, 1);
+
+        for (offset, token) in dynamic_tokens.iter().enumerate() {
+            let is_last = offset == dynamic_tokens.len() - 1;
+            batch.add(*token, (start_pos + offset) as i32, &[0], is_last)?;
+        }
+
+        ctx.decode(&mut batch)?;
+
+        let total_tokens = start_pos + dynamic_tokens.len();
+        let batch_n_tokens = batch.n_tokens() as usize;
+        println!("append_prompt: total_tokens={}, batch_n_tokens={}", total_tokens, batch_n_tokens);
+
+        Ok(total_tokens)
+    }
+}
 
 pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
     let model_path = std::env::var("MODEL_PATH")
@@ -99,8 +129,6 @@ pub fn prepare_llm<'a>() -> anyhow::Result<(LlamaModel, LlamaBackend)> {
 
     Ok((model, backend))
 }
-
-pub const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
 
 pub fn get_context_params() -> LlamaContextParams {
     LlamaContextParams::default()
@@ -136,26 +164,21 @@ pub fn create_session_file(
 
     let mut ctx = model.new_context(backend, ctx_params)?;
 
-    // Tokenize the base prompt
     let tokens = model.str_to_token(base_prompt, AddBos::Always)?;
     println!("Tokenized base prompt: {} tokens", tokens.len());
 
-    // Add tokens to batch starting at position 0
-    let mut batch = LlamaBatch::new(8192, 1);
+    let mut batch = LlamaBatch::new(CONTEXT_SIZE.get() as usize, 1);
     for (i, token) in tokens.iter().enumerate() {
         let is_last = i == tokens.len() - 1;
         batch.add(*token, i as i32, &[0], is_last)?;
     }
 
-    // Decode to fill KV cache
     println!("Decoding tokens to fill KV cache...");
     ctx.decode(&mut batch)?;
 
-    // Save session file
     println!("Saving session file...");
     ctx.save_session_file(session_path, &tokens)?;
 
-    // Get file size and log it
     let metadata = std::fs::metadata(session_path)?;
     let file_size_bytes = metadata.len();
     let file_size_mb = file_size_bytes as f64 / (1024.0 * 1024.0);
