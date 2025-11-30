@@ -3,7 +3,7 @@ use crate::{
     services::llm::LlmService,
     Env,
 };
-use llama_cpp_2::{llama_batch::LlamaBatch, model::Special};
+use llama_cpp_2::model::Special;
 use serde::Deserialize;
 use std::{io::Write, sync::Arc};
 
@@ -48,14 +48,14 @@ async fn get_response_from_llm(
 
     let mut sampler = llm.create_sampler();
 
-    let mut batch = LlamaBatch::new(LlmService::CONTEXT_SIZE.get() as usize, 1);
+    let mut batch = LlmService::new_batch();
     let mut generated_tokens = Vec::new();
 
     let batch_tokens = total_tokens - base_token_count;
     let mut last_batch_idx = batch_tokens as i32 - 1;
     let mut n_cur = total_tokens;
 
-    for _ in 0..LlmService::MAX_GENERATION_TOKENS {
+    for _ in 0..LlmService::get_max_generation_tokens() {
         let new_token = sampler.sample(&ctx, last_batch_idx);
 
         if llm.is_eog_token(new_token) {

@@ -79,7 +79,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
                 eprintln!("Falling back to full prompt evaluation (slower)");
                 let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
 
-                let mut batch = LlamaBatch::new(LlmService::CONTEXT_SIZE.get() as usize, 1);
+                let mut batch = LlmService::new_batch();
                 for (i, token) in tokens.iter().enumerate() {
                     let is_last = i == tokens.len() - 1;
                     batch.add(*token, i as i32, &[0], is_last)?;
@@ -100,7 +100,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
     ) -> anyhow::Result<usize> {
         let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
 
-        let mut batch = LlamaBatch::new(LlmService::CONTEXT_SIZE.get() as usize, 1);
+        let mut batch = LlmService::new_batch();
 
         for (offset, token) in dynamic_tokens.iter().enumerate() {
             let is_last = offset == dynamic_tokens.len() - 1;
@@ -122,10 +122,14 @@ pub struct LlmService {
 }
 
 impl LlmService {
-    pub const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
-    pub const MAX_GENERATION_TOKENS: usize = 2000;
+    const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
+    const MAX_GENERATION_TOKENS: usize = 2000;
     const TEMPERATURE: f32 = 0.25;
     const GRAMMAR_FILE: &'static str = include_str!("../../grammars/response.gbnf");
+
+    pub const fn get_max_generation_tokens() -> usize {
+        Self::MAX_GENERATION_TOKENS
+    }
 
     pub fn new() -> anyhow::Result<Self> {
         let model_path = std::env::var("MODEL_PATH")
@@ -206,6 +210,10 @@ impl LlmService {
         ])
     }
 
+    pub fn new_batch() -> LlamaBatch {
+        LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1)
+    }
+
     fn create_session_file_impl(
         model: &LlamaModel,
         backend: &LlamaBackend,
@@ -223,7 +231,7 @@ impl LlmService {
         let tokens = model.str_to_token(base_prompt, AddBos::Always)?;
         println!("Tokenized base prompt: {} tokens", tokens.len());
 
-        let mut batch = LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1);
+        let mut batch = Self::new_batch();
         for (i, token) in tokens.iter().enumerate() {
             let is_last = i == tokens.len() - 1;
             batch.add(*token, i as i32, &[0], is_last)?;
