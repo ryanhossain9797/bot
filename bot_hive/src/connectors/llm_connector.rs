@@ -1,10 +1,11 @@
 use crate::{
     models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
-    services::llm::{get_context_params, BASE_PROMPT, CONTEXT_SIZE},
+    services::llm::{get_context_params, BASE_PROMPT, CONTEXT_SIZE, MAX_GENERATION_TOKENS},
     Env,
 };
 use llama_cpp_2::{
     llama_backend::LlamaBackend,
+    llama_batch::LlamaBatch,
     model::{LlamaModel, Special},
     sampling::LlamaSampler,
 };
@@ -54,7 +55,7 @@ async fn get_response_from_llm(
 
     let base_token_count = BASE_PROMPT.load_base_prompt(&mut ctx, model, CONTEXT_SIZE.get())?;
 
-    let (mut n_cur, mut batch) =
+    let total_tokens =
         BASE_PROMPT.append_prompt(&mut ctx, model, &dynamic_prompt, base_token_count)?;
 
     let grammar = include_str!("../../grammars/response.gbnf");
@@ -66,11 +67,15 @@ async fn get_response_from_llm(
         LlamaSampler::dist(0),
     ]);
 
-    let max_tokens = 2000;
+    let mut batch = LlamaBatch::new(CONTEXT_SIZE.get() as usize, 1);
     let mut generated_tokens = Vec::new();
 
-    for _ in 0..max_tokens {
-        let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
+    let batch_tokens = total_tokens - base_token_count;
+    let mut last_batch_idx = batch_tokens as i32 - 1;
+    let mut n_cur = total_tokens;
+
+    for _ in 0..MAX_GENERATION_TOKENS {
+        let new_token = sampler.sample(&ctx, last_batch_idx);
 
         if model.is_eog_token(new_token) {
             break;
@@ -80,9 +85,11 @@ async fn get_response_from_llm(
 
         batch.clear();
         batch.add(new_token, n_cur as i32, &[0], true)?;
-        n_cur += 1;
 
         ctx.decode(&mut batch)?;
+
+        n_cur += 1;
+        last_batch_idx = batch.n_tokens() - 1;
     }
 
     let mut response_bytes = Vec::new();

@@ -9,6 +9,7 @@ use std::num::NonZero;
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
 pub const BASE_PROMPT: BasePrompt = BasePrompt::new();
 pub const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
+pub const MAX_GENERATION_TOKENS: usize = 2000;
 
 #[derive(Clone, Copy)]
 pub struct BasePrompt {
@@ -95,7 +96,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
         model: &LlamaModel,
         dynamic_prompt: &str,
         start_pos: usize,
-    ) -> anyhow::Result<(usize, LlamaBatch)> {
+    ) -> anyhow::Result<usize> {
         let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
 
         let mut batch = LlamaBatch::new(CONTEXT_SIZE.get() as usize, 1);
@@ -107,7 +108,11 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
 
         ctx.decode(&mut batch)?;
 
-        Ok((start_pos + dynamic_tokens.len(), batch))
+        let total_tokens = start_pos + dynamic_tokens.len();
+        let batch_n_tokens = batch.n_tokens() as usize;
+        println!("append_prompt: total_tokens={}, batch_n_tokens={}", total_tokens, batch_n_tokens);
+
+        Ok(total_tokens)
     }
 }
 
