@@ -1,18 +1,11 @@
 use crate::{
     models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
-    services::llm::{get_context_params, BASE_PROMPT, CONTEXT_SIZE, MAX_GENERATION_TOKENS},
+    services::llm::LlmService,
     Env,
 };
-use llama_cpp_2::{
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{LlamaModel, Special},
-    sampling::LlamaSampler,
-};
+use llama_cpp_2::{llama_batch::LlamaBatch, model::Special};
 use serde::Deserialize;
 use std::{io::Write, sync::Arc};
-
-const TEMPERATURE: f32 = 0.25;
 
 fn serialize_input(input: &LLMInput) -> String {
     match input {
@@ -41,43 +34,31 @@ struct LLMResponse {
 }
 
 async fn get_response_from_llm(
-    llm: &(LlamaModel, LlamaBackend),
+    llm: &LlmService,
     current_input: &LLMInput,
     history: &[HistoryEntry],
 ) -> anyhow::Result<LLMResponse> {
-    let (model, backend) = llm;
-
-    let ctx_params = get_context_params();
-
-    let mut ctx = model.new_context(backend, ctx_params)?;
+    let mut ctx = llm.new_context()?;
 
     let dynamic_prompt = build_dynamic_prompt(current_input, history);
 
-    let base_token_count = BASE_PROMPT.load_base_prompt(&mut ctx, model, CONTEXT_SIZE.get())?;
+    let base_token_count = llm.load_base_prompt(&mut ctx)?;
 
-    let total_tokens =
-        BASE_PROMPT.append_prompt(&mut ctx, model, &dynamic_prompt, base_token_count)?;
+    let total_tokens = llm.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
 
-    let grammar = include_str!("../../grammars/response.gbnf");
+    let mut sampler = llm.create_sampler();
 
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(TEMPERATURE),
-        LlamaSampler::grammar(model, grammar, "root")
-            .expect("Failed to load grammar - check GBNF syntax"),
-        LlamaSampler::dist(0),
-    ]);
-
-    let mut batch = LlamaBatch::new(CONTEXT_SIZE.get() as usize, 1);
+    let mut batch = LlamaBatch::new(LlmService::CONTEXT_SIZE.get() as usize, 1);
     let mut generated_tokens = Vec::new();
 
     let batch_tokens = total_tokens - base_token_count;
     let mut last_batch_idx = batch_tokens as i32 - 1;
     let mut n_cur = total_tokens;
 
-    for _ in 0..MAX_GENERATION_TOKENS {
+    for _ in 0..LlmService::MAX_GENERATION_TOKENS {
         let new_token = sampler.sample(&ctx, last_batch_idx);
 
-        if model.is_eog_token(new_token) {
+        if llm.is_eog_token(new_token) {
             break;
         }
 
@@ -94,7 +75,7 @@ async fn get_response_from_llm(
 
     let mut response_bytes = Vec::new();
     for token in &generated_tokens {
-        if let Ok(output) = model.token_to_str(*token, Special::Tokenize) {
+        if let Ok(output) = llm.token_to_str(*token, Special::Tokenize) {
             response_bytes.extend_from_slice(output.as_bytes());
         }
     }
