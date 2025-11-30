@@ -3,7 +3,6 @@ use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaModel},
-    token::LlamaToken,
 };
 use std::num::NonZero;
 
@@ -55,20 +54,18 @@ HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>"
     }
 
-    pub fn load_session_and_tokenize_dynamic(
+    pub fn load_base_prompt(
         &self,
         ctx: &mut LlamaContext,
         model: &LlamaModel,
-        dynamic_prompt: &str,
         context_size: u32,
-    ) -> anyhow::Result<(usize, Vec<LlamaToken>)> {
+    ) -> anyhow::Result<usize> {
         let session_load_result = ctx.load_session_file(self.session_path, context_size as usize);
 
         match session_load_result {
             Ok(base_tokens) => {
                 let base_token_count = base_tokens.len();
-                let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
-                Ok((base_token_count, dynamic_tokens))
+                Ok(base_token_count)
             }
             Err(e) => {
                 eprintln!(
@@ -76,11 +73,39 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
                     self.session_path, e
                 );
                 eprintln!("Falling back to full prompt evaluation (slower)");
-                let full_prompt = format!("{}{}", self.prompt, dynamic_prompt);
-                let tokens = model.str_to_token(&full_prompt, AddBos::Always)?;
-                Ok((0, tokens))
+                let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
+
+                let mut batch = LlamaBatch::new(8192, 1);
+                for (i, token) in tokens.iter().enumerate() {
+                    let is_last = i == tokens.len() - 1;
+                    batch.add(*token, i as i32, &[0], is_last)?;
+                }
+
+                ctx.decode(&mut batch)?;
+                Ok(tokens.len())
             }
         }
+    }
+
+    pub fn append_prompt(
+        &self,
+        ctx: &mut LlamaContext,
+        model: &LlamaModel,
+        dynamic_prompt: &str,
+        start_pos: usize,
+    ) -> anyhow::Result<(usize, LlamaBatch)> {
+        let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
+        
+        let mut batch = LlamaBatch::new(8192, 1);
+        
+        for (offset, token) in dynamic_tokens.iter().enumerate() {
+            let is_last = offset == dynamic_tokens.len() - 1;
+            batch.add(*token, (start_pos + offset) as i32, &[0], is_last)?;
+        }
+        
+        ctx.decode(&mut batch)?;
+        
+        Ok((start_pos + dynamic_tokens.len(), batch))
     }
 }
 

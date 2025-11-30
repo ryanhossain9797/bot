@@ -5,7 +5,6 @@ use crate::{
 };
 use llama_cpp_2::{
     llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
     model::{LlamaModel, Special},
     sampling::LlamaSampler,
 };
@@ -35,16 +34,6 @@ fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> S
     )
 }
 
-/// Builds the complete conversation prompt (static base + dynamic parts)
-fn build_conversation_prompt(
-    base_prompt: &str,
-    current_input: &LLMInput,
-    history: &[HistoryEntry],
-) -> String {
-    let dynamic_part = build_dynamic_prompt(current_input, history);
-    format!("{}{}", base_prompt, dynamic_part)
-}
-
 #[derive(Debug, Deserialize)]
 struct LLMResponse {
     outcome: LLMDecisionType,
@@ -63,23 +52,10 @@ async fn get_response_from_llm(
 
     let dynamic_prompt = build_dynamic_prompt(current_input, history);
 
-    let (base_token_count, new_tokens) = BASE_PROMPT.load_session_and_tokenize_dynamic(
-        &mut ctx,
-        model,
-        &dynamic_prompt,
-        CONTEXT_SIZE.get(),
-    )?;
+    let base_token_count = BASE_PROMPT.load_base_prompt(&mut ctx, model, CONTEXT_SIZE.get())?;
 
-    let mut batch = LlamaBatch::new(8192, 1);
-    let start_pos = base_token_count;
-
-    for (i, token) in new_tokens.iter().enumerate() {
-        let is_last = i == new_tokens.len() - 1;
-        let pos = start_pos + i;
-        batch.add(*token, pos as i32, &[0], is_last)?;
-    }
-
-    ctx.decode(&mut batch)?;
+    let (mut n_cur, mut batch) =
+        BASE_PROMPT.append_prompt(&mut ctx, model, &dynamic_prompt, base_token_count)?;
 
     let grammar = include_str!("../../grammars/response.gbnf");
 
@@ -91,9 +67,7 @@ async fn get_response_from_llm(
     ]);
 
     let max_tokens = 2000;
-    let mut n_cur = base_token_count + new_tokens.len();
     let mut generated_tokens = Vec::new();
-    let mut response_bytes = Vec::new();
 
     for _ in 0..max_tokens {
         let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -104,14 +78,6 @@ async fn get_response_from_llm(
 
         generated_tokens.push(new_token);
 
-        // Try to convert token to string for display (allow incomplete UTF-8)
-        if let Ok(output) = model.token_to_str(new_token, Special::Tokenize) {
-            response_bytes.extend_from_slice(output.as_bytes());
-            // Use lossy conversion for real-time display
-            print!("{}", String::from_utf8_lossy(output.as_bytes()));
-            let _ = std::io::stdout().flush();
-        }
-
         batch.clear();
         batch.add(new_token, n_cur as i32, &[0], true)?;
         n_cur += 1;
@@ -119,9 +85,18 @@ async fn get_response_from_llm(
         ctx.decode(&mut batch)?;
     }
 
-    println!();
-
+    let mut response_bytes = Vec::new();
+    for token in &generated_tokens {
+        if let Ok(output) = model.token_to_str(*token, Special::Tokenize) {
+            response_bytes.extend_from_slice(output.as_bytes());
+        }
+    }
     let response = String::from_utf8_lossy(&response_bytes).to_string();
+
+    print!("{}", response);
+    println!();
+    let _ = std::io::stdout().flush();
+
     let parsed_response: LLMResponse = serde_json::from_str(&response)?;
 
     Ok(parsed_response)
