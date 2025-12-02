@@ -24,6 +24,10 @@ done
 
 echo "Ollama is ready!"
 
+# Give Ollama a moment to index existing models
+echo "Waiting for Ollama to index models..."
+sleep 3
+
 # Verify model is available
 MODEL_NAME="qwen2.5:14b"
 echo "Verifying model $MODEL_NAME is available..."
