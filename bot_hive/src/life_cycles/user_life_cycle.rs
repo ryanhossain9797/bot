@@ -14,7 +14,8 @@ use lib_hive::{
 use once_cell::sync::Lazy;
 
 use crate::connectors::{
-    llm_connector::get_llm_decision, message_connector::send_message,
+    ollama_connector::get_llm_decision, // Using Ollama instead of llama_cpp
+    message_connector::send_message,
     tool_call_connector::execute_tool,
 };
 
