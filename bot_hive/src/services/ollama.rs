@@ -1,7 +1,7 @@
 use ollama_rs::{
     generation::{
         chat::{request::ChatMessageRequest, ChatMessage},
-        parameters::{KeepAlive, TimeUnit},
+        parameters::{FormatType, JsonStructure, KeepAlive, TimeUnit},
     },
     models::ModelOptions,
     Ollama,
@@ -31,10 +31,11 @@ RESPONSE FORMAT:
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Searching for information about Rust programming\",\"tool_call\":{\"WebSearch\":{\"query\":\"Rust programming language\"}}}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"WebSearch\":{\"query\":\"latest AI developments 2024\"}}}}}
 
-TOOLS:
+TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
 - WebSearch: Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
+- CRITICAL: Only use GetWeather or WebSearch. Never invent tools like MathCalculation, Calculator, or any other tool names. If you need to do math, respond with a Final response explaining you cannot perform calculations.
 
 HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>";
@@ -89,9 +90,10 @@ impl OllamaService {
         &self.model
     }
 
-    /// Generate a completion given a conversation history
+    /// Generate a completion given a conversation history with structured JSON format
     /// The conversation should include the system prompt as the first message
-    pub async fn generate(
+    /// Uses structured JSON format to enforce valid tool calls based on the schema
+    pub async fn generate<T: ollama_rs::generation::parameters::JsonSchema>(
         &self,
         messages: Vec<ChatMessage>,
     ) -> anyhow::Result<String> {
@@ -99,6 +101,9 @@ impl OllamaService {
             self.model.clone(),
             messages,
         )
+        .format(FormatType::StructuredJson(Box::new(
+            JsonStructure::new::<T>()
+        )))
         .options(
             ModelOptions::default()
                 .seed(SEED)

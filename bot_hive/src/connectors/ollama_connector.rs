@@ -3,11 +3,16 @@ use crate::{
     services::ollama::OllamaService,
     Env,
 };
-use ollama_rs::generation::chat::ChatMessage;
+use ollama_rs::{
+    generation::{
+        chat::ChatMessage,
+        parameters::{FormatType, JsonStructure, JsonSchema},
+    },
+};
 use serde::Deserialize;
 use std::{io::Write, sync::Arc};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 struct LLMResponse {
     outcome: LLMDecisionType,
 }
@@ -99,8 +104,8 @@ async fn get_response_from_ollama(
         messages[last_idx] = ChatMessage::user(dynamic_prompt);
     }
     
-    // Generate response
-    let response_text = ollama.generate(messages).await?;
+    // Generate response with structured JSON schema to enforce valid tool calls
+    let response_text = ollama.generate::<LLMResponse>(messages).await?;
     
     // Print for debugging (matching llama_cpp behavior)
     print!("{}", response_text);

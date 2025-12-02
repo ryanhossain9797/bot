@@ -57,7 +57,7 @@ pub struct User {
     pub last_transition: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum ToolCall {
     GetWeather { location: String },
     WebSearch { query: String },
@@ -72,7 +72,7 @@ pub enum LLMInput {
     ToolResult(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum LLMDecisionType {
     IntermediateToolCall {
         maybe_intermediate_response: Option<String>,

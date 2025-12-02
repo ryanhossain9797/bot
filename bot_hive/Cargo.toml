@@ -29,3 +29,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 urlencoding = "2.1"
 rand = "0.9"
 ollama-rs = { version = "0.3", default-features = false, features = ["rustls"] }
+schemars = "1.1"
