@@ -10,7 +10,7 @@ use lib_hive::{new_life_cycle, Schedule, Transition};
 use life_cycles::user_life_cycle::user_transition;
 use models::bot::{BotAction, BotHandle};
 use models::user::{User, UserId};
-use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 // use services::llama_cpp::LlamaCppService; // Disconnected - will be replaced by Ollama
@@ -26,23 +26,32 @@ struct Env {
     ollama: Arc<OllamaService>,
 }
 
-static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
+// ENV needs to be initialized asynchronously, so we use OnceCell
+static ENV: OnceCell<Arc<Env>> = OnceCell::new();
+
+async fn init_env() -> anyhow::Result<Arc<Env>> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
     // Llama.cpp initialization disconnected - will be replaced by Ollama
     // let llama_cpp_service = LlamaCppService::new().expect("Failed to initialize Llama.cpp");
     
-    let ollama_service = OllamaService::new().expect("Failed to initialize Ollama");
+    let ollama_service = OllamaService::new().await?;
 
-    Arc::new(Env {
+    Ok(Arc::new(Env {
         discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
         bot_singleton_handle: BotHandle::new(),
         // llama_cpp: Arc::new(llama_cpp_service),
         ollama: Arc::new(ollama_service),
-    })
-});
+    }))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
+    // Initialize ENV asynchronously
+    let env = init_env().await?;
+    if ENV.set(env.clone()).is_err() {
+        panic!("ENV should only be initialized once");
+    }
+
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
     let mut set = JoinSet::new();

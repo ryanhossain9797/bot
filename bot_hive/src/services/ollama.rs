@@ -49,32 +49,29 @@ pub struct OllamaService {
 }
 
 impl OllamaService {
-    pub fn new() -> anyhow::Result<Self> {
+    pub async fn new() -> anyhow::Result<Self> {
         let client = Arc::new(Ollama::new(OLLAMA_HOST.to_string(), OLLAMA_PORT));
         
         // Verify connection by listing models
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            match client.list_local_models().await {
-                Ok(models) => {
-                    println!("Connected to Ollama! Available models:");
-                    for model in &models {
-                        println!("  - {}", model.name);
-                    }
-                    
-                    // Verify our model is available
-                    if models.iter().any(|m| m.name == OLLAMA_MODEL) {
-                        println!("Model '{}' is available.", OLLAMA_MODEL);
-                    } else {
-                        eprintln!("Warning: Model '{}' not found. Available models listed above.", OLLAMA_MODEL);
-                    }
+        match client.list_local_models().await {
+            Ok(models) => {
+                println!("Connected to Ollama! Available models:");
+                for model in &models {
+                    println!("  - {}", model.name);
                 }
-                Err(e) => {
-                    eprintln!("Warning: Failed to list Ollama models: {}", e);
-                    eprintln!("Ollama may not be running yet. The service will continue but requests may fail.");
+                
+                // Verify our model is available
+                if models.iter().any(|m| m.name == OLLAMA_MODEL) {
+                    println!("Model '{}' is available.", OLLAMA_MODEL);
+                } else {
+                    eprintln!("Warning: Model '{}' not found. Available models listed above.", OLLAMA_MODEL);
                 }
             }
-        });
+            Err(e) => {
+                eprintln!("Warning: Failed to list Ollama models: {}", e);
+                eprintln!("Ollama may not be running yet. The service will continue but requests may fail.");
+            }
+        }
 
         Ok(Self {
             client,
