@@ -35,7 +35,7 @@ TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
 - WebSearch: Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
-- CRITICAL: Only use GetWeather or WebSearch. Never invent tools like MathCalculation, Calculator, or any other tool names. If you need to do math, respond with a Final response explaining you cannot perform calculations.
+- CRITICAL: Only use GetWeather or WebSearch. Never invent tools. If you feel like you need to use a tool, try to think if you can do it by yourself... like eg basic math... otherwiserespond with a Final response explaining you cannot perform the task.
 
 HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>";
