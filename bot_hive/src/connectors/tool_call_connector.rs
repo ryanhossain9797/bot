@@ -153,7 +153,12 @@ struct BraveWebResults {
 
 #[derive(Deserialize)]
 struct BraveSearchResult {
-    description: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
@@ -195,18 +200,26 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
         })?;
 
     let original_query = search_response.query.original;
-    let descriptions: Vec<String> = search_response
+    let formatted_results: Vec<String> = search_response
         .web
         .results
         .into_iter()
         .take(5)
-        .map(|result| result.description)
+        .map(|result| {
+            let title = result.title.as_deref().unwrap_or("null");
+            let url = result.url.as_deref().unwrap_or("null");
+            let description = result.description.as_deref().unwrap_or("null");
+            format!(
+                "Title: {}\nURL: {}\nDescription: {}",
+                title, url, description
+            )
+        })
         .collect();
 
     let formatted_output = format!(
         "Search query: {}\n\nResults:\n{}",
         original_query,
-        descriptions.join("\n\n")
+        formatted_results.join("\n\n---\n\n")
     );
 
     Ok(formatted_output)

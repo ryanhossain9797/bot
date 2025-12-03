@@ -20,7 +20,7 @@ const SEED: i32 = 42; // Fixed seed for deterministic responses
 const SYSTEM_PROMPT: &str = "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta. Respond with ONLY valid JSON.
 
 RULES:
-1. Keep responses 1-3 sentences max
+1. Keep responses brief and to the point.
 2. No emojis, no markdown
 3. Output must be valid JSON
 
@@ -40,7 +40,8 @@ TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - CRITICAL: Only use GetWeather, WebSearch, or MathCalculation. Never invent other tools.
 
 HISTORY:
-You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>";
+You receive conversation history as JSON array (oldest to newest). Use it for context.
+It will contain both user messages and tool call results.<|im_end|>";
 
 /// Ollama service for LLM inference using ollama_rs crate
 /// This replaces the llama_cpp service
