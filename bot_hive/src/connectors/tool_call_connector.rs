@@ -314,11 +314,14 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Limit content length to avoid overwhelming the LLM (keep first 8000 chars)
-    let max_length = 8000;
-    let final_text = if cleaned_text.len() > max_length {
+    // Limit content length to avoid overwhelming the LLM (keep first 8000 characters)
+    let max_chars = 8000;
+    let char_count = cleaned_text.chars().count();
+    let final_text = if char_count > max_chars {
+        // Safely truncate at character boundary (not byte boundary)
+        let truncated: String = cleaned_text.chars().take(max_chars).collect();
         format!("{}...\n\n[Content truncated - original length: {} characters]", 
-                &cleaned_text[..max_length], cleaned_text.len())
+                truncated, char_count)
     } else {
         cleaned_text
     };

@@ -37,6 +37,7 @@ TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
 - WebSearch: Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
 - MathCalculation: Performs mathematical operations. Requires a list of operations. Each operation can be: Add(a, b), Sub(a, b), Mul(a, b), Div(a, b), or Exp(a, b) where a and b are numbers (can be integers or decimals). Example: {\"MathCalculation\":{\"operations\":[{\"Add\":[5.0, 3.0]}, {\"Mul\":[4.5, 7.2]}]}}
+- VisitUrl: Visits a URL and returns the content of the page. Requires a URL string. Use this to visit websites and extract information. Example: {\"VisitUrl\":{\"url\":\"https://example.com/article\"}}
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - CRITICAL: Only use GetWeather, WebSearch, or MathCalculation. Never invent other tools.
 
