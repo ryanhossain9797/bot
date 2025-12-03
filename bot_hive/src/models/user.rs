@@ -58,9 +58,19 @@ pub struct User {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
+pub enum MathOperation {
+    Add(f32, f32),
+    Sub(f32, f32),
+    Mul(f32, f32),
+    Div(f32, f32),
+    Exp(f32, f32),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum ToolCall {
     GetWeather { location: String },
     WebSearch { query: String },
+    MathCalculation { operations: Vec<MathOperation> },
 }
 
 /// Represents the input to the LLM decision-making process

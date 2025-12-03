@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
-    models::user::{ToolCall, UserAction},
+    models::user::{MathOperation, ToolCall, UserAction},
     Env,
 };
 
-pub async fn execute_tool(_env: Arc<Env>, tool_call: ToolCall) -> UserAction {
+pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
     match tool_call {
         ToolCall::GetWeather { location } => {
             // Actually fetch weather using wttr.in API
@@ -22,8 +22,49 @@ pub async fn execute_tool(_env: Arc<Env>, tool_call: ToolCall) -> UserAction {
         ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
+        }
+        ToolCall::MathCalculation { operations } => {
+            let result = execute_math(operations).await;
+            UserAction::ToolResult(Ok(result))
+        }
     }
+}
+
+/// Execute a list of math operations and return the results
+async fn execute_math(operations: Vec<MathOperation>) -> String {
+    let mut results = Vec::new();
+    
+    for (index, op) in operations.iter().enumerate() {
+        let result = match op {
+            MathOperation::Add(a, b) => {
+                let res = *a + *b;
+                format!("{} + {} = {}", a, b, res)
+            }
+            MathOperation::Sub(a, b) => {
+                let res = *a - *b;
+                format!("{} - {} = {}", a, b, res)
+            }
+            MathOperation::Mul(a, b) => {
+                let res = *a * *b;
+                format!("{} × {} = {}", a, b, res)
+            }
+            MathOperation::Div(a, b) => {
+                if *b == 0.0 {
+                    format!("{} ÷ {} = Error: Division by zero", a, b)
+                } else {
+                    let res = *a / *b;
+                    format!("{} ÷ {} = {}", a, b, res)
+                }
+            }
+            MathOperation::Exp(a, b) => {
+                let res = (*a as f64).powf(*b as f64);
+                format!("{} ^ {} = {}", a, b, res)
+            }
+        };
+        results.push(format!("Operation {}: {}", index + 1, result));
+    }
+    
+    results.join("\n")
 }
 
 #[derive(Deserialize)]
@@ -189,5 +230,44 @@ mod tests {
         assert!(search_results.contains("Search query:"));
         assert!(search_results.contains("Results:"));
         assert!(search_results.contains("Rust programming"));
+    }
+
+    #[tokio::test]
+    async fn test_math_operations() {
+        let operations = vec![
+            MathOperation::Add(5.0, 3.0),
+            MathOperation::Sub(10.0, 4.0),
+            MathOperation::Mul(6.0, 7.0),
+            MathOperation::Div(20.0, 4.0),
+            MathOperation::Exp(2.0, 8.0),
+        ];
+
+        let result = execute_math(operations).await;
+        assert!(result.contains("5 + 3 = 8"));
+        assert!(result.contains("10 - 4 = 6"));
+        assert!(result.contains("6 × 7 = 42"));
+        assert!(result.contains("20 ÷ 4 = 5"));
+        assert!(result.contains("2 ^ 8 = 256"));
+    }
+
+    #[tokio::test]
+    async fn test_division_by_zero() {
+        let operations = vec![MathOperation::Div(10.0, 0.0)];
+        let result = execute_math(operations).await;
+        assert!(result.contains("Division by zero"));
+    }
+
+    #[tokio::test]
+    async fn test_float_operations() {
+        let operations = vec![
+            MathOperation::Add(5.5, 3.2),
+            MathOperation::Div(7.0, 2.0),
+            MathOperation::Exp(2.0, 0.5), // Square root via exponentiation
+        ];
+
+        let result = execute_math(operations).await;
+        assert!(result.contains("5.5 + 3.2 = 8.7"));
+        assert!(result.contains("7 ÷ 2 = 3.5"));
+        assert!(result.contains("2 ^ 0.5")); // Should calculate sqrt(2)
     }
 }
