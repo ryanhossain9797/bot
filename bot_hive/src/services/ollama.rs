@@ -39,7 +39,7 @@ TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - MathCalculation: Performs mathematical operations. Requires a list of operations. Each operation can be: Add(a, b), Sub(a, b), Mul(a, b), Div(a, b), or Exp(a, b) where a and b are numbers (can be integers or decimals). Example: {\"MathCalculation\":{\"operations\":[{\"Add\":[5.0, 3.0]}, {\"Mul\":[4.5, 7.2]}]}}
 - VisitUrl: Visits a URL and returns the content of the page. Requires a URL string. Use this to visit websites and extract information. Example: {\"VisitUrl\":{\"url\":\"https://example.com/article\"}}
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
-- CRITICAL: Only use GetWeather, WebSearch, or MathCalculation. Never invent other tools.
+- CRITICAL: Only use existing tools. Never invent other tools.
 
 HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.

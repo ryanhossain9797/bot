@@ -216,9 +216,16 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
             let title = result.title.as_deref().unwrap_or("null");
             let url = result.url.as_deref().unwrap_or("null");
             let description = result.description.as_deref().unwrap_or("null");
+            // Truncate description to 200 characters max (at character boundary)
+            let truncated_description = if description.chars().count() > 200 {
+                let truncated: String = description.chars().take(200).collect();
+                format!("{}...", truncated)
+            } else {
+                description.to_string()
+            };
             format!(
                 "Title: {}\nURL: {}\nDescription: {}",
-                title, url, description
+                title, url, truncated_description
             )
         })
         .collect();
