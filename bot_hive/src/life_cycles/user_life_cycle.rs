@@ -14,7 +14,8 @@ use lib_hive::{
 use once_cell::sync::Lazy;
 
 use crate::connectors::{
-    llm_connector::get_llm_decision, message_connector::send_message,
+    ollama_connector::get_llm_decision, // Using Ollama instead of llama_cpp
+    message_connector::send_message,
     tool_call_connector::execute_tool,
 };
 
@@ -318,4 +319,10 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
 }
 
 pub static USER_LIFE_CYCLE: Lazy<lib_hive::LifeCycleHandle<UserId, UserAction>> =
-    Lazy::new(|| new_life_cycle(ENV.clone(), Transition(user_transition), Schedule(schedule)));
+    Lazy::new(|| {
+        new_life_cycle(
+            ENV.get().expect("ENV not initialized").clone(),
+            Transition(user_transition),
+            Schedule(schedule),
+        )
+    });

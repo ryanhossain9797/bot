@@ -79,7 +79,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
                 eprintln!("Falling back to full prompt evaluation (slower)");
                 let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
 
-                let mut batch = LlmService::new_batch();
+                let mut batch = LlamaCppService::new_batch();
                 for (i, token) in tokens.iter().enumerate() {
                     let is_last = i == tokens.len() - 1;
                     batch.add(*token, i as i32, &[0], is_last)?;
@@ -100,7 +100,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
     ) -> anyhow::Result<usize> {
         let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
 
-        let mut batch = LlmService::new_batch();
+        let mut batch = LlamaCppService::new_batch();
 
         for (offset, token) in dynamic_tokens.iter().enumerate() {
             let is_last = offset == dynamic_tokens.len() - 1;
@@ -115,13 +115,13 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
     }
 }
 
-pub struct LlmService {
+pub struct LlamaCppService {
     model: LlamaModel,
     backend: LlamaBackend,
     base_prompt: BasePrompt,
 }
 
-impl LlmService {
+impl LlamaCppService {
     const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
     const MAX_GENERATION_TOKENS: usize = 2000;
     const TEMPERATURE: f32 = 0.25;

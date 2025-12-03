@@ -10,10 +10,11 @@ use lib_hive::{new_life_cycle, Schedule, Transition};
 use life_cycles::user_life_cycle::user_transition;
 use models::bot::{BotAction, BotHandle};
 use models::user::{User, UserId};
-use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
-use services::llm::LlmService;
+// use services::llama_cpp::LlamaCppService; // Disconnected - will be replaced by Ollama
+use services::ollama::OllamaService;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -21,22 +22,36 @@ use tokio::task::JoinSet;
 struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
-    llm: Arc<LlmService>,
+    // llama_cpp: Arc<LlamaCppService>, // Disconnected - base image doesn't have GGUF
+    ollama: Arc<OllamaService>,
 }
 
-static ENV: Lazy<Arc<Env>> = Lazy::new(|| {
-    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
-    let llm_service = LlmService::new().expect("Failed to initialize LLM");
+// ENV needs to be initialized asynchronously, so we use OnceCell
+static ENV: OnceCell<Arc<Env>> = OnceCell::new();
 
-    Arc::new(Env {
+async fn init_env() -> anyhow::Result<Arc<Env>> {
+    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
+    // Llama.cpp initialization disconnected - will be replaced by Ollama
+    // let llama_cpp_service = LlamaCppService::new().expect("Failed to initialize Llama.cpp");
+
+    let ollama_service = OllamaService::new().await?;
+
+    Ok(Arc::new(Env {
         discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
         bot_singleton_handle: BotHandle::new(),
-        llm: Arc::new(llm_service),
-    })
-});
+        // llama_cpp: Arc::new(llama_cpp_service),
+        ollama: Arc::new(ollama_service),
+    }))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
+    // Initialize ENV asynchronously
+    let env = init_env().await?;
+    if ENV.set(env.clone()).is_err() {
+        panic!("ENV should only be initialized once");
+    }
+
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
     let mut set = JoinSet::new();

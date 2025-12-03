@@ -38,10 +38,9 @@ RUN cargo build --release --target x86_64-unknown-linux-gnu --package bot
 # Capture git commit message
 RUN git log -1 --pretty=%B > /app/commit.txt || echo "unknown" > /app/commit.txt
 
-# Runtime stage - uses base image from Docker Hub
+# Runtime stage - uses Ollama base image with ROCm support
 # Explicitly use linux/amd64 platform to ensure x86_64 final image
-# Replace 'zireael9797' with your actual Docker Hub username
-FROM --platform=linux/amd64 zireael9797/bot-base:latest
+FROM --platform=linux/amd64 bot-base-ollama:latest
 
 # Copy binary from builder (only this changes on code updates)
 # cross builds to target/x86_64-unknown-linux-gnu/release
@@ -50,9 +49,16 @@ COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/bot /app/bot
 # Copy commit message file
 COPY --from=builder /app/commit.txt /app/commit.txt
 
+# Copy the entrypoint script to start Ollama before the bot
+COPY bot_hive/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 # Note: configuration.rs must be provided at build time
 # The DISCORD_TOKEN is read from configuration::client_tokens::DISCORD_TOKEN at compile time
 # Make sure src/configuration.rs exists with your token before building
 
-# Run the bot
-CMD ["/app/bot"]
+# Expose Ollama port (optional, for external access)
+EXPOSE 11434
+
+# Use entrypoint script to start Ollama service, then run the bot
+ENTRYPOINT ["/docker-entrypoint.sh"]

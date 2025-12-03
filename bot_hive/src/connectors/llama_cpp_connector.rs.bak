@@ -1,6 +1,6 @@
 use crate::{
     models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
-    services::llm::LlmService,
+    services::llama_cpp::LlamaCppService,
     Env,
 };
 use llama_cpp_2::model::Special;
@@ -34,31 +34,31 @@ struct LLMResponse {
 }
 
 async fn get_response_from_llm(
-    llm: &LlmService,
+    llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
     history: &[HistoryEntry],
 ) -> anyhow::Result<LLMResponse> {
-    let mut ctx = llm.new_context()?;
+    let mut ctx = llama_cpp.new_context()?;
 
     let dynamic_prompt = build_dynamic_prompt(current_input, history);
 
-    let base_token_count = llm.load_base_prompt(&mut ctx)?;
+    let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
 
-    let total_tokens = llm.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
+    let total_tokens = llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
 
-    let mut sampler = llm.create_sampler();
+    let mut sampler = llama_cpp.create_sampler();
 
-    let mut batch = LlmService::new_batch();
+    let mut batch = LlamaCppService::new_batch();
     let mut generated_tokens = Vec::new();
 
     let batch_tokens = total_tokens - base_token_count;
     let mut last_batch_idx = batch_tokens as i32 - 1;
     let mut n_cur = total_tokens;
 
-    for _ in 0..LlmService::get_max_generation_tokens() {
+    for _ in 0..LlamaCppService::get_max_generation_tokens() {
         let new_token = sampler.sample(&ctx, last_batch_idx);
 
-        if llm.is_eog_token(new_token) {
+        if llama_cpp.is_eog_token(new_token) {
             break;
         }
 
@@ -75,7 +75,7 @@ async fn get_response_from_llm(
 
     let mut response_bytes = Vec::new();
     for token in &generated_tokens {
-        if let Ok(output) = llm.token_to_str(*token, Special::Tokenize) {
+        if let Ok(output) = llama_cpp.token_to_str(*token, Special::Tokenize) {
             response_bytes.extend_from_slice(output.as_bytes());
         }
     }
@@ -91,16 +91,24 @@ async fn get_response_from_llm(
 }
 
 pub async fn get_llm_decision(
-    env: Arc<Env>,
-    current_input: LLMInput,
-    history: Vec<HistoryEntry>,
+    _env: Arc<Env>,
+    _current_input: LLMInput,
+    _history: Vec<HistoryEntry>,
 ) -> UserAction {
-    let llm_result = get_response_from_llm(env.llm.as_ref(), &current_input, &history).await;
-
-    eprintln!("[DEBUG] llm_result: {:#?}", llm_result);
-
-    match llm_result {
-        Ok(llm_response) => UserAction::LLMDecisionResult(Ok(llm_response.outcome)),
-        Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
-    }
+    // Llama.cpp connector disconnected - no longer functional
+    // Base image doesn't have GGUF file
+    // Use ollama_connector instead
+    
+    // OLD IMPLEMENTATION (commented out):
+    // let llama_cpp_result = get_response_from_llm(env.llama_cpp.as_ref(), &current_input, &history).await;
+    // eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
+    // match llama_cpp_result {
+    //     Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),
+    //     Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
+    // }
+    
+    eprintln!("[ERROR] llama_cpp_connector called but is disconnected - use ollama_connector instead");
+    UserAction::LLMDecisionResult(Err(
+        "Llama.cpp connector is disconnected - use Ollama instead".to_string()
+    ))
 }

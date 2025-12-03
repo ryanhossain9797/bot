@@ -1,24 +1,30 @@
-# Base image with runtime dependencies and model
-# Always build for linux/amd64 (x86_64)
-FROM --platform=linux/amd64 debian:bookworm-slim
+# Base image with Ollama ROCm support and preloaded model
+# Uses Ollama with AMD GPU (ROCm) support
+FROM ollama/ollama:rocm
 
-# Install runtime dependencies
+# Install additional runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
-    libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy model file (large, rarely changes)
-COPY models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
-
-# Copy grammar file
-COPY bot_hive/grammars/response.gbnf /app/grammars/response.gbnf
+# Pre-pull the qwen2.5:14b model into the image
+# This model is comparable to the previous Qwen2.5-14B-Instruct-Q4_K_M.gguf (~8-9GB)
+# Start ollama in background, pull model, then stop
+RUN ollama serve & \
+    OLLAMA_PID=$! && \
+    sleep 5 && \
+    ollama pull qwen2.5:14b && \
+    kill $OLLAMA_PID && \
+    wait $OLLAMA_PID 2>/dev/null || true
 
 # Set environment variables
-ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+ENV OLLAMA_HOST=127.0.0.1:11434
 ENV RUST_LOG=info
+
+# Note: The model is now available via Ollama at /root/.ollama/models/
+# Model size: qwen2.5:14b is approximately 8.9GB (similar to previous 8.37GB model)
 
