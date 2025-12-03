@@ -6,7 +6,7 @@ use crate::{
 use ollama_rs::{
     generation::{
         chat::ChatMessage,
-        parameters::{FormatType, JsonStructure, JsonSchema},
+        parameters::JsonSchema,
     },
 };
 use serde::Deserialize;
@@ -21,50 +21,58 @@ struct LLMResponse {
 fn serialize_input(input: &LLMInput) -> String {
     match input {
         LLMInput::UserMessage(msg) => msg.clone(),
-        LLMInput::ToolResult(result) => {
-            format!("Tool Result: {}", result)
+        LLMInput::ToolResult(result) => result.clone(),
+    }
+}
+
+/// Format tool call as a simple string
+fn format_tool_call(tool_call: &crate::models::user::ToolCall) -> String {
+    match tool_call {
+        crate::models::user::ToolCall::GetWeather { location } => {
+            format!("GetWeather: location=\"{}\"", location)
+        }
+        crate::models::user::ToolCall::WebSearch { query } => {
+            format!("WebSearch: query=\"{}\"", query)
+        }
+        crate::models::user::ToolCall::MathCalculation { operations } => {
+            format!("MathCalculation: {} operations", operations.len())
+        }
+        crate::models::user::ToolCall::VisitUrl { url } => {
+            format!("VisitUrl: url=\"{}\"", url)
         }
     }
 }
 
-/// Build the dynamic prompt from history and current input
-/// This mirrors the llama_cpp implementation for consistency
-fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {
-    let history_json = serde_json::to_string_pretty(history).unwrap_or_else(|_| "[]".to_string());
-    let history_section = format!("Conversation History (JSON):\n{}", history_json);
-
-    let current_input_str = serialize_input(current_input);
-
-    format!(
-        "\n{}\n\n{}\n<|im_start|>assistant\n",
-        history_section, current_input_str
-    )
-}
-
-/// Convert history entries to ChatMessage format for Ollama
-/// The history alternates between Input and Output
+/// Convert history entries to simple line-based format for Ollama
+/// Format: USER: <message> or TOOL RESPONSE: <result>
+///         ASSISTANT FINAL: "..." or ASSISTANT TOOL CALL: Response: <response> Tool: <tool>
 fn history_to_messages(history: &[HistoryEntry]) -> Vec<ChatMessage> {
     let mut messages = Vec::new();
     
     for entry in history {
         match entry {
             HistoryEntry::Input(input) => {
-                let content = serialize_input(input);
+                let content = match input {
+                    LLMInput::UserMessage(msg) => format!("USER: {}", msg),
+                    LLMInput::ToolResult(result) => format!("TOOL RESPONSE: {}", result),
+                };
                 messages.push(ChatMessage::user(content));
             }
             HistoryEntry::Output(output) => {
-                // Convert LLMDecisionType to a string representation
                 let content = match output {
-                    LLMDecisionType::Final { response } => response.clone(),
+                    LLMDecisionType::Final { response } => {
+                        format!("ASSISTANT FINAL: \"{}\"", response)
+                    }
                     LLMDecisionType::IntermediateToolCall {
                         maybe_intermediate_response,
                         tool_call,
                     } => {
-                        if let Some(response) = maybe_intermediate_response {
-                            format!("{} (Tool call: {:?})", response, tool_call)
-                        } else {
-                            format!("Tool call: {:?}", tool_call)
-                        }
+                        let response_part = match maybe_intermediate_response {
+                            Some(r) if !r.is_empty() => format!("\"{}\"", r),
+                            _ => "null".to_string(),
+                        };
+                        let tool_part = format_tool_call(tool_call);
+                        format!("ASSISTANT TOOL CALL: Response: {} Tool: {}", response_part, tool_part)
                     }
                 };
                 messages.push(ChatMessage::assistant(content));
@@ -84,25 +92,15 @@ async fn get_response_from_ollama(
     // Build the full conversation: system prompt + history + current input
     let mut messages = vec![ChatMessage::system(ollama.system_prompt().to_string())];
     
-    // Add history messages
+    // Add history messages in simple line-based format
     messages.extend(history_to_messages(history));
     
-    // Add current input
-    let current_input_str = serialize_input(current_input);
+    // Add current input in simple format
+    let current_input_str = match current_input {
+        LLMInput::UserMessage(msg) => format!("USER: {}", msg),
+        LLMInput::ToolResult(result) => format!("TOOL RESPONSE: {}", result),
+    };
     messages.push(ChatMessage::user(current_input_str));
-    
-    // For Ollama, we need to include the history in the prompt format
-    // Since Ollama handles conversation history natively, we can use the messages directly
-    // But we also need to include the history JSON in the prompt for context
-    // Let's build a combined approach: use the dynamic prompt format in the last user message
-    let dynamic_prompt = build_dynamic_prompt(current_input, history);
-    
-    // Replace the last user message with the formatted prompt
-    // The last message should be the current input, replace it with the formatted version
-    if !messages.is_empty() {
-        let last_idx = messages.len() - 1;
-        messages[last_idx] = ChatMessage::user(dynamic_prompt);
-    }
     
     // Generate response with structured JSON schema to enforce valid tool calls
     let response_text = ollama.generate::<LLMResponse>(messages).await?;
