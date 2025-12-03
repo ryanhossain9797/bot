@@ -17,7 +17,7 @@ const CONTEXT_SIZE: u64 = 8192; // Same as llama_cpp
 const SEED: i32 = 42; // Fixed seed for deterministic responses
 
 // System prompt from llama_cpp - shared across all requests
-const SYSTEM_PROMPT: &str = "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta. Respond with ONLY valid JSON.
+const SYSTEM_PROMPT: &str = "<|im_start|>system\nYour name is Terminal Alpha Beta. Respond with ONLY valid JSON.
 
 RULES:
 1. Keep responses brief and to the point.
