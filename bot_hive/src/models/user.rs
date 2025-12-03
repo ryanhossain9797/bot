@@ -71,6 +71,7 @@ pub enum ToolCall {
     GetWeather { location: String },
     WebSearch { query: String },
     MathCalculation { operations: Vec<MathOperation> },
+    VisitUrl { url: String },
 }
 
 /// Represents the input to the LLM decision-making process

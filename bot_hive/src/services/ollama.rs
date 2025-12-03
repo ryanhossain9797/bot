@@ -31,6 +31,7 @@ RESPONSE FORMAT:
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Searching for information about Rust programming\",\"tool_call\":{\"WebSearch\":{\"query\":\"Rust programming language\"}}}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"WebSearch\":{\"query\":\"latest AI developments 2024\"}}}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Calculating 5 + 3 and 4 × 7\",\"tool_call\":{\"MathCalculation\":{\"operations\":[{\"Add\":[5.0, 3.0]}, {\"Mul\":[4.0, 7.0]}]}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Reading article content\",\"tool_call\":{\"VisitUrl\":{\"url\":\"https://example.com/article\"}}}}}
 
 TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.

@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use std::sync::Arc;
+use scraper::{Html, Selector};
 
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
@@ -26,6 +27,12 @@ pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
         ToolCall::MathCalculation { operations } => {
             let result = execute_math(operations).await;
             UserAction::ToolResult(Ok(result))
+        }
+        ToolCall::VisitUrl { url } => {
+            match fetch_url_content(&url).await {
+                Ok(content) => UserAction::ToolResult(Ok(content)),
+                Err(e) => UserAction::ToolResult(Err(e.to_string())),
+            }
         }
     }
 }
@@ -223,6 +230,100 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
     );
 
     Ok(formatted_output)
+}
+
+async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        .build()?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch URL: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "HTTP error {}: {}",
+            status,
+            status.canonical_reason().unwrap_or("Unknown error")
+        ));
+    }
+
+    let html_content = response
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
+
+    // Parse HTML and extract readable content
+    let document = Html::parse_document(&html_content);
+    
+    // Try to find main content areas in order of preference
+    let content_selectors = vec![
+        Selector::parse("article").ok(),
+        Selector::parse("main").ok(),
+        Selector::parse("[role='main']").ok(),
+        Selector::parse(".content, .post, .entry, .article-content").ok(),
+        Selector::parse("body").ok(),
+    ];
+
+    let mut extracted_text = String::new();
+    
+    for selector_opt in content_selectors {
+        if let Some(selector) = selector_opt {
+            if let Some(element) = document.select(&selector).next() {
+                // Extract text from this element and its children
+                let text = element.text().collect::<Vec<_>>().join(" ");
+                
+                // Clean up whitespace: collapse multiple spaces/newlines into single spaces
+                let cleaned: String = text
+                    .lines()
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                
+                if !cleaned.is_empty() && cleaned.len() > 100 {
+                    // Found substantial content
+                    extracted_text = cleaned;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Fallback: extract all text from body if no main content found
+    if extracted_text.is_empty() {
+        let body_selector = Selector::parse("body").unwrap();
+        if let Some(body) = document.select(&body_selector).next() {
+            extracted_text = body.text().collect::<Vec<_>>().join(" ");
+        } else {
+            // Last resort: use entire document
+            extracted_text = document.root_element().text().collect::<Vec<_>>().join(" ");
+        }
+    }
+
+    // Clean up: remove excessive whitespace, normalize newlines
+    let cleaned_text: String = extracted_text
+        .lines()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Limit content length to avoid overwhelming the LLM (keep first 8000 chars)
+    let max_length = 8000;
+    let final_text = if cleaned_text.len() > max_length {
+        format!("{}...\n\n[Content truncated - original length: {} characters]", 
+                &cleaned_text[..max_length], cleaned_text.len())
+    } else {
+        cleaned_text
+    };
+
+    Ok(format!("URL: {}\n\nContent:\n{}", url, final_text))
 }
 
 #[cfg(test)]

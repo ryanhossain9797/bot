@@ -8,6 +8,16 @@ ollama serve &
 # Store the PID
 OLLAMA_PID=$!
 
+# Cleanup function to kill Ollama when script exits
+cleanup() {
+    echo "Cleaning up Ollama process (PID: $OLLAMA_PID)..."
+    kill $OLLAMA_PID 2>/dev/null || true
+    wait $OLLAMA_PID 2>/dev/null || true
+}
+
+# Set trap to cleanup on script exit (normal exit, SIGTERM, SIGINT)
+trap cleanup EXIT TERM INT
+
 # Wait for Ollama to be ready
 echo "Waiting for Ollama to be ready..."
 max_attempts=30
@@ -39,8 +49,14 @@ fi
 
 # Run the bot application
 echo "Starting the bot application..."
-exec /app/bot
+/app/bot
 
-# If the app exits, cleanup
-kill $OLLAMA_PID 2>/dev/null || true
+# Capture exit code
+EXIT_CODE=$?
+
+# Cleanup will happen automatically via trap, but we can also do it explicitly here
+# The trap ensures cleanup happens even if the script is terminated
+cleanup
+
+exit $EXIT_CODE
 
