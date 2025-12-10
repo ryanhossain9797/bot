@@ -3,26 +3,13 @@ use crate::{
     services::ollama::OllamaService,
     Env,
 };
-use ollama_rs::{
-    generation::{
-        chat::ChatMessage,
-        parameters::JsonSchema,
-    },
-};
+use ollama_rs::generation::{chat::ChatMessage, parameters::JsonSchema};
 use serde::Deserialize;
 use std::{io::Write, sync::Arc};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct LLMResponse {
     outcome: LLMDecisionType,
-}
-
-/// Serialize LLMInput to a user message string
-fn serialize_input(input: &LLMInput) -> String {
-    match input {
-        LLMInput::UserMessage(msg) => msg.clone(),
-        LLMInput::ToolResult(result) => result.clone(),
-    }
 }
 
 /// Format tool call as a simple string
@@ -48,7 +35,7 @@ fn format_tool_call(tool_call: &crate::models::user::ToolCall) -> String {
 ///         ASSISTANT FINAL: "..." or ASSISTANT TOOL CALL: Response: <response> Tool: <tool>
 fn history_to_messages(history: &[HistoryEntry]) -> Vec<ChatMessage> {
     let mut messages = Vec::new();
-    
+
     for entry in history {
         match entry {
             HistoryEntry::Input(input) => {
@@ -72,14 +59,17 @@ fn history_to_messages(history: &[HistoryEntry]) -> Vec<ChatMessage> {
                             _ => "null".to_string(),
                         };
                         let tool_part = format_tool_call(tool_call);
-                        format!("ASSISTANT TOOL CALL: Response: {} Tool: {}", response_part, tool_part)
+                        format!(
+                            "ASSISTANT TOOL CALL: Response: {} Tool: {}",
+                            response_part, tool_part
+                        )
                     }
                 };
                 messages.push(ChatMessage::assistant(content));
             }
         }
     }
-    
+
     messages
 }
 
@@ -91,28 +81,28 @@ async fn get_response_from_ollama(
 ) -> anyhow::Result<LLMResponse> {
     // Build the full conversation: system prompt + history + current input
     let mut messages = vec![ChatMessage::system(ollama.system_prompt().to_string())];
-    
+
     // Add history messages in simple line-based format
     messages.extend(history_to_messages(history));
-    
+
     // Add current input in simple format
     let current_input_str = match current_input {
         LLMInput::UserMessage(msg) => format!("USER: {}", msg),
         LLMInput::ToolResult(result) => format!("TOOL RESPONSE: {}", result),
     };
     messages.push(ChatMessage::user(current_input_str));
-    
+
     // Generate response with structured JSON schema to enforce valid tool calls
     let response_text = ollama.generate::<LLMResponse>(messages).await?;
-    
+
     // Print for debugging (matching llama_cpp behavior)
     print!("{}", response_text);
     println!();
     let _ = std::io::stdout().flush();
-    
+
     // Parse JSON response
     let parsed_response: LLMResponse = serde_json::from_str(&response_text)?;
-    
+
     Ok(parsed_response)
 }
 
@@ -121,11 +111,8 @@ pub async fn get_llm_decision(
     current_input: LLMInput,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
-    let ollama_result = get_response_from_ollama(
-        env.ollama.as_ref(),
-        &current_input,
-        &history,
-    ).await;
+    let ollama_result =
+        get_response_from_ollama(env.ollama.as_ref(), &current_input, &history).await;
 
     eprintln!("[DEBUG] ollama_result: {:#?}", ollama_result);
 

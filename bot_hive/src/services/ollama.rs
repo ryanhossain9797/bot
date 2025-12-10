@@ -35,9 +35,9 @@ RESPONSE FORMAT:
 
 TOOLS (ONLY USE THESE - DO NOT INVENT NEW TOOLS):
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
-- WebSearch: Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
+- WebSearch: Usually used in tandem with VisitUrl. Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
+- VisitUrl: Usually used in tandem with WebSearch. Visits a URL and returns the content of the page. Requires a URL string. Use this to visit websites and extract information. Example: {\"VisitUrl\":{\"url\":\"https://example.com/article\"}}
 - MathCalculation: Performs mathematical operations. Requires a list of operations. Each operation can be: Add(a, b), Sub(a, b), Mul(a, b), Div(a, b), or Exp(a, b) where a and b are numbers (can be integers or decimals). Example: {\"MathCalculation\":{\"operations\":[{\"Add\":[5.0, 3.0]}, {\"Mul\":[4.5, 7.2]}]}}
-- VisitUrl: Visits a URL and returns the content of the page. Requires a URL string. Use this to visit websites and extract information. Example: {\"VisitUrl\":{\"url\":\"https://example.com/article\"}}
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - CRITICAL: Only use existing tools. Never invent other tools.
 
@@ -47,7 +47,7 @@ It will contain both user messages and tool call results.<|im_end|>";
 
 /// Ollama service for LLM inference using ollama_rs crate
 /// This replaces the llama_cpp service
-/// 
+///
 /// The Ollama client is Send + Sync (it's an HTTP client wrapper)
 pub struct OllamaService {
     client: Arc<Ollama>,
@@ -57,7 +57,7 @@ pub struct OllamaService {
 impl OllamaService {
     pub async fn new() -> anyhow::Result<Self> {
         let client = Arc::new(Ollama::new(OLLAMA_HOST.to_string(), OLLAMA_PORT));
-        
+
         // Verify connection by listing models
         match client.list_local_models().await {
             Ok(models) => {
@@ -65,12 +65,15 @@ impl OllamaService {
                 for model in &models {
                     println!("  - {}", model.name);
                 }
-                
+
                 // Verify our model is available
                 if models.iter().any(|m| m.name == OLLAMA_MODEL) {
                     println!("Model '{}' is available.", OLLAMA_MODEL);
                 } else {
-                    eprintln!("Warning: Model '{}' not found. Available models listed above.", OLLAMA_MODEL);
+                    eprintln!(
+                        "Warning: Model '{}' not found. Available models listed above.",
+                        OLLAMA_MODEL
+                    );
                 }
             }
             Err(e) => {
@@ -102,24 +105,41 @@ impl OllamaService {
         &self,
         messages: Vec<ChatMessage>,
     ) -> anyhow::Result<String> {
-        let request = ChatMessageRequest::new(
-            self.model.clone(),
-            messages,
-        )
-        .format(FormatType::StructuredJson(Box::new(
-            JsonStructure::new::<T>()
-        )))
-        .options(
-            ModelOptions::default()
-                .seed(SEED)
-                .temperature(TEMPERATURE)
-                .num_ctx(CONTEXT_SIZE)
-                .num_predict(MAX_GENERATION_TOKENS as i32)
-        )
-        .keep_alive(KeepAlive::Until {
-            time: 30,
-            unit: TimeUnit::Minutes,
-        });
+        let request = ChatMessageRequest::new(self.model.clone(), messages)
+            .format(FormatType::StructuredJson(Box::new(
+                JsonStructure::new::<T>(),
+            )))
+            .options(
+                ModelOptions::default()
+                    .seed(SEED)
+                    .temperature(TEMPERATURE)
+                    .num_ctx(CONTEXT_SIZE)
+                    .num_predict(MAX_GENERATION_TOKENS as i32),
+            )
+            .keep_alive(KeepAlive::Until {
+                time: 30,
+                unit: TimeUnit::Minutes,
+            });
+
+        let response = self.client.send_chat_messages(request).await?;
+        Ok(response.message.content)
+    }
+
+    /// Generate a simple text completion without structured JSON
+    /// Used for tasks like summarization or content extraction
+    pub async fn generate_simple(&self, messages: Vec<ChatMessage>) -> anyhow::Result<String> {
+        let request = ChatMessageRequest::new(self.model.clone(), messages)
+            .options(
+                ModelOptions::default()
+                    .seed(SEED)
+                    .temperature(TEMPERATURE)
+                    .num_ctx(CONTEXT_SIZE)
+                    .num_predict(MAX_GENERATION_TOKENS as i32),
+            )
+            .keep_alive(KeepAlive::Until {
+                time: 30,
+                unit: TimeUnit::Minutes,
+            });
 
         let response = self.client.send_chat_messages(request).await?;
         Ok(response.message.content)

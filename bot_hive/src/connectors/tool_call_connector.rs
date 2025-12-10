@@ -1,10 +1,11 @@
+use ollama_rs::generation::chat::ChatMessage;
 use serde::Deserialize;
 use std::sync::Arc;
-use scraper::{Html, Selector};
 
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{MathOperation, ToolCall, UserAction},
+    services::ollama::OllamaService,
     Env,
 };
 
@@ -23,24 +24,22 @@ pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
         ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        }
+        },
         ToolCall::MathCalculation { operations } => {
             let result = execute_math(operations).await;
             UserAction::ToolResult(Ok(result))
         }
-        ToolCall::VisitUrl { url } => {
-            match fetch_url_content(&url).await {
-                Ok(content) => UserAction::ToolResult(Ok(content)),
-                Err(e) => UserAction::ToolResult(Err(e.to_string())),
-            }
-        }
+        ToolCall::VisitUrl { url } => match fetch_url_content(env.clone(), &url).await {
+            Ok(content) => UserAction::ToolResult(Ok(content)),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
     }
 }
 
 /// Execute a list of math operations and return the results
 async fn execute_math(operations: Vec<MathOperation>) -> String {
     let mut results = Vec::new();
-    
+
     for (index, op) in operations.iter().enumerate() {
         let result = match op {
             MathOperation::Add(a, b) => {
@@ -70,7 +69,7 @@ async fn execute_math(operations: Vec<MathOperation>) -> String {
         };
         results.push(format!("Operation {}: {}", index + 1, result));
     }
-    
+
     results.join("\n")
 }
 
@@ -239,7 +238,47 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
     Ok(formatted_output)
 }
 
-async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
+/// Extract clean text from HTML using Ollama LLM
+/// The LLM will remove HTML tags and decide whether to summarize based on content length
+async fn clean_and_extract_content(
+    ollama: &OllamaService,
+    raw_html: &str,
+) -> anyhow::Result<String> {
+    let system_prompt = "You are a helpful assistant that extracts clean, readable text from HTML content. Your job is to remove ALL HTML tags, scripts, styles, and markup, returning ONLY pure text. If the extracted text is very long, provide a concise summary instead.";
+
+    let user_prompt = format!(
+        "Please extract clean text from this HTML content. Remove all tags and markup. If the resulting text is too long for a conversation, summarize it instead:\n\n{}",
+        raw_html
+    );
+
+    let messages = vec![
+        ChatMessage::system(system_prompt.to_string()),
+        ChatMessage::user(user_prompt),
+    ];
+
+    match ollama.generate_simple(messages).await {
+        Ok(cleaned_content) => Ok(cleaned_content),
+        Err(e) => {
+            eprintln!(
+                "[WARN] Ollama content extraction failed: {}. Returning raw HTML.",
+                e
+            );
+            // Fallback: return truncated raw HTML if LLM fails
+            let max_chars = 2000;
+            let truncated = if raw_html.chars().count() > max_chars {
+                format!(
+                    "{}\n\n[Content truncated due to processing error]",
+                    raw_html.chars().take(max_chars).collect::<String>()
+                )
+            } else {
+                raw_html.to_string()
+            };
+            Ok(truncated)
+        }
+    }
+}
+
+async fn fetch_url_content(env: Arc<Env>, url: &str) -> anyhow::Result<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -265,75 +304,10 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    // Parse HTML and extract readable content
-    let document = Html::parse_document(&html_content);
-    
-    // Try to find main content areas in order of preference
-    let content_selectors = vec![
-        Selector::parse("article").ok(),
-        Selector::parse("main").ok(),
-        Selector::parse("[role='main']").ok(),
-        Selector::parse(".content, .post, .entry, .article-content").ok(),
-        Selector::parse("body").ok(),
-    ];
+    // Use Ollama to extract clean text and optionally summarize
+    let cleaned_content = clean_and_extract_content(env.ollama.as_ref(), &html_content).await?;
 
-    let mut extracted_text = String::new();
-    
-    for selector_opt in content_selectors {
-        if let Some(selector) = selector_opt {
-            if let Some(element) = document.select(&selector).next() {
-                // Extract text from this element and its children
-                let text = element.text().collect::<Vec<_>>().join(" ");
-                
-                // Clean up whitespace: collapse multiple spaces/newlines into single spaces
-                let cleaned: String = text
-                    .lines()
-                    .map(|line| line.trim())
-                    .filter(|line| !line.is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                
-                if !cleaned.is_empty() && cleaned.len() > 100 {
-                    // Found substantial content
-                    extracted_text = cleaned;
-                    break;
-                }
-            }
-        }
-    }
-
-    // Fallback: extract all text from body if no main content found
-    if extracted_text.is_empty() {
-        let body_selector = Selector::parse("body").unwrap();
-        if let Some(body) = document.select(&body_selector).next() {
-            extracted_text = body.text().collect::<Vec<_>>().join(" ");
-        } else {
-            // Last resort: use entire document
-            extracted_text = document.root_element().text().collect::<Vec<_>>().join(" ");
-        }
-    }
-
-    // Clean up: remove excessive whitespace, normalize newlines
-    let cleaned_text: String = extracted_text
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    // Limit content length to avoid overwhelming the LLM (keep first 8000 characters)
-    let max_chars = 8000;
-    let char_count = cleaned_text.chars().count();
-    let final_text = if char_count > max_chars {
-        // Safely truncate at character boundary (not byte boundary)
-        let truncated: String = cleaned_text.chars().take(max_chars).collect();
-        format!("{}...\n\n[Content truncated - original length: {} characters]", 
-                truncated, char_count)
-    } else {
-        cleaned_text
-    };
-
-    Ok(format!("URL: {}\n\nContent:\n{}", url, final_text))
+    Ok(format!("URL: {}\n\nContent:\n{}", url, cleaned_content))
 }
 
 #[cfg(test)]
