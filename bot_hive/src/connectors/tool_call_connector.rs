@@ -1,13 +1,12 @@
-use ollama_rs::generation::chat::ChatMessage;
-use serde::Deserialize;
-use std::sync::Arc;
-
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{MathOperation, ToolCall, UserAction},
-    services::ollama::OllamaService,
     Env,
 };
+use scraper::{Html, Selector};
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
     match tool_call {
@@ -29,7 +28,7 @@ pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
             let result = execute_math(operations).await;
             UserAction::ToolResult(Ok(result))
         }
-        ToolCall::VisitUrl { url } => match fetch_url_content(env.clone(), &url).await {
+        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
@@ -238,50 +237,18 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
     Ok(formatted_output)
 }
 
-/// Extract clean text from HTML using Ollama LLM
-/// The LLM will remove HTML tags and decide whether to summarize based on content length
-async fn clean_and_extract_content(
-    ollama: &OllamaService,
-    raw_html: &str,
-) -> anyhow::Result<String> {
-    let system_prompt = "You are a helpful assistant that extracts clean, readable text from HTML content. Your job is to remove ALL HTML tags, scripts, styles, and markup, returning ONLY pure text. If the extracted text is very long, provide a concise summary instead.";
-
-    let user_prompt = format!(
-        "Please extract clean text from this HTML content. Remove all tags and markup. If the resulting text is too long for a conversation, summarize it instead:\n\n{}",
-        raw_html
-    );
-
-    let messages = vec![
-        ChatMessage::system(system_prompt.to_string()),
-        ChatMessage::user(user_prompt),
-    ];
-
-    match ollama.generate_simple(messages).await {
-        Ok(cleaned_content) => Ok(cleaned_content),
-        Err(e) => {
-            eprintln!(
-                "[WARN] Ollama content extraction failed: {}. Returning raw HTML.",
-                e
-            );
-            // Fallback: return truncated raw HTML if LLM fails
-            let max_chars = 2000;
-            let truncated = if raw_html.chars().count() > max_chars {
-                format!(
-                    "{}\n\n[Content truncated due to processing error]",
-                    raw_html.chars().take(max_chars).collect::<String>()
-                )
-            } else {
-                raw_html.to_string()
-            };
-            Ok(truncated)
-        }
-    }
+#[derive(Debug)]
+struct ExtractedPage {
+    final_url: String,
+    content: String,
+    links: Vec<(String, String)>,
 }
 
-async fn fetch_url_content(env: Arc<Env>, url: &str) -> anyhow::Result<String> {
+async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
 
     let response = client
@@ -292,22 +259,130 @@ async fn fetch_url_content(env: Arc<Env>, url: &str) -> anyhow::Result<String> {
 
     let status = response.status();
     if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "HTTP error {}: {}",
-            status,
-            status.canonical_reason().unwrap_or("Unknown error")
-        ));
+        return Err(anyhow::anyhow!("HTTP error {}", status));
     }
 
-    let html_content = response
+    let final_url = response.url().to_string();
+
+    // Check content type
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !content_type.to_lowercase().contains("text/html") {
+        return Err(anyhow::anyhow!("URL is not HTML"));
+    }
+
+    let html_body = response
         .text()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    // Use Ollama to extract clean text and optionally summarize
-    let cleaned_content = clean_and_extract_content(env.ollama.as_ref(), &html_content).await?;
+    // println!("DEBUG: Raw HTML fetched: {}", html_body);
 
-    Ok(format!("URL: {}\n\nContent:\n{}", url, cleaned_content))
+    // Readability extraction
+    let mut cursor = std::io::Cursor::new(html_body.as_bytes());
+    let url_obj = reqwest::Url::parse(&final_url)
+        .map_err(|e| anyhow::anyhow!("Failed to parse final URL: {}", e))?;
+
+    let product = readability::extractor::extract(&mut cursor, &url_obj)
+        .map_err(|e| anyhow::anyhow!("Readability extraction failed: {}", e))?;
+
+    let content_html = product.content;
+    let page_title = product.title;
+
+    // Scraper for text and link extraction
+    let fragment = Html::parse_fragment(&content_html);
+
+    // Extract text
+    let mut text_parts = Vec::new();
+
+    // Add title first if present
+    if !page_title.is_empty() {
+        text_parts.push(page_title);
+    }
+
+    // Select block elements to preserve some structure
+    let block_selector = Selector::parse("p, h1, h2, h3, h4, h5, h6, li, div").unwrap();
+    // If we just extract all text, we might lose paragraph breaks.
+    // Let's rely on readability's structure.
+    // Strategy: Iterate over elements, if it's a block, add newline.
+    // We can iterate over all text nodes.
+
+    // Let's try a robust approach: extract text from everything, but try to insert newlines for P tags.
+    // Since scraper iterates nodes, this is hard without recursion.
+    // Simplified approach: Select relevant elements.
+
+    for element in fragment.select(&block_selector) {
+        let text = element.text().collect::<Vec<_>>().join(" ");
+        let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !cleaned.is_empty() {
+            text_parts.push(cleaned);
+        }
+    }
+
+    // Fallback if no blocks found (unlikely with readability)
+    if text_parts.is_empty() {
+        let text = fragment.root_element().text().collect::<Vec<_>>().join(" ");
+        let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !cleaned.is_empty() {
+            text_parts.push(cleaned);
+        }
+    }
+
+    let clean_text = text_parts.join("\n\n");
+
+    // Link extraction
+    let link_selector = Selector::parse("a").unwrap();
+    let mut links = Vec::new();
+    let mut seen_links = HashSet::new();
+
+    for element in fragment.select(&link_selector) {
+        if let Some(href) = element.value().attr("href") {
+            let text = element.text().collect::<Vec<_>>().join(" ");
+            let text_trimmed = text.trim();
+
+            if !text_trimmed.is_empty() && !href.is_empty() {
+                // Deduplicate by href
+                if seen_links.insert(href.to_string()) {
+                    links.push((text_trimmed.to_string(), href.to_string()));
+                }
+            }
+        }
+    }
+
+    Ok(ExtractedPage {
+        final_url,
+        content: clean_text,
+        links,
+    })
+}
+
+async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
+    let extracted = fetch_page(url).await?;
+
+    let mut output = String::new();
+    output.push_str(&format!("URL: {}\n\n", extracted.final_url));
+    output.push_str("Content:\n");
+    output.push_str(&extracted.content);
+
+    if !extracted.links.is_empty() {
+        output.push_str("\n\nLinks:\n");
+        for (text, href) in extracted.links.iter().take(20) {
+            // Limit links to avoid spam
+            output.push_str(&format!("- [{}]({})\n", text, href));
+        }
+        if extracted.links.len() > 20 {
+            output.push_str(&format!(
+                "... and {} more links.",
+                extracted.links.len() - 20
+            ));
+        }
+    }
+
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -367,5 +442,18 @@ mod tests {
         assert!(result.contains("5.5 + 3.2 = 8.7"));
         assert!(result.contains("7 ÷ 2 = 3.5"));
         assert!(result.contains("2 ^ 0.5")); // Should calculate sqrt(2)
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_content_real() {
+        // Test with example.com
+        let content = fetch_url_content("https://example.com").await.unwrap();
+        // println!("{}", content); // Keep it clean
+        assert!(content.contains("Example Domain"));
+        // The text on example.com seems to vary or has changed.
+        // We match parts of the text found in the debug run:
+        // "This domain is for use in documentation examples without needing permission."
+        assert!(content.contains("This domain is for use in documentation examples"));
+        assert!(content.contains("https://iana.org/domains/example"));
     }
 }
