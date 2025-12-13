@@ -280,7 +280,7 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    println!("DEBUG: Raw HTML fetched: {}", html_body);
+    // println!("DEBUG: Raw HTML fetched: {}", html_body);
 
     // Readability extraction
     let mut cursor = std::io::Cursor::new(html_body.as_bytes());

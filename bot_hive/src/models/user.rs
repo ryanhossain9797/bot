@@ -104,7 +104,7 @@ pub enum HistoryEntry {
     Output(LLMDecisionType),
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub enum UserAction {
     ForceReset,
     NewMessage {
@@ -115,4 +115,39 @@ pub enum UserAction {
     LLMDecisionResult(Result<LLMDecisionType, String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<String, String>),
+}
+
+impl std::fmt::Debug for UserAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ForceReset => write!(f, "ForceReset"),
+            Self::NewMessage {
+                msg,
+                start_conversation,
+            } => f
+                .debug_struct("NewMessage")
+                .field("msg", msg)
+                .field("start_conversation", start_conversation)
+                .finish(),
+            Self::Timeout => write!(f, "Timeout"),
+            Self::LLMDecisionResult(res) => f.debug_tuple("LLMDecisionResult").field(res).finish(),
+            Self::MessageSent(res) => f.debug_tuple("MessageSent").field(res).finish(),
+            Self::ToolResult(res) => match res {
+                Ok(content) => {
+                    let mut s = content.clone();
+                    if s.len() > 200 {
+                        s.truncate(200);
+                        s.push_str("... (truncated)");
+                    }
+                    f.debug_tuple("ToolResult")
+                        .field(&Ok::<String, String>(s))
+                        .finish()
+                }
+                Err(e) => f
+                    .debug_tuple("ToolResult")
+                    .field(&Err::<String, String>(e.clone()))
+                    .finish(),
+            },
+        }
+    }
 }
