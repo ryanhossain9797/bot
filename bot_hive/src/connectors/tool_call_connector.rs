@@ -1,6 +1,6 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
-    models::user::{MathOperation, ToolCall, UserAction},
+    models::user::{MathOperation, ToolCall, UserAction, MAX_SEARCH_DESCRIPTION_LENGTH},
     Env,
 };
 use scraper::{Html, Selector};
@@ -214,13 +214,21 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
             let title = result.title.as_deref().unwrap_or("null");
             let url = result.url.as_deref().unwrap_or("null");
             let description = result.description.as_deref().unwrap_or("null");
-            // Truncate description to 200 characters max (at character boundary)
-            let truncated_description = if description.chars().count() > 200 {
-                let truncated: String = description.chars().take(200).collect();
-                format!("{}...", truncated)
+            // Truncate description to MAX_SEARCH_DESCRIPTION_LENGTH characters max (at character boundary)
+            let truncated: String = if description.chars().count() > MAX_SEARCH_DESCRIPTION_LENGTH {
+                description
+                    .chars()
+                    .take(MAX_SEARCH_DESCRIPTION_LENGTH)
+                    .collect()
             } else {
                 description.to_string()
             };
+            let truncated_description =
+                if description.chars().count() > MAX_SEARCH_DESCRIPTION_LENGTH {
+                    format!("{}...", truncated)
+                } else {
+                    description.to_string()
+                };
             format!(
                 "Title: {}\nURL: {}\nDescription: {}",
                 title, url, truncated_description

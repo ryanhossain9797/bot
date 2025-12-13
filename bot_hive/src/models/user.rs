@@ -1,11 +1,15 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
+pub const MAX_TOOL_OUTPUT_LENGTH: usize = 800;
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
     Telegram,
     Discord,
 }
+
 impl UserChannel {
     fn to_string(&self) -> &'static str {
         match self {
@@ -86,6 +90,7 @@ pub enum LLMInput {
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum LLMDecisionType {
     IntermediateToolCall {
+        thoughts: String,
         maybe_intermediate_response: Option<String>,
         tool_call: ToolCall,
     },
@@ -135,8 +140,8 @@ impl std::fmt::Debug for UserAction {
             Self::ToolResult(res) => match res {
                 Ok(content) => {
                     let mut s = content.clone();
-                    if s.len() > 200 {
-                        s.truncate(200);
+                    if s.len() > MAX_TOOL_OUTPUT_LENGTH {
+                        s.truncate(MAX_TOOL_OUTPUT_LENGTH);
                         s.push_str("... (truncated)");
                     }
                     f.debug_tuple("ToolResult")

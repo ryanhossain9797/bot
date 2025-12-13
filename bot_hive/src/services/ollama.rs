@@ -28,7 +28,7 @@ RULES:
 
 RESPONSE FORMAT:
 {"outcome":{"Final":{"response":"Hello! How can I help you today?"}}}
-{"outcome":{"IntermediateToolCall":{"maybe_intermediate_response":"Checking weather for London","tool_call":{"GetWeather":{"location":"London"}}}}}
+{"outcome":{"IntermediateToolCall":{"thoughts":"User asked for weather in London. I need to call the weather tool.","maybe_intermediate_response":"Checking weather for London","tool_call":{"GetWeather":{"location":"London"}}}}}
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
@@ -54,6 +54,13 @@ CRITICAL INSTRUCTIONS:
 - ONLY use the tools defined above.
 - WebSearch ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
 - Do not invent new tools.
+
+THOUGHTS FIELD USAGE:
+The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
+- PREFER using a Markdown-style TODO list to track progress (e.g., "- [x] Task 1", "- [ ] Task 2").
+- Include summaries of information gathered so far so you don't lose it.
+- This field is your ONLY memory of previous steps in a multi-step chain.
+- Be detailed enough to fully reconstruct your plan.
 
 HISTORY:
 You receive conversation history as JSON array (oldest to newest). Use it for context.
