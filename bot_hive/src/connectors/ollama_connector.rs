@@ -51,6 +51,7 @@ fn history_to_messages(history: &[HistoryEntry]) -> Vec<ChatMessage> {
                         format!("ASSISTANT FINAL: \"{}\"", response)
                     }
                     LLMDecisionType::IntermediateToolCall {
+                        thoughts: _,
                         maybe_intermediate_response,
                         tool_call,
                     } => {
@@ -81,6 +82,17 @@ async fn get_response_from_ollama(
 ) -> anyhow::Result<LLMResponse> {
     // Build the full conversation: system prompt + history + current input
     let mut messages = vec![ChatMessage::system(ollama.system_prompt().to_string())];
+
+    // Check if there's a thought from the previous turn and inject it
+    if let Some(HistoryEntry::Output(LLMDecisionType::IntermediateToolCall { thoughts, .. })) =
+        history.last()
+    {
+        // Inject as a system message to emphasize context
+        messages.push(ChatMessage::system(format!(
+            "THOUGHTS FROM PREVIOUS ACTION: {}",
+            thoughts
+        )));
+    }
 
     // Add history messages in simple line-based format
     messages.extend(history_to_messages(history));
