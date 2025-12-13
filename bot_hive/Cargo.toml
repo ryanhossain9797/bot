@@ -28,3 +28,4 @@ urlencoding = "2.1"
 ollama-rs = { version = "0.3", default-features = false, features = ["rustls"] }
 schemars = "1.1"
 scraper = "0.24"
+readability = "0.3.0"
