@@ -53,6 +53,7 @@ pub enum ToolCall {
 CRITICAL INSTRUCTIONS:
 - ONLY use the tools defined above.
 - WebSearch ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
+- You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
 
 THOUGHTS FIELD USAGE:
