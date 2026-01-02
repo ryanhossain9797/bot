@@ -149,8 +149,8 @@ pub struct LlamaCppService {
 }
 
 impl LlamaCppService {
-    const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(8192).unwrap();
-    const MAX_GENERATION_TOKENS: usize = 2000;
+    const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(32768).unwrap();
+    const MAX_GENERATION_TOKENS: usize = 8192;
     const TEMPERATURE: f32 = 0.25;
     const GRAMMAR_FILE: &'static str = include_str!("../../grammars/response.gbnf");
 
@@ -192,6 +192,7 @@ impl LlamaCppService {
     pub fn context_params() -> LlamaContextParams {
         LlamaContextParams::default()
             .with_n_ctx(Some(Self::CONTEXT_SIZE))
+            .with_n_batch(4096)
             .with_n_threads(num_cpus::get() as i32)
             .with_n_threads_batch(num_cpus::get() as i32)
     }
