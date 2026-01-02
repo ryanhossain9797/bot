@@ -44,10 +44,10 @@ RULES:
 
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"GetWeather\":{\"location\":\"Paris\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Searching for information about Rust programming\",\"tool_call\":{\"WebSearch\":{\"query\":\"Rust programming language\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"WebSearch\":{\"query\":\"latest AI developments 2024\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"The user wants to know the weather in London. I will use the GetWeather tool.\",\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to find the weather for Paris.\",\"maybe_intermediate_response\":null,\"tool_call\":{\"GetWeather\":{\"location\":\"Paris\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"The user is asking about Rust programming. I'll search for information.\",\"maybe_intermediate_response\":\"Searching for information about Rust programming\",\"tool_call\":{\"WebSearch\":{\"query\":\"Rust programming language\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to find the latest AI developments.\",\"maybe_intermediate_response\":null,\"tool_call\":{\"WebSearch\":{\"query\":\"latest AI developments 2024\"}}}}}
 
 TOOLS:
 - GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
