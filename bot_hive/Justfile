@@ -31,5 +31,6 @@ run_local tag="latest":
         --device=/dev/kfd \
         --device=/dev/dri \
         --group-add video \
+        --group-add render \
         --restart unless-stopped \
         zireael9797/bot:{{tag}}

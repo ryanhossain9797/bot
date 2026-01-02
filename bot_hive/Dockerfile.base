@@ -1,6 +1,6 @@
 # Base image with runtime dependencies and model
 # Always build for linux/amd64 (x86_64)
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 
 # Set working directory
 WORKDIR /app
@@ -15,13 +15,13 @@ COPY grammars/response.gbnf /app/grammars/response.gbnf
 ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
 ENV RUST_LOG=info
 
-# Update package list
-RUN apt-get update
-
-# Install runtime dependencies
-RUN apt-get install -y \
+# Update package list and install runtime dependencies
+RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     libgomp1 \
     libvulkan1 \
+    mesa-vulkan-drivers \
+    vulkan-tools \
+    && (getent group render || groupadd -r render) \
     && rm -rf /var/lib/apt/lists/*

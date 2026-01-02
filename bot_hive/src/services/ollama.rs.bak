@@ -59,7 +59,7 @@ THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
 - PREFER using a Markdown-style TODO list to track progress (e.g., "- [x] Task 1", "- [ ] Task 2").
 - Include summaries of information gathered so far so you don't lose it.
-- This field is your ONLY memory of previous steps in a multi-step chain.
+- This field is your PRIMARY memory of previous steps in a multi-step chain. But you can refer to message history if you REALLY need.
 - Be detailed enough to fully reconstruct your plan.
 
 HISTORY:
