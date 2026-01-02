@@ -1,43 +1,55 @@
 # GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
-# Schema: {
-#   "outcome": {"Final": {"response": string}} | {"IntermediateToolCall": {"maybe_intermediate_response": string | null, "tool_call": {"GetWeather": {location}} | {"WebSearch": {query}}}}
-# }
-# LLMDecisionType enum (Serde's default externally tagged format for nested enums)
+# Matches the Rust schema defined in models/user.rs
 
 root ::= object
 object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "}" ws
 
-# MessageOutcome is an externally tagged enum
+# LLMDecisionType is an externally tagged enum
 outcome-object ::= final-outcome | intermediate-tool-call-outcome
 
 # Final outcome: {"Final": {"response": "..."}}
 final-outcome ::= "{" ws "\"Final\"" ws ":" ws final-value "}" ws
 final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 
-# IntermediateToolCall outcome: {"IntermediateToolCall": {"maybe_intermediate_response": ... | null, "tool_call": {...}}}
+# IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "maybe_intermediate_response": ... | null, "tool_call": {...}}}
 intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
-intermediate-tool-call-value ::= "{" ws "\"maybe_intermediate_response\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
+intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"maybe_intermediate_response\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
 
 # Optional string (null or string)
 optional-string ::= null | string
 
 # ToolCall is an externally tagged enum
-tool-call-object ::= get-weather-tool-call | web-search-tool-call
+tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call
 
-# GetWeather tool call: {"GetWeather": {location}}
+# GetWeather tool call: {"GetWeather": {"location": "..."}}
 get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
-
-# GetWeather struct fields
 get-weather-value ::= "{" ws "\"location\"" ws ":" ws string "}" ws
 
-# WebSearch tool call: {"WebSearch": {query}}
+# WebSearch tool call: {"WebSearch": {"query": "..."}}
 web-search-tool-call ::= "{" ws "\"WebSearch\"" ws ":" ws web-search-value "}" ws
-
-# WebSearch struct fields
 web-search-value ::= "{" ws "\"query\"" ws ":" ws string "}" ws
 
+# MathCalculation tool call: {"MathCalculation": {"operations": [...]}}
+math-calculation-tool-call ::= "{" ws "\"MathCalculation\"" ws ":" ws math-calculation-value "}" ws
+math-calculation-value ::= "{" ws "\"operations\"" ws ":" ws math-operations-array "}" ws
+
+# Math operations array
+math-operations-array ::= "[" ws (math-operation ("," ws math-operation)*)? "]" ws
+
+# MathOperation is an externally tagged enum with tuple variants
+math-operation ::= add-op | sub-op | mul-op | div-op | exp-op
+add-op ::= "{" ws "\"Add\"" ws ":" ws number-pair "}" ws
+sub-op ::= "{" ws "\"Sub\"" ws ":" ws number-pair "}" ws
+mul-op ::= "{" ws "\"Mul\"" ws ":" ws number-pair "}" ws
+div-op ::= "{" ws "\"Div\"" ws ":" ws number-pair "}" ws
+exp-op ::= "{" ws "\"Exp\"" ws ":" ws number-pair "}" ws
+number-pair ::= "[" ws number "," ws number "]" ws
+
+# VisitUrl tool call: {"VisitUrl": {"url": "..."}}
+visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
+visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
+
 # Basic JSON types
-# String with robust UTF-8 support (allows multi-byte characters like Bangla)
 string ::= "\"" string-char* "\""
 string-char ::= [^"\\\x00-\x1F] | "\\" escape-char
 escape-char ::= ["\\bfnrt/] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]

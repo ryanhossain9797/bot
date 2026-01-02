@@ -35,32 +35,58 @@ impl BasePrompt {
     }
 
     const fn build_prompt() -> &'static str {
-        "<|im_start|>system\nYou are Terminal Alpha and Terminal Beta. Respond with ONLY valid JSON.
+        "<|im_start|>system\nYour name is Terminal Alpha Beta. Respond with ONLY valid JSON.
 
 RULES:
-1. Keep responses 1-3 sentences max
-2. No emojis, no markdown
-3. Output must be valid JSON
+1. Keep responses brief and to the point.
+2. NO HTML TAGS. Plain text only.
+3. No emojis, no markdown.
+4. Output must be valid JSON.
 
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"GetWeather\":{\"location\":\"Paris\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":\"Searching for information about Rust programming\",\"tool_call\":{\"WebSearch\":{\"query\":\"Rust programming language\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"maybe_intermediate_response\":null,\"tool_call\":{\"WebSearch\":{\"query\":\"latest AI developments 2024\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
 
-TOOLS:
-- GetWeather: Requires specific location (e.g. \"London\"). If location is vague, ask for clarification in Final response.
-- WebSearch: Performs web searches using Brave Search API. Requires a search query string. The tool returns search results with short descriptions only (not full page content). Use this to find current information, look up facts, or research topics. Example queries: \"Rust programming language\", \"weather API documentation\", \"latest news about AI\".
-- You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
+TOOLS (RUST TYPE DEFINITIONS):
+```rust
+pub enum MathOperation {
+    Add(f32, f32),
+    Sub(f32, f32),
+    Mul(f32, f32),
+    Div(f32, f32),
+    Exp(f32, f32),
+}
+
+pub enum ToolCall {
+    GetWeather { location: String },
+    /// IMPORTANT: You SHOULD USUALLY follow up this tool call with a VisitUrl call to read the actual content of the found pages.
+    WebSearch { query: String },
+    MathCalculation { operations: Vec<MathOperation> },
+    /// Visit a URL and extract its content. Use this to read the full content of pages found via WebSearch IF NEEDED.
+    VisitUrl { url: String },
+}
+```
+
+CRITICAL INSTRUCTIONS:
+- ONLY use the tools defined above.
+- WebSearch ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
+- Do not invent new tools.
+
+THOUGHTS FIELD USAGE:
+The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
+- PREFER using a Markdown-style TODO list to track progress (e.g., \"- [x] Task 1\", \"- [ ] Task 2\").
+- Include summaries of information gathered so far so you don't lose it.
+- This field is your PRIMARY memory of previous steps in a multi-step chain. But you can refer to message history if you REALLY need.
+- Be detailed enough to fully reconstruct your plan.
 
 HISTORY:
-You receive conversation history as JSON array (oldest to newest). Use it for context.<|im_end|>"
+You receive conversation history as JSON array (oldest to newest). Use it for context.
+It will contain both user messages and tool call results.<|im_end|>"
     }
 
     fn load_base_prompt(
         &self,
-        ctx: &mut LlamaContext,
+        ctx: &mut LlamaContext<'_>,
         model: &LlamaModel,
         context_size: u32,
     ) -> anyhow::Result<usize> {
@@ -93,7 +119,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
 
     fn append_prompt(
         &self,
-        ctx: &mut LlamaContext,
+        ctx: &mut LlamaContext<'_>,
         model: &LlamaModel,
         dynamic_prompt: &str,
         start_pos: usize,
@@ -133,7 +159,7 @@ impl LlamaCppService {
 
     pub fn new() -> anyhow::Result<Self> {
         let model_path = std::env::var("MODEL_PATH")
-            .unwrap_or_else(|_| "../models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".to_string());
+            .unwrap_or_else(|_| "./models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".to_string());
 
         println!("Loading model from: {}", model_path);
 
@@ -169,14 +195,14 @@ impl LlamaCppService {
             .with_n_threads_batch(num_cpus::get() as i32)
     }
 
-    pub fn load_base_prompt(&self, ctx: &mut LlamaContext) -> anyhow::Result<usize> {
+    pub fn load_base_prompt(&self, ctx: &mut LlamaContext<'_>) -> anyhow::Result<usize> {
         self.base_prompt
             .load_base_prompt(ctx, &self.model, Self::CONTEXT_SIZE.get())
     }
 
     pub fn append_prompt(
         &self,
-        ctx: &mut LlamaContext,
+        ctx: &mut LlamaContext<'_>,
         dynamic_prompt: &str,
         start_pos: usize,
     ) -> anyhow::Result<usize> {
@@ -184,7 +210,7 @@ impl LlamaCppService {
             .append_prompt(ctx, &self.model, dynamic_prompt, start_pos)
     }
 
-    pub fn new_context(&self) -> anyhow::Result<LlamaContext> {
+    pub fn new_context(&self) -> anyhow::Result<LlamaContext<'_>> {
         let ctx_params = Self::context_params();
         Ok(self.model.new_context(&self.backend, ctx_params)?)
     }
@@ -210,7 +236,7 @@ impl LlamaCppService {
         ])
     }
 
-    pub fn new_batch() -> LlamaBatch {
+    pub fn new_batch() -> LlamaBatch<'static> {
         LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1)
     }
 
