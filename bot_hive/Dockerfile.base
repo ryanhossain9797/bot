@@ -1,13 +1,6 @@
 # Base image with runtime dependencies and model
 # Always build for linux/amd64 (x86_64)
-FROM --platform=linux/amd64 debian:bookworm-slim
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
+FROM debian:bookworm-slim
 
 # Set working directory
 WORKDIR /app
@@ -16,8 +9,19 @@ WORKDIR /app
 COPY models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
 
 # Copy grammar file
-COPY bot_hive/grammars/response.gbnf /app/grammars/response.gbnf
+COPY grammars/response.gbnf /app/grammars/response.gbnf
 
 # Set environment variables
 ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
 ENV RUST_LOG=info
+
+# Update package list
+RUN apt-get update
+
+# Install runtime dependencies
+RUN apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libgomp1 \
+    libvulkan1 \
+    && rm -rf /var/lib/apt/lists/*

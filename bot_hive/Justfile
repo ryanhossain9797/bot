@@ -1,42 +1,21 @@
 # Build and push Docker image to Docker Hub
-# Always builds for linux/amd64 (x86_64) platform
 build_push tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
-    # Create buildx builder if it doesn't exist
-    docker buildx create --name multiarch --use 2>/dev/null || docker buildx use multiarch
-    docker buildx build \
-        --platform linux/amd64 \
-        -f Dockerfile \
-        -t zireael9797/bot:{{tag}} \
-        --push \
-        ..
+    docker build -t zireael9797/bot:{{tag}} -f Dockerfile ..
+    docker push zireael9797/bot:{{tag}}
 
-# Build Docker image locally without pushing
+# Build Docker image locally
 build_local tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
-    # Use default docker driver to access local images
-    docker buildx use default
-    docker buildx build \
-        --platform linux/amd64 \
-        -f Dockerfile \
-        -t zireael9797/bot-hive:{{tag}} \
-        --load \
-        ..
+    docker build -t zireael9797/bot:{{tag}} -f Dockerfile ..
 
-# Build base image for linux/amd64
+# Build base image locally
 build_base tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
-    # Create buildx builder if it doesn't exist
-    docker buildx create --name multiarch --use 2>/dev/null || docker buildx use multiarch
-    docker buildx build \
-        --platform linux/amd64 \
-        -f Dockerfile.base \
-        -t zireael9797/bot-base:{{tag}} \
-        --push \
-        .
+    docker build -t zireael9797/bot-base:{{tag}} -f Dockerfile.base .
 
 # Run the locally built image with GPU support
 # Stops and removes existing container if present
@@ -44,13 +23,13 @@ run_local tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
     # Stop and remove existing container if it exists
-    docker stop bot-hive 2>/dev/null || true
-    docker rm bot-hive 2>/dev/null || true
+    docker stop bot 2>/dev/null || true
+    docker rm bot 2>/dev/null || true
     # Run with AMD GPU support (ROCm)
     docker run -d \
-        --name bot-hive \
+        --name bot \
         --device=/dev/kfd \
         --device=/dev/dri \
         --group-add video \
         --restart unless-stopped \
-        zireael9797/bot-hive:{{tag}}
+        zireael9797/bot:{{tag}}
