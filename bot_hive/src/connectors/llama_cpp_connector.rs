@@ -17,15 +17,25 @@ fn serialize_input(input: &LLMInput) -> String {
 }
 
 fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {
+    let mut parts = Vec::new();
+
+    // Check if there's a thought from the previous turn and inject it as a system message
+    if let Some(HistoryEntry::Output(LLMDecisionType::IntermediateToolCall { thoughts, .. })) =
+        history.last()
+    {
+        parts.push(format!(
+            "<|im_start|>system\nTHOUGHTS FROM PREVIOUS ACTION: {}<|im_end|>",
+            thoughts
+        ));
+    }
+
     let history_json = serde_json::to_string_pretty(history).unwrap_or_else(|_| "[]".to_string());
-    let history_section = format!("Conversation History (JSON):\n{}", history_json);
+    parts.push(format!("Conversation History (JSON):\n{}", history_json));
 
     let current_input_str = serialize_input(current_input);
+    parts.push(current_input_str);
 
-    format!(
-        "\n{}\n\n{}\n<|im_start|>assistant\n",
-        history_section, current_input_str
-    )
+    format!("\n{}\n<|im_start|>assistant\n", parts.join("\n\n"))
 }
 
 #[derive(Debug, Deserialize)]
