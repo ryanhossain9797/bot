@@ -91,24 +91,15 @@ async fn get_response_from_llm(
 }
 
 pub async fn get_llm_decision(
-    _env: Arc<Env>,
-    _current_input: LLMInput,
-    _history: Vec<HistoryEntry>,
+    env: Arc<Env>,
+    current_input: LLMInput,
+    history: Vec<HistoryEntry>,
 ) -> UserAction {
-    // Llama.cpp connector disconnected - no longer functional
-    // Base image doesn't have GGUF file
-    // Use ollama_connector instead
-    
-    // OLD IMPLEMENTATION (commented out):
-    // let llama_cpp_result = get_response_from_llm(env.llama_cpp.as_ref(), &current_input, &history).await;
-    // eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
-    // match llama_cpp_result {
-    //     Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),
-    //     Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
-    // }
-    
-    eprintln!("[ERROR] llama_cpp_connector called but is disconnected - use ollama_connector instead");
-    UserAction::LLMDecisionResult(Err(
-        "Llama.cpp connector is disconnected - use Ollama instead".to_string()
-    ))
+    let llama_cpp_result =
+        get_response_from_llm(env.llama_cpp.as_ref(), &current_input, &history).await;
+    eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
+    match llama_cpp_result {
+        Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),
+        Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
+    }
 }

@@ -60,7 +60,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
 
     fn load_base_prompt(
         &self,
-        ctx: &mut LlamaContext,
+        ctx: &mut LlamaContext<'_>,
         model: &LlamaModel,
         context_size: u32,
     ) -> anyhow::Result<usize> {
@@ -93,7 +93,7 @@ You receive conversation history as JSON array (oldest to newest). Use it for co
 
     fn append_prompt(
         &self,
-        ctx: &mut LlamaContext,
+        ctx: &mut LlamaContext<'_>,
         model: &LlamaModel,
         dynamic_prompt: &str,
         start_pos: usize,
@@ -133,7 +133,7 @@ impl LlamaCppService {
 
     pub fn new() -> anyhow::Result<Self> {
         let model_path = std::env::var("MODEL_PATH")
-            .unwrap_or_else(|_| "../models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".to_string());
+            .unwrap_or_else(|_| "./models/Qwen2.5-14B-Instruct-Q4_K_M.gguf".to_string());
 
         println!("Loading model from: {}", model_path);
 
@@ -169,14 +169,14 @@ impl LlamaCppService {
             .with_n_threads_batch(num_cpus::get() as i32)
     }
 
-    pub fn load_base_prompt(&self, ctx: &mut LlamaContext) -> anyhow::Result<usize> {
+    pub fn load_base_prompt(&self, ctx: &mut LlamaContext<'_>) -> anyhow::Result<usize> {
         self.base_prompt
             .load_base_prompt(ctx, &self.model, Self::CONTEXT_SIZE.get())
     }
 
     pub fn append_prompt(
         &self,
-        ctx: &mut LlamaContext,
+        ctx: &mut LlamaContext<'_>,
         dynamic_prompt: &str,
         start_pos: usize,
     ) -> anyhow::Result<usize> {
@@ -184,7 +184,7 @@ impl LlamaCppService {
             .append_prompt(ctx, &self.model, dynamic_prompt, start_pos)
     }
 
-    pub fn new_context(&self) -> anyhow::Result<LlamaContext> {
+    pub fn new_context(&self) -> anyhow::Result<LlamaContext<'_>> {
         let ctx_params = Self::context_params();
         Ok(self.model.new_context(&self.backend, ctx_params)?)
     }
@@ -210,7 +210,7 @@ impl LlamaCppService {
         ])
     }
 
-    pub fn new_batch() -> LlamaBatch {
+    pub fn new_batch() -> LlamaBatch<'static> {
         LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1)
     }
 

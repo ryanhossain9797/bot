@@ -100,7 +100,7 @@ The Bot Hive integrates a Large Language Model (LLM) directly into its core func
 
 - **Technology**: Utilizes the `llama_cpp_2` Rust crate, a high-performance binding for `llama.cpp`, to run quantized GGUF models locally.
 - **Model**: Defaults to `Qwen2.5-14B-Instruct-Q4_K_M.gguf`.
-- **Model Path**: Configurable via the `MODEL_PATH` environment variable (default: `../models/Qwen2.5-14B-Instruct-Q4_K_M.gguf`).
+- **Model Path**: Configurable via the `MODEL_PATH` environment variable (default: `./models/Qwen2.5-14B-Instruct-Q4_K_M.gguf`).
 - **Context Size**: Configured for 2048 tokens.
 - **Threading**: Leverages all available CPU cores for efficient processing.
 - **Location**: The model loading logic resides in `src/external_connections/llm.rs`.
@@ -380,7 +380,7 @@ lib_hive/
 
 ### Environment Variables
 
-- **MODEL_PATH**: Path to LLM model file (default: `../models/Qwen2.5-14B-Instruct-Q4_K_M.gguf`)
+- **MODEL_PATH**: Path to LLM model file (default: `./models/Qwen2.5-14B-Instruct-Q4_K_M.gguf`)
 
 ### Configuration File
 
