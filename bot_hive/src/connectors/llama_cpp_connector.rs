@@ -54,15 +54,15 @@ async fn get_response_from_llm(
 
     let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
 
-    let total_tokens = llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
+    let (total_tokens, last_batch_size) =
+        llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
 
     let mut sampler = llama_cpp.create_sampler();
 
     let mut batch = LlamaCppService::new_batch();
     let mut generated_tokens = Vec::new();
 
-    let batch_tokens = total_tokens - base_token_count;
-    let mut last_batch_idx = batch_tokens as i32 - 1;
+    let mut last_batch_idx = last_batch_size - 1;
     let mut n_cur = total_tokens;
 
     for _ in 0..LlamaCppService::get_max_generation_tokens() {
