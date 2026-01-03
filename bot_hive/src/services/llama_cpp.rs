@@ -76,6 +76,8 @@ CRITICAL INSTRUCTIONS:
 THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
 - PREFER using a Markdown-style TODO list to track progress (e.g., \"- [x] Task 1\", \"- [ ] Task 2\").
+- TRACK ATTEMPTS: Explicitly track how many times you have attempted a specific sub-task. E.g., \"Attempt 1/3 failed. Attempt 2/3: Trying new query...\"
+- MAX RETRIES: If you fail 5 different ways to solve a sub-task, GIVE UP on that specific part. Report the failure to the user instead of looping endlessly.
 - Include summaries of information gathered so far so you don't lose it.
 - This field is your PRIMARY memory of previous steps in a multi-step chain. But you can refer to message history if you REALLY need.
 - Be detailed enough to fully reconstruct your plan.
@@ -107,12 +109,21 @@ It will contain both user messages and tool call results.<|im_end|>"
                 let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
 
                 let mut batch = LlamaCppService::new_batch();
+                let batch_limit = LlamaCppService::BATCH_CHUNK_SIZE;
+
                 for (i, token) in tokens.iter().enumerate() {
                     let is_last = i == tokens.len() - 1;
                     batch.add(*token, i as i32, &[0], is_last)?;
+
+                    if batch.n_tokens() >= batch_limit as i32 {
+                        ctx.decode(&mut batch)?;
+                        batch.clear();
+                    }
                 }
 
-                ctx.decode(&mut batch)?;
+                if batch.n_tokens() > 0 {
+                    ctx.decode(&mut batch)?;
+                }
                 Ok(tokens.len())
             }
         }
@@ -124,21 +135,32 @@ It will contain both user messages and tool call results.<|im_end|>"
         model: &LlamaModel,
         dynamic_prompt: &str,
         start_pos: usize,
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<(usize, i32)> {
         let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
 
         let mut batch = LlamaCppService::new_batch();
+        let batch_limit = LlamaCppService::BATCH_CHUNK_SIZE;
+        let mut last_batch_size = 0;
 
         for (offset, token) in dynamic_tokens.iter().enumerate() {
             let is_last = offset == dynamic_tokens.len() - 1;
             batch.add(*token, (start_pos + offset) as i32, &[0], is_last)?;
+
+            if batch.n_tokens() >= batch_limit as i32 {
+                last_batch_size = batch.n_tokens();
+                ctx.decode(&mut batch)?;
+                batch.clear();
+            }
         }
 
-        ctx.decode(&mut batch)?;
+        if batch.n_tokens() > 0 {
+            last_batch_size = batch.n_tokens();
+            ctx.decode(&mut batch)?;
+        }
 
         let total_tokens = start_pos + dynamic_tokens.len();
 
-        Ok(total_tokens)
+        Ok((total_tokens, last_batch_size))
     }
 }
 
@@ -150,6 +172,7 @@ pub struct LlamaCppService {
 
 impl LlamaCppService {
     const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(32768).unwrap();
+    pub const BATCH_CHUNK_SIZE: usize = 2048;
     const MAX_GENERATION_TOKENS: usize = 8192;
     const TEMPERATURE: f32 = 0.25;
     const GRAMMAR_FILE: &'static str = include_str!("../../grammars/response.gbnf");
@@ -207,7 +230,7 @@ impl LlamaCppService {
         ctx: &mut LlamaContext<'_>,
         dynamic_prompt: &str,
         start_pos: usize,
-    ) -> anyhow::Result<usize> {
+    ) -> anyhow::Result<(usize, i32)> {
         self.base_prompt
             .append_prompt(ctx, &self.model, dynamic_prompt, start_pos)
     }
@@ -260,13 +283,26 @@ impl LlamaCppService {
         println!("Tokenized base prompt: {} tokens", tokens.len());
 
         let mut batch = Self::new_batch();
+        let batch_limit = Self::BATCH_CHUNK_SIZE;
+
         for (i, token) in tokens.iter().enumerate() {
             let is_last = i == tokens.len() - 1;
             batch.add(*token, i as i32, &[0], is_last)?;
+
+            if batch.n_tokens() >= batch_limit as i32 {
+                println!("Decoding batch chunk ({} tokens)...", batch.n_tokens());
+                ctx.decode(&mut batch)?;
+                batch.clear();
+            }
         }
 
-        println!("Decoding tokens to fill KV cache...");
-        ctx.decode(&mut batch)?;
+        if batch.n_tokens() > 0 {
+            println!(
+                "Decoding final batch chunk ({} tokens)...",
+                batch.n_tokens()
+            );
+            ctx.decode(&mut batch)?;
+        }
 
         println!("Saving session file...");
         ctx.save_session_file(session_path, &tokens)?;
