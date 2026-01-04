@@ -7,6 +7,7 @@ use llama_cpp_2::{
     token::LlamaToken,
     TokenToStringError,
 };
+use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::num::NonZero;
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
@@ -188,6 +189,7 @@ impl LlamaCppService {
 
         println!("Loading model from: {}", model_path);
 
+        send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
         let backend = LlamaBackend::init()?;
 
         let model_params = LlamaModelParams::default();

@@ -13,7 +13,7 @@ COPY grammars/response.gbnf /app/grammars/response.gbnf
 
 # Set environment variables
 ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
-ENV RUST_LOG=warning
+ENV RUST_LOG=info
 
 # Update package list and install runtime dependencies
 RUN apt-get update && apt-get install -y \

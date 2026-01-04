@@ -108,6 +108,7 @@ pub async fn get_llm_decision(
     let llama_cpp_result =
         get_response_from_llm(env.llama_cpp.as_ref(), &current_input, &history).await;
     eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
+
     match llama_cpp_result {
         Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),
         Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
