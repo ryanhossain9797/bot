@@ -49,13 +49,16 @@ async fn get_response_from_llm(
     history: &[HistoryEntry],
 ) -> anyhow::Result<LLMResponse> {
     let mut ctx = llama_cpp.new_context()?;
+    println!("[DEBUG] llama Context created.");
 
     let dynamic_prompt = build_dynamic_prompt(current_input, history);
 
     let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
+    println!("[DEBUG] Base prompt loaded ({base_token_count} tokens).",);
 
     let (total_tokens, last_batch_size) =
         llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
+    println!("[DEBUG] Dynamic prompt appended (Total tokens: {total_tokens}).");
 
     let mut sampler = llama_cpp.create_sampler();
 
@@ -66,6 +69,7 @@ async fn get_response_from_llm(
     let mut n_cur = total_tokens;
 
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
+    println!("[DEBUG] Starting inference loop (max_tokens: {max_generation_tokens}).");
     for nth in 0..max_generation_tokens {
         let new_token = sampler.sample(&ctx, last_batch_idx);
 
@@ -89,6 +93,10 @@ async fn get_response_from_llm(
         n_cur += 1;
         last_batch_idx = batch.n_tokens() - 1;
     }
+    println!(
+        "[DEBUG] Inference loop finished. Generated {} tokens.",
+        generated_tokens.len()
+    );
 
     let mut response_bytes = Vec::new();
     for token in &generated_tokens {
@@ -112,6 +120,7 @@ pub async fn get_llm_decision(
     current_input: LLMInput,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
+    println!("[DEBUG] Starting get_llm_decision...");
     let llama_cpp_result =
         get_response_from_llm(env.llama_cpp.as_ref(), &current_input, &history).await;
     eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
