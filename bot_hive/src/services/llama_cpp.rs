@@ -72,6 +72,7 @@ CRITICAL INSTRUCTIONS:
 - WebSearch ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
+- For intermediate tool calls, the maybe intermediate response should say what you are doing with the tool like \"Doing X\", \"Trying to do Y\" etc.
 
 THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
