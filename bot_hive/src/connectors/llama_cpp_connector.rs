@@ -65,7 +65,8 @@ async fn get_response_from_llm(
     let mut last_batch_idx = last_batch_size - 1;
     let mut n_cur = total_tokens;
 
-    for _ in 0..LlamaCppService::get_max_generation_tokens() {
+    let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
+    for nth in 0..max_generation_tokens {
         let new_token = sampler.sample(&ctx, last_batch_idx);
 
         if llama_cpp.is_eog_token(new_token) {
@@ -73,6 +74,19 @@ async fn get_response_from_llm(
         }
 
         generated_tokens.push(new_token);
+
+        if nth % (max_generation_tokens / 4) == 0 {
+            let quarters = (nth + 1) / (max_generation_tokens / 4) + 1;
+            print!("{}/4 of limit crossed", quarters);
+            print!(
+                "{}",
+                llama_cpp
+                    .token_to_str(new_token, Special::Tokenize)
+                    .unwrap()
+            );
+            println!();
+            let _ = std::io::stdout().flush();
+        }
 
         batch.clear();
         batch.add(new_token, n_cur as i32, &[0], true)?;
