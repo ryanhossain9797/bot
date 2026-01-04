@@ -75,16 +75,9 @@ async fn get_response_from_llm(
 
         generated_tokens.push(new_token);
 
-        if nth % (max_generation_tokens / 4) == 0 {
-            let quarters = (nth + 1) / (max_generation_tokens / 4) + 1;
-            print!("{}/4 of limit crossed", quarters);
-            print!(
-                "{}",
-                llama_cpp
-                    .token_to_str(new_token, Special::Tokenize)
-                    .unwrap()
-            );
-            println!();
+        if nth % (max_generation_tokens / 4) == 0 && nth > 0 {
+            let quarters = nth / (max_generation_tokens / 4);
+            println!("{quarters}/4 of limit crossed, {nth} tokens");
             let _ = std::io::stdout().flush();
         }
 
