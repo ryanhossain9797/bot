@@ -7,11 +7,55 @@ use llama_cpp_2::model::Special;
 use serde::Deserialize;
 use std::{io::Write, sync::Arc};
 
-fn serialize_input(input: &LLMInput) -> String {
+fn format_history_entry(entry: &HistoryEntry) -> String {
+    match entry {
+        HistoryEntry::Input(input) => format_input(input, true),
+        HistoryEntry::Output(output) => match output {
+            LLMDecisionType::Final { response } => {
+                format!("<|im_start|>assistant\n{}<|im_end|>", response)
+            }
+            LLMDecisionType::IntermediateToolCall {
+                thoughts,
+                maybe_intermediate_response,
+                tool_call,
+            } => {
+                let mut lines = Vec::new();
+                lines.push(format!("THOUGHTS: {}", thoughts));
+                if let Some(resp) = maybe_intermediate_response {
+                    lines.push(format!("INTERMEDIATE RESPONSE: {}", resp));
+                }
+                lines.push(format!("CALL TOOL: {:?}", tool_call));
+                format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
+            }
+        },
+    }
+}
+
+fn format_history(history: &[HistoryEntry]) -> String {
+    history
+        .iter()
+        .map(format_history_entry)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn format_input(input: &LLMInput, truncate: bool) -> String {
     match input {
-        LLMInput::UserMessage(msg) => format!("<|im_start|>user\n{}<|im_end|>", msg),
+        LLMInput::UserMessage(msg) => {
+            let mut content = msg.clone();
+            if truncate && content.len() > crate::models::user::MAX_TOOL_OUTPUT_LENGTH {
+                content.truncate(crate::models::user::MAX_TOOL_OUTPUT_LENGTH);
+                content.push_str("... (truncated)");
+            }
+            format!("<|im_start|>user\n{}<|im_end|>", content)
+        }
         LLMInput::ToolResult(result) => {
-            format!("<|im_start|>user\nTool Result: {}<|im_end|>", result)
+            let mut content = result.clone();
+            if truncate && content.len() > crate::models::user::MAX_TOOL_OUTPUT_LENGTH {
+                content.truncate(crate::models::user::MAX_TOOL_OUTPUT_LENGTH);
+                content.push_str("... (truncated)");
+            }
+            format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
         }
     }
 }
@@ -19,21 +63,21 @@ fn serialize_input(input: &LLMInput) -> String {
 fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {
     let mut parts = Vec::new();
 
-    // Check if there's a thought from the previous turn and inject it as a system message
+    let history_str = format_history(history);
+    if !history_str.is_empty() {
+        parts.push(history_str);
+    }
+
     if let Some(HistoryEntry::Output(LLMDecisionType::IntermediateToolCall { thoughts, .. })) =
         history.last()
     {
         parts.push(format!(
-            "<|im_start|>system\nTHOUGHTS FROM PREVIOUS ACTION: {}<|im_end|>",
+            "<|im_start|>system\nREMINDER: Your current plan was:\n{}<|im_end|>",
             thoughts
         ));
     }
 
-    let history_json = serde_json::to_string_pretty(history).unwrap_or_else(|_| "[]".to_string());
-    parts.push(format!("Conversation History (JSON):\n{}", history_json));
-
-    let current_input_str = serialize_input(current_input);
-    parts.push(current_input_str);
+    parts.push(format_input(current_input, false));
 
     format!("\n{}\n<|im_start|>assistant\n", parts.join("\n\n"))
 }

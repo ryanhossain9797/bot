@@ -81,12 +81,8 @@ The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state a
 - TRACK ATTEMPTS: Explicitly track how many times you have attempted a specific sub-task. E.g., \"Attempt 1/3 failed. Attempt 2/3: Trying new query...\"
 - MAX RETRIES: If you fail 5 different ways to solve a sub-task, GIVE UP on that specific part. Report the failure to the user instead of looping endlessly.
 - Include summaries of information gathered so far so you don't lose it.
-- This field is your PRIMARY memory of previous steps in a multi-step chain. But you can refer to message history if you REALLY need.
-- Be detailed enough to fully reconstruct your plan.
-
-HISTORY:
-You receive conversation history as JSON array (oldest to newest). Use it for context.
-It will contain both user messages and tool call results.<|im_end|>"
+- This field is your PRIMARY memory of previous steps in a multi-step chain.
+- Be detailed enough to fully reconstruct your plan.<|im_end|>"
     }
 
     fn load_base_prompt(
