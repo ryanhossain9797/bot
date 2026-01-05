@@ -141,9 +141,9 @@ pub fn user_transition(
                     let message_to_send = match &outcome {
                         LLMDecisionType::Final { response } => Some(response.clone()),
                         LLMDecisionType::IntermediateToolCall {
-                            maybe_intermediate_response,
+                            progress_notification,
                             ..
-                        } => maybe_intermediate_response.clone(),
+                        } => progress_notification.clone(),
                     };
 
                     // If there's a message to send, go to SendingMessage state

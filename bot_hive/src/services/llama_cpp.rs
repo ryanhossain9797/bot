@@ -7,6 +7,7 @@ use llama_cpp_2::{
     token::LlamaToken,
     TokenToStringError,
 };
+use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::num::NonZero;
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
@@ -45,7 +46,12 @@ RULES:
 
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"maybe_intermediate_response\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"progress_notification\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
+
+DECISION MAKING:
+1. If you have enough information to answer the user request, use \"Final\".
+2. If you need more information or need to perform an action, use \"IntermediateToolCall\".
+3. Use \"progress_notification\" to tell the user what you are doing (e.g. \"Searching for...\"). This is sent to the user immediately.
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
@@ -72,19 +78,15 @@ CRITICAL INSTRUCTIONS:
 - WebSearch ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
+- Use \"progress_notification\" to keep the user informed during multi-step tasks.
 
 THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
 - PREFER using a Markdown-style TODO list to track progress (e.g., \"- [x] Task 1\", \"- [ ] Task 2\").
-- TRACK ATTEMPTS: Explicitly track how many times you have attempted a specific sub-task. E.g., \"Attempt 1/3 failed. Attempt 2/3: Trying new query...\"
-- MAX RETRIES: If you fail 5 different ways to solve a sub-task, GIVE UP on that specific part. Report the failure to the user instead of looping endlessly.
-- Include summaries of information gathered so far so you don't lose it.
-- This field is your PRIMARY memory of previous steps in a multi-step chain. But you can refer to message history if you REALLY need.
-- Be detailed enough to fully reconstruct your plan.
-
-HISTORY:
-You receive conversation history as JSON array (oldest to newest). Use it for context.
-It will contain both user messages and tool call results.<|im_end|>"
+- TRACK ATTEMPTS: Explicitly track failures and retries. E.g., \"Attempt 1/3 failed. Trying new query...\"
+- Include summaries of information gathered so far in 'thoughts' so you don't lose it.
+- This field is your PRIMARY memory. Use it to decide if you have enough info to finish with a \"Final\" response.
+<|im_end|>"
     }
 
     fn load_base_prompt(
@@ -187,6 +189,7 @@ impl LlamaCppService {
 
         println!("Loading model from: {}", model_path);
 
+        send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
         let backend = LlamaBackend::init()?;
 
         let model_params = LlamaModelParams::default();

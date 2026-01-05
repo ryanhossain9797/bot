@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
 pub const MAX_TOOL_OUTPUT_LENGTH: usize = 800;
+pub const MAX_HISTORY_TEXT_LENGTH: usize = 200;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
@@ -91,7 +92,8 @@ pub enum LLMInput {
 pub enum LLMDecisionType {
     IntermediateToolCall {
         thoughts: String,
-        maybe_intermediate_response: Option<String>,
+        /// A brief message to the user notifying them of the current progress (e.g., "Searching for...")
+        progress_notification: Option<String>,
         tool_call: ToolCall,
     },
     Final {

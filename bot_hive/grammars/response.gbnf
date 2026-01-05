@@ -13,7 +13,7 @@ final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 
 # IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "maybe_intermediate_response": ... | null, "tool_call": {...}}}
 intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
-intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"maybe_intermediate_response\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
+intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"progress_notification\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
 
 # Optional string (null or string)
 optional-string ::= null | string
