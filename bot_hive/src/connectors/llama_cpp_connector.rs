@@ -3,9 +3,11 @@ use crate::{
     services::llama_cpp::LlamaCppService,
     Env,
 };
-use llama_cpp_2::model::Special;
+use llama_cpp_2::{
+    llama_batch::LlamaBatch, model::Special, sampling::LlamaSampler, token::LlamaToken,
+};
 use serde::Deserialize;
-use std::{io::Write, sync::Arc};
+use std::{io::Write, ops::ControlFlow, sync::Arc};
 
 fn format_history_entry(entry: &HistoryEntry) -> String {
     match entry {
@@ -87,6 +89,14 @@ struct LLMResponse {
     outcome: LLMDecisionType,
 }
 
+struct GenerationState {
+    tokens: Vec<LlamaToken>,
+    n_cur: usize,
+    last_idx: i32,
+    sampler: LlamaSampler,
+    batch: LlamaBatch<'static>,
+}
+
 async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
@@ -104,39 +114,69 @@ async fn get_response_from_llm(
         llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
     println!("[DEBUG] Dynamic prompt appended (Total tokens: {total_tokens}).");
 
-    let mut sampler = llama_cpp.create_sampler();
-
-    let mut batch = LlamaCppService::new_batch();
-    let mut generated_tokens = Vec::new();
-
-    let mut last_batch_idx = last_batch_size - 1;
-    let mut n_cur = total_tokens;
+    let initial_state = GenerationState {
+        tokens: Vec::new(),
+        n_cur: total_tokens,
+        last_idx: last_batch_size - 1,
+        sampler: llama_cpp.create_sampler(),
+        batch: LlamaCppService::new_batch(),
+    };
 
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
-    println!("[DEBUG] Starting inference loop (max_tokens: {max_generation_tokens}).");
-    for nth in 0..max_generation_tokens {
-        let new_token = sampler.sample(&ctx, last_batch_idx);
+    println!("[DEBUG] Starting inference (max_tokens: {max_generation_tokens}).");
 
-        if llama_cpp.is_eog_token(new_token) {
-            break;
-        }
+    let result = (0..max_generation_tokens).try_fold(
+        initial_state,
+        |GenerationState {
+             mut tokens,
+             mut n_cur,
+             mut last_idx,
+             mut sampler,
+             mut batch,
+         },
+         nth| {
+            let token = sampler.sample(&ctx, last_idx);
 
-        generated_tokens.push(new_token);
+            if llama_cpp.is_eog_token(token) {
+                return ControlFlow::Break(Ok(tokens));
+            }
 
-        if nth % (max_generation_tokens / 4) == 0 && nth > 0 {
-            let quarters = nth / (max_generation_tokens / 4);
-            println!("{quarters}/4 of limit crossed, {nth} tokens");
-            let _ = std::io::stdout().flush();
-        }
+            tokens.push(token);
 
-        batch.clear();
-        batch.add(new_token, n_cur as i32, &[0], true)?;
+            if nth > 0 && nth % (max_generation_tokens / 4) == 0 {
+                println!(
+                    "{}/4 of limit crossed ({} tokens)",
+                    nth / (max_generation_tokens / 4),
+                    nth
+                );
+            }
 
-        ctx.decode(&mut batch)?;
+            match (|| -> anyhow::Result<()> {
+                batch.clear();
+                batch.add(token, n_cur as i32, &[0], true)?;
+                ctx.decode(&mut batch)?;
+                Ok(())
+            })() {
+                Ok(_) => {
+                    n_cur += 1;
+                    last_idx = batch.n_tokens() - 1;
+                    ControlFlow::Continue(GenerationState {
+                        tokens,
+                        n_cur,
+                        last_idx,
+                        sampler,
+                        batch,
+                    })
+                }
+                Err(e) => ControlFlow::Break(Err(e)),
+            }
+        },
+    );
 
-        n_cur += 1;
-        last_batch_idx = batch.n_tokens() - 1;
-    }
+    let generated_tokens = match result {
+        ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
+        ControlFlow::Break(res) => res,
+    }?;
     println!(
         "[DEBUG] Inference loop finished. Generated {} tokens.",
         generated_tokens.len()
