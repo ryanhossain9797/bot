@@ -18,13 +18,13 @@ fn format_history_entry(entry: &HistoryEntry) -> String {
             }
             LLMDecisionType::IntermediateToolCall {
                 thoughts,
-                maybe_intermediate_response,
+                progress_notification,
                 tool_call,
             } => {
                 let mut lines = Vec::new();
                 lines.push(format!("THOUGHTS: {}", thoughts));
-                if let Some(resp) = maybe_intermediate_response {
-                    lines.push(format!("INTERMEDIATE RESPONSE: {}", resp));
+                if let Some(msg) = progress_notification {
+                    lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
                 }
                 lines.push(format!("CALL TOOL: {:?}", tool_call));
                 format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
@@ -45,16 +45,16 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
             let mut content = msg.clone();
-            if truncate && content.len() > crate::models::user::MAX_TOOL_OUTPUT_LENGTH {
-                content.truncate(crate::models::user::MAX_TOOL_OUTPUT_LENGTH);
+            if truncate && content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
+                content.truncate(crate::models::user::MAX_HISTORY_TEXT_LENGTH);
                 content.push_str("... (truncated)");
             }
             format!("<|im_start|>user\n{}<|im_end|>", content)
         }
         LLMInput::ToolResult(result) => {
             let mut content = result.clone();
-            if truncate && content.len() > crate::models::user::MAX_TOOL_OUTPUT_LENGTH {
-                content.truncate(crate::models::user::MAX_TOOL_OUTPUT_LENGTH);
+            if truncate && content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
+                content.truncate(crate::models::user::MAX_HISTORY_TEXT_LENGTH);
                 content.push_str("... (truncated)");
             }
             format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
