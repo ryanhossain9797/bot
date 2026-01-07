@@ -2,8 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
-pub const MAX_TOOL_OUTPUT_LENGTH: usize = 800;
-pub const MAX_HISTORY_TEXT_LENGTH: usize = 200;
+pub const MAX_SEARCH_RESULTS_LENGTH: usize = 800;
+pub const MAX_TOOL_OUTPUT_LENGTH: usize = 5000;
+pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
@@ -73,6 +74,7 @@ pub enum MathOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum ToolCall {
+    RecallHistory { reason: String },
     GetWeather { location: String },
     WebSearch { query: String },
     MathCalculation { operations: Vec<MathOperation> },
@@ -88,6 +90,15 @@ pub enum LLMInput {
     ToolResult(String),
 }
 
+impl LLMInput {
+    pub fn format(&self) -> String {
+        match self {
+            LLMInput::UserMessage(msg) => format!("user: {msg}"),
+            LLMInput::ToolResult(result) => format!("tool_result: {result}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum LLMDecisionType {
     IntermediateToolCall {
@@ -101,6 +112,26 @@ pub enum LLMDecisionType {
     },
 }
 
+impl LLMDecisionType {
+    pub fn format_output(&self) -> String {
+        match self {
+            LLMDecisionType::Final { response } => format!("assistant: {response}"),
+            LLMDecisionType::IntermediateToolCall {
+                thoughts: _,
+                progress_notification,
+                tool_call,
+            } => {
+                let mut lines = Vec::new();
+                if let Some(msg) = progress_notification {
+                    lines.push(format!("progress_notification: {msg}"));
+                }
+                lines.push(format!("tool_call: {tool_call:?}"));
+                format!("assistant\n{}", lines.join("\n"))
+            }
+        }
+    }
+}
+
 /// Represents a single entry in the conversation history
 /// History alternates between inputs (LLMInput) and outputs (LLMDecisionType)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +140,15 @@ pub enum HistoryEntry {
     Input(LLMInput),
     /// An output from the LLM (decision/response)
     Output(LLMDecisionType),
+}
+
+impl HistoryEntry {
+    pub fn format(&self) -> String {
+        match self {
+            HistoryEntry::Input(input) => input.format(),
+            HistoryEntry::Output(output) => output.format_output(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]

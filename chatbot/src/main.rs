@@ -6,7 +6,7 @@ mod life_cycles;
 mod models;
 mod services;
 
-use lib_hive::{new_life_cycle, Schedule, Transition};
+use framework::{new_life_cycle, Schedule, Transition};
 use life_cycles::user_life_cycle::user_transition;
 use models::bot::{BotAction, BotHandle};
 use models::user::{User, UserId};

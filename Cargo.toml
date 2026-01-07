@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "bot_hive", "lib_hive",
+    "chatbot", "framework",
 ]
 resolver = "3"

@@ -9,36 +9,30 @@ use llama_cpp_2::{
 use serde::Deserialize;
 use std::{io::Write, ops::ControlFlow, sync::Arc};
 
-fn format_history_entry(entry: &HistoryEntry) -> String {
-    match entry {
-        HistoryEntry::Input(input) => format_input(input, true),
-        HistoryEntry::Output(output) => match output {
-            LLMDecisionType::Final { response } => {
-                format!("<|im_start|>assistant\n{}<|im_end|>", response)
+fn format_output(output: &LLMDecisionType) -> String {
+    match output {
+        LLMDecisionType::Final { response } => {
+            let mut content = response.clone();
+            if content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
+                content.truncate(crate::models::user::MAX_HISTORY_TEXT_LENGTH);
+                content.push_str("... (truncated)");
             }
-            LLMDecisionType::IntermediateToolCall {
-                thoughts,
-                progress_notification,
-                tool_call,
-            } => {
-                let mut lines = Vec::new();
-                lines.push(format!("THOUGHTS: {}", thoughts));
-                if let Some(msg) = progress_notification {
-                    lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
-                }
-                lines.push(format!("CALL TOOL: {:?}", tool_call));
-                format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
-            }
-        },
-    }
-}
+            format!("<|im_start|>assistant\n{}<|im_end|>", content)
+        }
+        LLMDecisionType::IntermediateToolCall {
+            thoughts: _,
+            progress_notification,
+            tool_call,
+        } => {
+            let mut lines = Vec::new();
 
-fn format_history(history: &[HistoryEntry]) -> String {
-    history
-        .iter()
-        .map(format_history_entry)
-        .collect::<Vec<_>>()
-        .join("\n\n")
+            if let Some(msg) = progress_notification {
+                lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
+            }
+            lines.push(format!("CALL TOOL: {:?}", tool_call));
+            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
+        }
+    }
 }
 
 fn format_input(input: &LLMInput, truncate: bool) -> String {
@@ -60,6 +54,17 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
             format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
         }
     }
+}
+
+fn format_history(history: &[HistoryEntry]) -> String {
+    history
+        .iter()
+        .map(|entry| match entry {
+            HistoryEntry::Input(input) => format_input(input, true),
+            HistoryEntry::Output(output) => format_output(output),
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {

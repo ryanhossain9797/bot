@@ -10,8 +10,8 @@ WORKDIR /app
 
 # Copy workspace files (build context should be parent directory)
 COPY Cargo.toml Cargo.lock ./
-COPY lib_hive ./lib_hive
-COPY bot_hive ./bot_hive
+COPY framework ./framework
+COPY chatbot ./chatbot
 COPY .git ./.git
 
 # Configure environment for cross-compilation
@@ -38,7 +38,7 @@ RUN apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Build the project in release mode for x86_64
-RUN cargo build --release --target x86_64-unknown-linux-gnu --package bot
+RUN cargo build --release --target x86_64-unknown-linux-gnu --package chatbot
 
 # Capture git commit message
 RUN git log -1 --pretty=%B > /app/commit.txt || echo "unknown" > /app/commit.txt
@@ -50,7 +50,7 @@ FROM zireael9797/bot-base:latest
 
 # Copy binary from builder (only this changes on code updates)
 # cross builds to target/x86_64-unknown-linux-gnu/release
-COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/bot /app/bot
+COPY --from=builder /app/target/x86_64-unknown-linux-gnu/release/chatbot /app/chatbot
 
 # Copy commit message file
 COPY --from=builder /app/commit.txt /app/commit.txt
@@ -60,4 +60,4 @@ COPY --from=builder /app/commit.txt /app/commit.txt
 # Make sure src/configuration.rs exists with your token before building
 
 # Run the bot
-CMD ["/app/bot"]
+CMD ["/app/chatbot"]

@@ -1,4 +1,4 @@
-use lib_hive::LifeCycleHandle;
+use framework::LifeCycleHandle;
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 

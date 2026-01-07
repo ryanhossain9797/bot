@@ -19,7 +19,7 @@ intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "
 optional-string ::= null | string
 
 # ToolCall is an externally tagged enum
-tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call
+tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call | recall-history-tool-call
 
 # GetWeather tool call: {"GetWeather": {"location": "..."}}
 get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
@@ -48,6 +48,10 @@ number-pair ::= "[" ws number "," ws number "]" ws
 # VisitUrl tool call: {"VisitUrl": {"url": "..."}}
 visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
 visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
+
+# RecallHistory tool call: {"RecallHistory": {"reason": "..."}}
+recall-history-tool-call ::= "{" ws "\"RecallHistory\"" ws ":" ws recall-history-value "}" ws
+recall-history-value ::= "{" ws "\"reason\"" ws ":" ws string "}" ws
 
 # Basic JSON types
 string ::= "\"" string-char* "\""

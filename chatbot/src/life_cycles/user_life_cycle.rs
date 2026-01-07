@@ -8,7 +8,7 @@ use crate::{
     Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use lib_hive::{
+use framework::{
     new_life_cycle, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
@@ -49,7 +49,11 @@ fn handle_outcome(
         LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
             // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
-            external.push(Box::pin(execute_tool(env, tool_call)));
+            external.push(Box::pin(execute_tool(
+                env,
+                tool_call,
+                recent_conversation.history.clone(),
+            )));
 
             Ok((
                 User {
@@ -308,7 +312,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
         | UserState::RunningTool { .. } => schedules.push(Scheduled {
-            at: user.last_transition + ChronoDuration::milliseconds(300_000),
+            at: user.last_transition + ChronoDuration::milliseconds(600_000),
             action: UserAction::ForceReset,
         }),
         _ => {}
@@ -317,10 +321,11 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     schedules
 }
 
-pub static USER_LIFE_CYCLE: Lazy<lib_hive::LifeCycleHandle<UserId, UserAction>> = Lazy::new(|| {
-    new_life_cycle(
-        ENV.get().expect("ENV not initialized").clone(),
-        Transition(user_transition),
-        Schedule(schedule),
-    )
-});
+pub static USER_LIFE_CYCLE: Lazy<framework::LifeCycleHandle<UserId, UserAction>> =
+    Lazy::new(|| {
+        new_life_cycle(
+            ENV.get().expect("ENV not initialized").clone(),
+            Transition(user_transition),
+            Schedule(schedule),
+        )
+    });

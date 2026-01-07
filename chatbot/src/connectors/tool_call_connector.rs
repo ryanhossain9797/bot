@@ -1,6 +1,9 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
-    models::user::{MathOperation, ToolCall, UserAction, MAX_SEARCH_DESCRIPTION_LENGTH},
+    models::user::{
+        HistoryEntry, MathOperation, ToolCall, UserAction, MAX_SEARCH_DESCRIPTION_LENGTH,
+        MAX_SEARCH_RESULTS_LENGTH,
+    },
     Env,
 };
 use scraper::{Html, Selector};
@@ -8,7 +11,12 @@ use serde::Deserialize;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
+#[allow(unused_variables)]
+pub async fn execute_tool(
+    env: Arc<Env>,
+    tool_call: ToolCall,
+    history: Vec<HistoryEntry>,
+) -> UserAction {
     match tool_call {
         ToolCall::GetWeather { location } => {
             // Actually fetch weather using wttr.in API
@@ -32,6 +40,26 @@ pub async fn execute_tool(env: Arc<Env>, tool_call: ToolCall) -> UserAction {
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
+        ToolCall::RecallHistory { reason: _ } => {
+            // Return the most recent 20 history entries without redaction
+            let start_index = if history.len() > 20 {
+                history.len() - 20
+            } else {
+                0
+            };
+            let recent_history = &history[start_index..];
+
+            let formatted_history = recent_history
+                .iter()
+                .map(|entry| entry.format())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+
+            UserAction::ToolResult(Ok(format!(
+                "Recent conversation history (last 20 entries):\n\n{}",
+                formatted_history
+            )))
+        }
     }
 }
 
@@ -371,10 +399,16 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
 async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
     let extracted = fetch_page(url).await?;
 
+    let content = if extracted.content.len() > MAX_SEARCH_RESULTS_LENGTH {
+        &extracted.content[..MAX_SEARCH_RESULTS_LENGTH]
+    } else {
+        &extracted.content
+    };
+
     let mut output = String::new();
     output.push_str(&format!("URL: {}\n\n", extracted.final_url));
     output.push_str("Content:\n");
-    output.push_str(&extracted.content);
+    output.push_str(content);
 
     if !extracted.links.is_empty() {
         output.push_str("\n\nLinks:\n");
