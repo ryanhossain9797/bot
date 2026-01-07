@@ -1,0 +1,36 @@
+# Build and push Docker image to Docker Hub
+build_push tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    docker build -t zireael9797/bot:{{tag}} -f Dockerfile ..
+    docker push zireael9797/bot:{{tag}}
+
+# Build Docker image locally
+build_local tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    docker build -t zireael9797/bot:{{tag}} -f Dockerfile ..
+
+# Build base image locally
+build_base tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    docker build -t zireael9797/bot-base:{{tag}} -f Dockerfile.base .
+
+# Run the locally built image with GPU support
+# Stops and removes existing container if present
+run_local tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    # Stop and remove existing container if it exists
+    docker stop bot 2>/dev/null || true
+    docker rm bot 2>/dev/null || true
+    # Run with AMD GPU support (ROCm)
+    docker run -d \
+        --name bot \
+        --device=/dev/kfd \
+        --device=/dev/dri \
+        --group-add video \
+        --group-add render \
+        --restart unless-stopped \
+        zireael9797/bot:{{tag}}

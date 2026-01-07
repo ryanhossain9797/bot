@@ -1,0 +1,27 @@
+# Base image with runtime dependencies and model
+# Always build for linux/amd64 (x86_64)
+FROM debian:trixie-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy model file (large, rarely changes)
+COPY models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+
+# Copy grammar file
+COPY grammars/response.gbnf /app/grammars/response.gbnf
+
+# Set environment variables
+ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+ENV RUST_LOG=info
+
+# Update package list and install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    libgomp1 \
+    libvulkan1 \
+    mesa-vulkan-drivers \
+    vulkan-tools \
+    && (getent group render || groupadd -r render) \
+    && rm -rf /var/lib/apt/lists/*

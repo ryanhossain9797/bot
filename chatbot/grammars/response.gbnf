@@ -1,0 +1,61 @@
+# GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
+# Matches the Rust schema defined in models/user.rs
+
+root ::= object
+object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "}" ws
+
+# LLMDecisionType is an externally tagged enum
+outcome-object ::= final-outcome | intermediate-tool-call-outcome
+
+# Final outcome: {"Final": {"response": "..."}}
+final-outcome ::= "{" ws "\"Final\"" ws ":" ws final-value "}" ws
+final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
+
+# IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "maybe_intermediate_response": ... | null, "tool_call": {...}}}
+intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
+intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"progress_notification\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
+
+# Optional string (null or string)
+optional-string ::= null | string
+
+# ToolCall is an externally tagged enum
+tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call | recall-history-tool-call
+
+# GetWeather tool call: {"GetWeather": {"location": "..."}}
+get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
+get-weather-value ::= "{" ws "\"location\"" ws ":" ws string "}" ws
+
+# WebSearch tool call: {"WebSearch": {"query": "..."}}
+web-search-tool-call ::= "{" ws "\"WebSearch\"" ws ":" ws web-search-value "}" ws
+web-search-value ::= "{" ws "\"query\"" ws ":" ws string "}" ws
+
+# MathCalculation tool call: {"MathCalculation": {"operations": [...]}}
+math-calculation-tool-call ::= "{" ws "\"MathCalculation\"" ws ":" ws math-calculation-value "}" ws
+math-calculation-value ::= "{" ws "\"operations\"" ws ":" ws math-operations-array "}" ws
+
+# Math operations array
+math-operations-array ::= "[" ws (math-operation ("," ws math-operation)*)? "]" ws
+
+# MathOperation is an externally tagged enum with tuple variants
+math-operation ::= add-op | sub-op | mul-op | div-op | exp-op
+add-op ::= "{" ws "\"Add\"" ws ":" ws number-pair "}" ws
+sub-op ::= "{" ws "\"Sub\"" ws ":" ws number-pair "}" ws
+mul-op ::= "{" ws "\"Mul\"" ws ":" ws number-pair "}" ws
+div-op ::= "{" ws "\"Div\"" ws ":" ws number-pair "}" ws
+exp-op ::= "{" ws "\"Exp\"" ws ":" ws number-pair "}" ws
+number-pair ::= "[" ws number "," ws number "]" ws
+
+# VisitUrl tool call: {"VisitUrl": {"url": "..."}}
+visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
+visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
+
+# RecallHistory tool call: "RecallHistory" (unit variant)
+recall-history-tool-call ::= "\"RecallHistory\""
+
+# Basic JSON types
+string ::= "\"" string-char* "\""
+string-char ::= [^"\\\x00-\x1F] | "\\" escape-char
+escape-char ::= ["\\bfnrt/] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
+number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
+null ::= "null"
+ws ::= [ \t\n]*

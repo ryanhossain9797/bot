@@ -1,0 +1,7 @@
+pub const MONGODB_AUTH: &str = "FOO";
+pub const ADMIN_IDS: [&str; 2] = ["1234", "5678"];
+pub mod client_tokens {
+    pub const TELEGRAM_TOKEN: &str = "FOO";
+    pub const DISCORD_TOKEN: &str = "FOO";
+    pub const BRAVE_SEARCH_TOKEN: &str = "FOO";
+}
