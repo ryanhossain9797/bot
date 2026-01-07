@@ -49,8 +49,9 @@ number-pair ::= "[" ws number "," ws number "]" ws
 visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
 visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
 
-# RecallHistory tool call: "RecallHistory" (unit variant)
-recall-history-tool-call ::= "\"RecallHistory\""
+# RecallHistory tool call: {"RecallHistory": {"reason": "..."}}
+recall-history-tool-call ::= "{" ws "\"RecallHistory\"" ws ":" ws recall-history-value "}" ws
+recall-history-value ::= "{" ws "\"reason\"" ws ":" ws string "}" ws
 
 # Basic JSON types
 string ::= "\"" string-char* "\""

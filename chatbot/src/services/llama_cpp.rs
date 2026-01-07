@@ -47,7 +47,7 @@ RULES:
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"progress_notification\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":\"RecallHistory\"}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":{\"RecallHistory\":{\"reason\":\"Looking for user's name\"}}}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use \"Final\".
@@ -72,7 +72,7 @@ pub enum ToolCall {
     /// Visit a URL and extract its content. Use this to read the full content of pages found via WebSearch IF NEEDED.
     VisitUrl { url: String },
     /// Recall the last 20 messages of conversation history without redaction. Use this when you need to reference specific details from earlier in the conversation that might have been summarized or truncated.
-    RecallHistory,
+    RecallHistory { reason: String },
 }
 ```
 

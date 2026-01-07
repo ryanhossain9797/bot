@@ -312,7 +312,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
         | UserState::RunningTool { .. } => schedules.push(Scheduled {
-            at: user.last_transition + ChronoDuration::milliseconds(300_000),
+            at: user.last_transition + ChronoDuration::milliseconds(600_000),
             action: UserAction::ForceReset,
         }),
         _ => {}

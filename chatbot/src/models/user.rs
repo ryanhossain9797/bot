@@ -2,7 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
-pub const MAX_TOOL_OUTPUT_LENGTH: usize = 800;
+pub const MAX_SEARCH_RESULTS_LENGTH: usize = 800;
+pub const MAX_TOOL_OUTPUT_LENGTH: usize = 5000;
 pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -73,7 +74,7 @@ pub enum MathOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum ToolCall {
-    RecallHistory,
+    RecallHistory { reason: String },
     GetWeather { location: String },
     WebSearch { query: String },
     MathCalculation { operations: Vec<MathOperation> },

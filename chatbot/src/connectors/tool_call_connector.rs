@@ -2,6 +2,7 @@ use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{
         HistoryEntry, MathOperation, ToolCall, UserAction, MAX_SEARCH_DESCRIPTION_LENGTH,
+        MAX_SEARCH_RESULTS_LENGTH,
     },
     Env,
 };
@@ -39,7 +40,7 @@ pub async fn execute_tool(
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::RecallHistory => {
+        ToolCall::RecallHistory { reason: _ } => {
             // Return the most recent 20 history entries without redaction
             let start_index = if history.len() > 20 {
                 history.len() - 20
@@ -398,10 +399,16 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
 async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
     let extracted = fetch_page(url).await?;
 
+    let content = if extracted.content.len() > MAX_SEARCH_RESULTS_LENGTH {
+        &extracted.content[..MAX_SEARCH_RESULTS_LENGTH]
+    } else {
+        &extracted.content
+    };
+
     let mut output = String::new();
     output.push_str(&format!("URL: {}\n\n", extracted.final_url));
     output.push_str("Content:\n");
-    output.push_str(&extracted.content);
+    output.push_str(content);
 
     if !extracted.links.is_empty() {
         output.push_str("\n\nLinks:\n");
