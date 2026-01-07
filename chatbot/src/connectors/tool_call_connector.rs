@@ -1,6 +1,5 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
-    connectors::llama_cpp_connector::format_history_entry,
     models::user::{
         HistoryEntry, MathOperation, ToolCall, UserAction, MAX_SEARCH_DESCRIPTION_LENGTH,
     },
@@ -51,7 +50,7 @@ pub async fn execute_tool(
 
             let formatted_history = recent_history
                 .iter()
-                .map(|entry| format_history_entry(entry)) // Use non-redacted formatting
+                .map(|entry| entry.format())
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
