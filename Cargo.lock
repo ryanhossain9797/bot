@@ -140,29 +140,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bot"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "lib_hive",
- "llama-cpp-2",
- "num_cpus",
- "ollama-rs",
- "once_cell",
- "readability",
- "regex",
- "reqwest 0.12.24",
- "schemars",
- "scraper",
- "serde",
- "serde_json",
- "serenity",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -212,6 +189,29 @@ name = "cfg_aliases"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
+
+[[package]]
+name = "chatbot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "framework",
+ "llama-cpp-2",
+ "num_cpus",
+ "ollama-rs",
+ "once_cell",
+ "readability",
+ "regex",
+ "reqwest 0.12.24",
+ "schemars",
+ "scraper",
+ "serde",
+ "serde_json",
+ "serenity",
+ "tokio",
+ "urlencoding",
+]
 
 [[package]]
 name = "chrono"
@@ -523,6 +523,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "framework"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -1108,16 +1118,6 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
-name = "lib_hive"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "serde",
- "tokio",
-]
 
 [[package]]
 name = "libc"
