@@ -47,6 +47,7 @@ RULES:
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"progress_notification\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":\"RecallHistory\"}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use \"Final\".
