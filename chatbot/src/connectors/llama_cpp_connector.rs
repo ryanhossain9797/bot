@@ -9,9 +9,9 @@ use llama_cpp_2::{
 use serde::Deserialize;
 use std::{io::Write, ops::ControlFlow, sync::Arc};
 
-pub fn format_history_entry(entry: &HistoryEntry, truncate: bool) -> String {
+pub fn format_history_entry(entry: &HistoryEntry) -> String {
     match entry {
-        HistoryEntry::Input(input) => format_input(input, truncate),
+        HistoryEntry::Input(input) => format_input(input, true),
         HistoryEntry::Output(output) => match output {
             LLMDecisionType::Final { response } => {
                 format!("<|im_start|>assistant\n{}<|im_end|>", response)
@@ -36,7 +36,7 @@ pub fn format_history_entry(entry: &HistoryEntry, truncate: bool) -> String {
 fn format_history(history: &[HistoryEntry]) -> String {
     history
         .iter()
-        .map(|entry| format_history_entry(entry, true))
+        .map(|entry| format_history_entry(entry))
         .collect::<Vec<_>>()
         .join("\n\n")
 }

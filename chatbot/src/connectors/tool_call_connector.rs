@@ -51,7 +51,7 @@ pub async fn execute_tool(
 
             let formatted_history = recent_history
                 .iter()
-                .map(|entry| format_history_entry(entry, false)) // Use non-redacted formatting
+                .map(|entry| format_history_entry(entry)) // Use non-redacted formatting
                 .collect::<Vec<_>>()
                 .join("\n\n");
 
