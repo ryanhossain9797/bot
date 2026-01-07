@@ -89,6 +89,29 @@ pub enum LLMInput {
     ToolResult(String),
 }
 
+impl LLMInput {
+    pub fn format(&self, truncate: bool) -> String {
+        match self {
+            LLMInput::UserMessage(msg) => {
+                let mut content = msg.clone();
+                if truncate && content.len() > MAX_HISTORY_TEXT_LENGTH {
+                    content.truncate(MAX_HISTORY_TEXT_LENGTH);
+                    content.push_str("... (truncated)");
+                }
+                format!("<|im_start|>user\n{}<|im_end|>", content)
+            }
+            LLMInput::ToolResult(result) => {
+                let mut content = result.clone();
+                if truncate && content.len() > MAX_HISTORY_TEXT_LENGTH {
+                    content.truncate(MAX_HISTORY_TEXT_LENGTH);
+                    content.push_str("... (truncated)");
+                }
+                format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum LLMDecisionType {
     IntermediateToolCall {
@@ -102,6 +125,39 @@ pub enum LLMDecisionType {
     },
 }
 
+impl LLMDecisionType {
+    pub fn format_output(&self) -> String {
+        match self {
+            LLMDecisionType::Final { response } => {
+                let mut content = response.clone();
+                if content.len() > MAX_HISTORY_TEXT_LENGTH {
+                    content.truncate(MAX_HISTORY_TEXT_LENGTH);
+                    content.push_str("... (truncated)");
+                }
+                format!("<|im_start|>assistant\n{}<|im_end|>", content)
+            }
+            LLMDecisionType::IntermediateToolCall {
+                thoughts,
+                progress_notification,
+                tool_call,
+            } => {
+                let mut lines = Vec::new();
+                let mut thoughts_content = thoughts.clone();
+                if thoughts_content.len() > MAX_HISTORY_TEXT_LENGTH {
+                    thoughts_content.truncate(MAX_HISTORY_TEXT_LENGTH);
+                    thoughts_content.push_str("... (truncated)");
+                }
+                lines.push(format!("THOUGHTS: {}", thoughts_content));
+                if let Some(msg) = progress_notification {
+                    lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
+                }
+                lines.push(format!("CALL TOOL: {:?}", tool_call));
+                format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
+            }
+        }
+    }
+}
+
 /// Represents a single entry in the conversation history
 /// History alternates between inputs (LLMInput) and outputs (LLMDecisionType)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +166,38 @@ pub enum HistoryEntry {
     Input(LLMInput),
     /// An output from the LLM (decision/response)
     Output(LLMDecisionType),
+}
+
+impl HistoryEntry {
+    pub fn format(&self, truncate: bool) -> String {
+        match self {
+            HistoryEntry::Input(input) => input.format(truncate),
+            HistoryEntry::Output(output) => {
+                if truncate {
+                    output.format_output()
+                } else {
+                    match output {
+                        LLMDecisionType::Final { response } => {
+                            format!("<|im_start|>assistant\n{}<|im_end|>", response)
+                        }
+                        LLMDecisionType::IntermediateToolCall {
+                            thoughts,
+                            progress_notification,
+                            tool_call,
+                        } => {
+                            let mut lines = Vec::new();
+                            lines.push(format!("THOUGHTS: {}", thoughts));
+                            if let Some(msg) = progress_notification {
+                                lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
+                            }
+                            lines.push(format!("CALL TOOL: {:?}", tool_call));
+                            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
