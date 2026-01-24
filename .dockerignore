@@ -25,8 +25,7 @@ Thumbs.db
 bot_hive/models/
 
 # Large model file (already in base image, exclude from main build)
-models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
 
 # Debug files
 flycheck0/
-
