@@ -9,7 +9,7 @@ use crate::{
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use framework::{
-    new_life_cycle, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
+    new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
 
@@ -321,9 +321,9 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     schedules
 }
 
-pub static USER_LIFE_CYCLE: Lazy<framework::LifeCycleHandle<UserId, UserAction>> =
+pub static USER_STATE_MACHINE: Lazy<framework::StateMachineHandle<UserId, UserAction>> =
     Lazy::new(|| {
-        new_life_cycle(
+        new_state_machine(
             ENV.get().expect("ENV not initialized").clone(),
             Transition(user_transition),
             Schedule(schedule),
