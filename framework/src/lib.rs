@@ -1,9 +1,9 @@
 mod bee_handle;
-mod life_cycle_handle;
+mod state_machine_handle;
 
 use bee_handle::{new_entity, Handle};
 use chrono::{DateTime, Utc};
-pub use life_cycle_handle::*;
+pub use state_machine_handle::*;
 use std::time::Duration;
 use std::{future::Future, pin::Pin, sync::Arc};
 
@@ -15,14 +15,14 @@ pub type TransitionResult<Type, Action> =
 
 pub type ExternalOperation<Action> = Pin<Box<dyn Future<Output = Action> + Send>>;
 
-pub trait LifeCycleItem: Send + Sync + Clone {}
+pub trait StateMachineItem: Send + Sync + Clone {}
 
-impl<T: Send + Sync + Clone> LifeCycleItem for T {}
+impl<T: Send + Sync + Clone> StateMachineItem for T {}
 
-/// Extension of LifeCycleItem that supports persistence via JSON serialization
-pub trait PersistedLifeCycleItem: LifeCycleItem + serde::Serialize {}
+/// Extension of StateMachineItem that supports persistence via JSON serialization
+pub trait PersistedStateMachineItem: StateMachineItem + serde::Serialize {}
 
-impl<T> PersistedLifeCycleItem for T where T: LifeCycleItem + serde::Serialize {}
+impl<T> PersistedStateMachineItem for T where T: StateMachineItem + serde::Serialize {}
 
 #[derive(Clone)]
 pub struct Transition<Id, State, Action, Env>(
@@ -43,22 +43,22 @@ pub struct Scheduled<Action> {
 #[derive(Clone)]
 pub struct Schedule<State, Action>(pub fn(&State) -> Vec<Scheduled<Action>>);
 
-pub enum Activity<Action: PersistedLifeCycleItem + 'static> {
-    LifeCycleAction(Action),
+pub enum Activity<Action: PersistedStateMachineItem + 'static> {
+    StateMachineAction(Action),
     ScheduledWakeup,
     DeleteSelf,
 }
 
 async fn run_entity<
-    Id: PersistedLifeCycleItem + Ord + 'static,
-    State: PersistedLifeCycleItem + Default + 'static,
-    Action: PersistedLifeCycleItem + std::fmt::Debug + 'static,
-    Env: LifeCycleItem + 'static,
+    Id: PersistedStateMachineItem + Ord + 'static,
+    State: PersistedStateMachineItem + Default + 'static,
+    Action: PersistedStateMachineItem + std::fmt::Debug + 'static,
+    Env: StateMachineItem + 'static,
 >(
     env: Arc<Env>,
     id: Id,
     mut receiver: Receiver<Activity<Action>>,
-    handle: LifeCycleHandle<Id, Action>,
+    handle: StateMachineHandle<Id, Action>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
     self_sender: Sender<Activity<Action>>,
@@ -70,17 +70,17 @@ async fn run_entity<
         let now = Utc::now();
 
         let activity_str = match &activity {
-            Activity::LifeCycleAction(action) => format!("Action: {:?}", action),
+            Activity::StateMachineAction(action) => format!("Action: {:?}", action),
             Activity::ScheduledWakeup => "ScheduledWakeup".to_string(),
             Activity::DeleteSelf => "DeleteSelf".to_string(),
         };
         println!(
-            "TRANSITION AT {now} - Lifecycle: {} - {}",
+            "TRANSITION AT {now} - StateMachine: {} - {}",
             std::any::type_name::<State>(),
             activity_str
         );
         match activity {
-            Activity::LifeCycleAction(action) => {
+            Activity::StateMachineAction(action) => {
                 match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
                     Ok((updated_user, external)) => {
                         match &maybe_scheduled {
@@ -127,7 +127,7 @@ async fn run_entity<
                         }
 
                         external.into_iter().for_each(|f| {
-                            let handle: LifeCycleHandle<Id, Action> = handle.clone();
+                            let handle: StateMachineHandle<Id, Action> = handle.clone();
                             let user_id = id.clone();
                             tokio::spawn(async move {
                                 let action = f.await;
@@ -156,7 +156,7 @@ async fn run_entity<
                             Err(_negative_time_error) => {
                                 // Negative duration means the scheduled time has already passed
                                 let _ = self_sender
-                                    .send(Activity::LifeCycleAction(scheduled.action))
+                                    .send(Activity::StateMachineAction(scheduled.action))
                                     .await;
                             }
                         }
@@ -169,14 +169,14 @@ async fn run_entity<
     }
 }
 
-async fn start_life_cycle<
-    Id: PersistedLifeCycleItem + Ord + 'static,
-    State: PersistedLifeCycleItem + Default + 'static,
-    Action: PersistedLifeCycleItem + std::fmt::Debug + 'static,
-    Env: LifeCycleItem + 'static,
+async fn start_state_machine<
+    Id: PersistedStateMachineItem + Ord + 'static,
+    State: PersistedStateMachineItem + Default + 'static,
+    Action: PersistedStateMachineItem + std::fmt::Debug + 'static,
+    Env: StateMachineItem + 'static,
 >(
     env: Arc<Env>,
-    life_cycle_handle: LifeCycleHandle<Id, Action>,
+    state_machine_handle: StateMachineHandle<Id, Action>,
     mut receiver: Receiver<(Id, Action)>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
@@ -190,7 +190,7 @@ async fn start_life_cycle<
                 let handle = new_entity(
                     env.clone(),
                     id.clone(),
-                    life_cycle_handle.clone(),
+                    state_machine_handle.clone(),
                     transition.clone(),
                     schedule.clone(),
                 );

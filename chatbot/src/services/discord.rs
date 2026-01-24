@@ -1,10 +1,10 @@
-use framework::LifeCycleHandle;
+use framework::StateMachineHandle;
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    life_cycles::user_life_cycle::USER_LIFE_CYCLE,
     models::user::{User, UserAction, UserChannel, UserId},
+    state_machines::user_state_machine::USER_STATE_MACHINE,
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -12,11 +12,11 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
 
     let intents = GatewayIntents::DIRECT_MESSAGES;
 
-    let user_life_cycle = USER_LIFE_CYCLE.clone();
+    let user_state_machine = USER_STATE_MACHINE.clone();
 
     // Create a new instance of the Client, logging in as a bot. This will
     let client = Client::builder(discord_token, intents)
-        .event_handler(Handler { user_life_cycle })
+        .event_handler(Handler { user_state_machine })
         .await?;
 
     Ok(client)
@@ -29,7 +29,7 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    user_life_cycle: LifeCycleHandle<UserId, UserAction>,
+    user_state_machine: StateMachineHandle<UserId, UserAction>,
 }
 
 #[async_trait]
@@ -44,7 +44,7 @@ impl EventHandler for Handler {
                     start_conversation,
                     msg,
                 };
-                self.user_life_cycle.act(user_id, action).await;
+                self.user_state_machine.act(user_id, action).await;
             }
         }
     }

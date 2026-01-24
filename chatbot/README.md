@@ -93,7 +93,7 @@ chatbot/
 │   │   ├── llm_connector.rs    # LLM decision making
 │   │   ├── message_connector.rs# Message sending
 │   │   └── tool_call_connector.rs # Tool execution
-│   ├── life_cycles/            # User state machine logic
+│   ├── state_machines/         # User state machine logic
 │   └── models/                 # Data models
 ├── grammars/
 │   └── response.gbnf           # GBNF grammar for JSON output
@@ -114,7 +114,7 @@ chatbot/
     Bridges the state machine's "actions" to actual side effects (calling LLM, sending messages, executing tools).
 
 ### Flow Overview
-1.  **Message Received**: Normalized and passed to `UserLifeCycle`.
+1.  **Message Received**: Normalized and passed to `UserStateMachine`.
 2.  **Decision**: State machine transitions to `AwaitingLLMDecision`, triggering `LlamaCppService`.
 3.  **Inference**:
     - Loads cached session (base prompt).

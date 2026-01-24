@@ -2,18 +2,18 @@
 
 mod configuration;
 mod connectors;
-mod life_cycles;
 mod models;
 mod services;
+mod state_machines;
 
-use framework::{new_life_cycle, Schedule, Transition};
-use life_cycles::user_life_cycle::user_transition;
+use framework::{new_state_machine, Schedule, Transition};
 use models::bot::{BotAction, BotHandle};
 use models::user::{User, UserId};
 use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use services::llama_cpp::LlamaCppService;
+use state_machines::user_state_machine::user_transition;
 // use services::ollama::OllamaService;
 use std::sync::Arc;
 use tokio::task::JoinSet;
