@@ -6,13 +6,13 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Copy model file (large, rarely changes)
-COPY models/Qwen2.5-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+COPY models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf /app/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
 
 # Copy grammar file
 COPY grammars/response.gbnf /app/grammars/response.gbnf
 
 # Set environment variables
-ENV MODEL_PATH=/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+ENV MODEL_PATH=/app/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
 ENV RUST_LOG=info
 
 # Update package list and install runtime dependencies

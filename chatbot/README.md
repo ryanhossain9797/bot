@@ -70,7 +70,7 @@ docker run -d \
 ## Configuration
 
 ### Environment Variables
-- `MODEL_PATH`: Path to the LLM model file inside the container (default: `/app/models/Qwen2.5-14B-Instruct-Q4_K_M.gguf`).
+- `MODEL_PATH`: Path to the LLM model file inside the container (default: `/app/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf`).
 - `RUST_LOG`: Log level (default: `info`).
 
 ### Session File Caching
