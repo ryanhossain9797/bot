@@ -89,10 +89,12 @@ chatbot/
 │   ├── services/               # Core services
 │   │   ├── discord.rs          # Discord client & event handler
 │   │   └── llama_cpp.rs        # Local LLM inference service
-│   ├── connectors/             # Operation handlers
-│   │   ├── llm_connector.rs    # LLM decision making
-│   │   ├── message_connector.rs# Message sending
-│   │   └── tool_call_connector.rs # Tool execution
+│   │
+│   ├── externals/              # External operation handlers
+│   │   ├── llm_external.rs     # LLM decision making
+│   │   ├── message_external.rs # Message sending
+│   │   └── tool_call_external.rs  # Tool execution
+│   │
 │   ├── state_machines/         # User state machine logic
 │   └── models/                 # Data models
 ├── grammars/

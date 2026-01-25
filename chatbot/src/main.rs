@@ -1,7 +1,7 @@
 #![feature(never_type)]
 
 mod configuration;
-mod connectors;
+mod externals;
 mod models;
 mod services;
 mod state_machines;
