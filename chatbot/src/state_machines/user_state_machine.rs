@@ -13,9 +13,9 @@ use framework::{
 };
 use once_cell::sync::Lazy;
 
-use crate::connectors::{
-    llama_cpp_connector::get_llm_decision, message_connector::send_message,
-    tool_call_connector::execute_tool,
+use crate::externals::{
+    llama_cpp_external::get_llm_decision, message_external::send_message,
+    tool_call_external::execute_tool,
 };
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
