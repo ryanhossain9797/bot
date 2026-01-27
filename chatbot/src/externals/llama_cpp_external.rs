@@ -46,11 +46,22 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
             format!("<|im_start|>user\n{}<|im_end|>", content)
         }
         LLMInput::ToolResult(result) => {
-            let mut content = result.clone();
-            if truncate && content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(crate::models::user::MAX_HISTORY_TEXT_LENGTH);
-                content.push_str("... (truncated)");
-            }
+            let content = match truncate {
+                true => {
+                    let mut chars = result.chars();
+                    let content = chars
+                        .by_ref()
+                        .take(crate::models::user::MAX_HISTORY_TEXT_LENGTH)
+                        .collect::<String>();
+
+                    match chars.next() {
+                        Some(_) => content + "... (truncated)",
+                        None => content,
+                    }
+                }
+                false => result.clone(),
+            };
+
             format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
         }
     }
