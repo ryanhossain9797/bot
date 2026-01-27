@@ -11,32 +11,14 @@ use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::num::NonZero;
 
 const SESSION_FILE_PATH: &str = "./resources/base_prompt.session";
-const BASE_PROMPT_IMPL: BasePrompt = BasePrompt::new();
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct BasePrompt {
-    prompt: &'static str,
+    prompt: String,
     session_path: &'static str,
 }
 
-impl BasePrompt {
-    const fn new() -> Self {
-        Self {
-            prompt: Self::build_prompt(),
-            session_path: SESSION_FILE_PATH,
-        }
-    }
-
-    fn as_str(&self) -> &str {
-        self.prompt
-    }
-
-    fn session_path(&self) -> &str {
-        self.session_path
-    }
-
-    const fn build_prompt() -> &'static str {
-        "<|im_start|>system\nYour name is Terminal Alpha Beta. Respond with ONLY valid JSON.
+const BASE_PROMPT: &'static str = "<|im_start|>system\nYour name is Terminal Alpha Beta. Respond with ONLY valid JSON.
 
 RULES:
 1. Keep responses brief and to the point.
@@ -47,7 +29,7 @@ RULES:
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"progress_notification\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":{\"RecallHistory\":{\"reason\":\"Looking for user's name\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":{\"RecallShortTerm\":{\"reason\":\"Looking for user's name\"}}}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use \"Final\".
@@ -72,7 +54,7 @@ pub enum ToolCall {
     /// Visit a URL and extract its content. Use this to read the full content of pages found via WebSearch IF NEEDED.
     VisitUrl { url: String },
     /// Recall the last 20 messages of conversation history without redaction. Use this when you need to reference specific details from earlier in the conversation that might have been summarized or truncated.
-    RecallHistory { reason: String },
+    RecallShortTerm { reason: String },
 }
 ```
 
@@ -82,6 +64,8 @@ CRITICAL INSTRUCTIONS:
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
 - Use \"progress_notification\" to keep the user informed during multi-step tasks.
+- You will only get truncated message history in normal scenarios. Use RecallShortTerm to get unredacted recent history when needed.
+- Use thoughts to keep track of your reasoning, information and plan your next steps. Thoughts will be provided untouched in the next prompt.
 
 THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
@@ -89,7 +73,26 @@ The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state a
 - TRACK ATTEMPTS: Explicitly track failures and retries. E.g., \"Attempt 1/3 failed. Trying new query...\"
 - Include summaries of information gathered so far in 'thoughts' so you don't lose it.
 - This field is your PRIMARY memory. Use it to decide if you have enough info to finish with a \"Final\" response.
-<|im_end|>"
+<|im_end|>";
+
+impl BasePrompt {
+    fn new() -> Self {
+        Self {
+            prompt: Self::build_prompt(),
+            session_path: SESSION_FILE_PATH,
+        }
+    }
+
+    fn as_str(&self) -> &str {
+        &self.prompt
+    }
+
+    fn session_path(&self) -> &str {
+        self.session_path
+    }
+
+    fn build_prompt() -> String {
+        format!("{BASE_PROMPT}\n\nREPEATING INSTRUCTIONS\n\n{BASE_PROMPT}")
     }
 
     fn load_base_prompt(
@@ -111,7 +114,7 @@ The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state a
                     self.session_path, e
                 );
                 eprintln!("Falling back to full prompt evaluation (slower)");
-                let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
+                let tokens = model.str_to_token(&self.prompt, AddBos::Always)?;
 
                 let mut batch = LlamaCppService::new_batch();
                 let batch_limit = LlamaCppService::BATCH_CHUNK_SIZE;
@@ -198,9 +201,8 @@ impl LlamaCppService {
         let model_params = LlamaModelParams::default();
         let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)?;
 
-        let base_prompt = BASE_PROMPT_IMPL;
+        let base_prompt = BasePrompt::new();
 
-        // Create session file during construction
         if let Err(e) = Self::create_session_file_impl(
             &model,
             &backend,

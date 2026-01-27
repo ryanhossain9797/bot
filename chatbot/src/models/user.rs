@@ -75,7 +75,7 @@ pub enum MathOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
 pub enum ToolCall {
-    RecallHistory { reason: String },
+    RecallShortTerm { reason: String },
     GetWeather { location: String },
     WebSearch { query: String },
     MathCalculation { operations: Vec<MathOperation> },
