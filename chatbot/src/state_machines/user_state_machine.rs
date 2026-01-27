@@ -91,11 +91,26 @@ pub fn user_transition(
                 user_state,
                 UserAction::NewMessage {
                     msg,
-                    start_conversation: true,
+                    start_conversation,
                 },
             ) => {
-                let mut pending = user.pending;
-                pending.push(msg.clone());
+                let accept_message = match (&user_state, start_conversation) {
+                    (
+                        UserState::Idle {
+                            recent_conversation: Some(_),
+                        },
+                        _,
+                    ) => true,
+                    _ => *start_conversation,
+                };
+
+                let pending = if accept_message {
+                    let mut pending = user.pending;
+                    pending.push(msg.clone());
+                    pending
+                } else {
+                    user.pending
+                };
 
                 Ok((
                     User {
