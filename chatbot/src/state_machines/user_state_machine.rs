@@ -97,11 +97,11 @@ pub fn user_transition(
                 let accept_message = match (&user_state, start_conversation) {
                     (
                         UserState::Idle {
-                            recent_conversation: Some(_),
+                            recent_conversation: None,
                         },
-                        _,
-                    ) => true,
-                    _ => *start_conversation,
+                        false,
+                    ) => false,
+                    _ => true,
                 };
 
                 let pending = if accept_message {
