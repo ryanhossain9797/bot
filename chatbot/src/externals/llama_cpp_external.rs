@@ -1,5 +1,5 @@
 use crate::{
-    models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
+    models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction, MAX_HISTORY_TEXT_LENGTH},
     services::llama_cpp::LlamaCppService,
     Env,
 };
@@ -13,8 +13,8 @@ fn format_output(output: &LLMDecisionType) -> String {
     match output {
         LLMDecisionType::Final { response } => {
             let mut content = response.clone();
-            if content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(crate::models::user::MAX_HISTORY_TEXT_LENGTH);
+            if content.len() > MAX_HISTORY_TEXT_LENGTH {
+                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
                 content.push_str("... (truncated)");
             }
             format!("<|im_start|>assistant\n{}<|im_end|>", content)
@@ -40,27 +40,17 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
         LLMInput::UserMessage(msg) => {
             let mut content = msg.clone();
             if truncate && content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(crate::models::user::MAX_HISTORY_TEXT_LENGTH);
+                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
                 content.push_str("... (truncated)");
             }
             format!("<|im_start|>user\n{}<|im_end|>", content)
         }
         LLMInput::ToolResult(result) => {
-            let content = match truncate {
-                true => {
-                    let mut chars = result.chars();
-                    let content = chars
-                        .by_ref()
-                        .take(crate::models::user::MAX_HISTORY_TEXT_LENGTH)
-                        .collect::<String>();
-
-                    match chars.next() {
-                        Some(_) => format!("{content}... (truncated)"),
-                        None => content,
-                    }
-                }
-                false => result.clone(),
-            };
+            let mut content = result.clone();
+            if content.len() > MAX_HISTORY_TEXT_LENGTH {
+                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
+                content.push_str("... (truncated)");
+            }
 
             format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
         }

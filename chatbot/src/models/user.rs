@@ -184,7 +184,7 @@ impl std::fmt::Debug for UserAction {
                 Ok(content) => {
                     let mut s = content.clone();
                     if s.len() > MAX_TOOL_OUTPUT_LENGTH {
-                        s.truncate(MAX_TOOL_OUTPUT_LENGTH);
+                        s.truncate(content.ceil_char_boundary(MAX_TOOL_OUTPUT_LENGTH));
                         s.push_str("... (truncated)");
                     }
                     f.debug_tuple("ToolResult")
