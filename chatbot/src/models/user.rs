@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
 pub const MAX_SEARCH_RESULTS_LENGTH: usize = 800;
 pub const MAX_TOOL_OUTPUT_LENGTH: usize = 5000;
+pub const MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH: usize = 5000;
 pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -39,6 +40,10 @@ pub enum UserState {
         recent_conversation: RecentConversation,
         current_input: LLMInput,
     },
+    RunningInternalFunction {
+        is_timeout: bool,
+        recent_conversation: RecentConversation,
+    },
     SendingMessage {
         is_timeout: bool,
         outcome: LLMDecisionType,
@@ -73,13 +78,17 @@ pub enum MathOperation {
     Exp(f32, f32),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCall {
-    RecallHistory { reason: String },
     GetWeather { location: String },
     WebSearch { query: String },
     MathCalculation { operations: Vec<MathOperation> },
     VisitUrl { url: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FunctionCall {
+    RecallShortTerm { reason: String },
 }
 
 /// Represents the input to the LLM decision-making process
@@ -87,6 +96,8 @@ pub enum ToolCall {
 pub enum LLMInput {
     /// A message from the user
     UserMessage(String),
+    /// Continuation after an internal function execution with the function result
+    InternalFunctionResult(String),
     /// Continuation after a tool execution with the tool result
     ToolResult(String),
 }
@@ -95,18 +106,25 @@ impl LLMInput {
     pub fn format(&self) -> String {
         match self {
             LLMInput::UserMessage(msg) => format!("user: {msg}"),
+            LLMInput::InternalFunctionResult(result) => {
+                format!("internal_function_result: {result}")
+            }
             LLMInput::ToolResult(result) => format!("tool_result: {result}"),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
     IntermediateToolCall {
         thoughts: String,
         /// A brief message to the user notifying them of the current progress (e.g., "Searching for...")
         progress_notification: Option<String>,
         tool_call: ToolCall,
+    },
+    InternalFunctionCall {
+        thoughts: String,
+        function_call: FunctionCall,
     },
     Final {
         response: String,
@@ -117,6 +135,10 @@ impl LLMDecisionType {
     pub fn format_output(&self) -> String {
         match self {
             LLMDecisionType::Final { response } => format!("assistant: {response}"),
+            LLMDecisionType::InternalFunctionCall {
+                thoughts: _,
+                function_call,
+            } => format!("assistant\nfunction_call: {function_call:?}"),
             LLMDecisionType::IntermediateToolCall {
                 thoughts: _,
                 progress_notification,
@@ -161,6 +183,7 @@ pub enum UserAction {
     },
     Timeout,
     LLMDecisionResult(Result<LLMDecisionType, String>),
+    InternalFunctionResult(Result<String, String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<String, String>),
 }
@@ -179,12 +202,28 @@ impl std::fmt::Debug for UserAction {
                 .finish(),
             Self::Timeout => write!(f, "Timeout"),
             Self::LLMDecisionResult(res) => f.debug_tuple("LLMDecisionResult").field(res).finish(),
-            Self::MessageSent(res) => f.debug_tuple("MessageSent").field(res).finish(),
-            Self::ToolResult(res) => match res {
+            Self::InternalFunctionResult(res) => match res {
                 Ok(content) => {
                     let mut s = content.clone();
                     if s.len() > MAX_TOOL_OUTPUT_LENGTH {
                         s.truncate(content.ceil_char_boundary(MAX_TOOL_OUTPUT_LENGTH));
+                        s.push_str("... (truncated)");
+                    }
+                    f.debug_tuple("ToolResult")
+                        .field(&Ok::<String, String>(s))
+                        .finish()
+                }
+                Err(e) => f
+                    .debug_tuple("ToolResult")
+                    .field(&Err::<String, String>(e.clone()))
+                    .finish(),
+            },
+            Self::MessageSent(res) => f.debug_tuple("MessageSent").field(res).finish(),
+            Self::ToolResult(res) => match res {
+                Ok(content) => {
+                    let mut s = content.clone();
+                    if s.len() > MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH {
+                        s.truncate(content.ceil_char_boundary(MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH));
                         s.push_str("... (truncated)");
                     }
                     f.debug_tuple("ToolResult")

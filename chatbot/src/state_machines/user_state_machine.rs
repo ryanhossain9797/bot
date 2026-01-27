@@ -1,9 +1,10 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
 use crate::{
+    externals::recall_short_term_external::execute_recall,
     models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
-        UserState,
+        FunctionCall, HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User,
+        UserAction, UserId, UserState,
     },
     Env, ENV,
 };
@@ -12,7 +13,6 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
-use serenity::futures::future::Pending;
 
 use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
@@ -59,6 +59,31 @@ fn handle_outcome(
             Ok((
                 User {
                     state: UserState::RunningTool {
+                        is_timeout,
+                        recent_conversation,
+                    },
+                    last_transition: Utc::now(),
+                    pending,
+                },
+                external,
+            ))
+        }
+        LLMDecisionType::InternalFunctionCall { function_call, .. } => {
+            // Intermediate message sent - now execute the tool
+            let mut external = Vec::<UserExternalOperation>::new();
+
+            match function_call {
+                FunctionCall::RecallShortTerm { .. } => {
+                    external.push(Box::pin(execute_recall(
+                        env.clone(),
+                        recent_conversation.history.clone(),
+                    )));
+                }
+            }
+
+            Ok((
+                User {
+                    state: UserState::RunningInternalFunction {
                         is_timeout,
                         recent_conversation,
                     },
@@ -142,6 +167,7 @@ pub fn user_transition(
                     // Extract message to send from outcome
                     let message_to_send = match &outcome {
                         LLMDecisionType::Final { response } => Some(response.clone()),
+                        LLMDecisionType::InternalFunctionCall { .. } => None,
                         LLMDecisionType::IntermediateToolCall {
                             progress_notification,
                             ..
@@ -207,6 +233,67 @@ pub fn user_transition(
                 recent_conversation,
                 user.pending,
             ),
+            (
+                UserState::RunningInternalFunction {
+                    recent_conversation,
+                    is_timeout,
+                },
+                UserAction::InternalFunctionResult(res),
+            ) => {
+                match res {
+                    Ok(internal_function_result) => {
+                        let current_input =
+                            LLMInput::InternalFunctionResult(internal_function_result.clone());
+
+                        // Function execution complete - get next LLM decision with function results
+                        let mut external = Vec::<UserExternalOperation>::new();
+                        external.push(Box::pin(get_llm_decision(
+                            env.clone(),
+                            current_input.clone(),
+                            recent_conversation.history.clone(),
+                        )));
+
+                        Ok((
+                            User {
+                                state: UserState::AwaitingLLMDecision {
+                                    is_timeout,
+                                    recent_conversation,
+                                    current_input,
+                                },
+                                last_transition: Utc::now(),
+                                ..user
+                            },
+                            external,
+                        ))
+                    }
+                    Err(error_msg) => {
+                        let error_result =
+                            format!("Internal function execution failed: {}", error_msg);
+                        let current_input = LLMInput::InternalFunctionResult(error_result);
+
+                        // Let LLM handle the error and inform the user
+                        let mut external = Vec::<UserExternalOperation>::new();
+                        external.push(Box::pin(get_llm_decision(
+                            env.clone(),
+                            current_input.clone(),
+                            recent_conversation.history.clone(),
+                        )));
+
+                        Ok((
+                            User {
+                                state: UserState::AwaitingLLMDecision {
+                                    is_timeout,
+                                    recent_conversation,
+                                    current_input,
+                                },
+                                last_transition: Utc::now(),
+                                ..user
+                            },
+                            external,
+                        ))
+                    }
+                }
+            }
             (
                 UserState::RunningTool {
                     recent_conversation,
@@ -365,6 +452,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         }),
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
+        | UserState::RunningInternalFunction { .. }
         | UserState::RunningTool { .. } => schedules.push(Scheduled {
             at: user.last_transition + ChronoDuration::milliseconds(600_000),
             action: UserAction::ForceReset,
