@@ -55,7 +55,7 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
                         .collect::<String>();
 
                     match chars.next() {
-                        Some(_) => content + "... (truncated)",
+                        Some(_) => format!("{content}... (truncated)"),
                         None => content,
                     }
                 }
