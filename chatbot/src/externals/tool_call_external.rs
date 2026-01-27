@@ -40,26 +40,6 @@ pub async fn execute_tool(
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::RecallShortTerm { reason: _ } => {
-            // Return the most recent 20 history entries without redaction
-            let start_index = if history.len() > 20 {
-                history.len() - 20
-            } else {
-                0
-            };
-            let recent_history = &history[start_index..];
-
-            let formatted_history = recent_history
-                .iter()
-                .map(|entry| entry.format())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-
-            UserAction::ToolResult(Ok(format!(
-                "Recent conversation history (last 20 entries):\n\n{}",
-                formatted_history
-            )))
-        }
     }
 }
 

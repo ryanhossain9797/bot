@@ -1,5 +1,8 @@
 use crate::{
-    models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction, MAX_HISTORY_TEXT_LENGTH},
+    models::user::{
+        HistoryEntry, LLMDecisionType, LLMInput, UserAction, MAX_HISTORY_TEXT_LENGTH,
+        MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
+    },
     services::llama_cpp::LlamaCppService,
     Env,
 };
@@ -32,6 +35,14 @@ fn format_output(output: &LLMDecisionType) -> String {
             lines.push(format!("CALL TOOL: {:?}", tool_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
         }
+        LLMDecisionType::InternalFunctionCall {
+            thoughts: _,
+            function_call,
+        } => {
+            let mut lines = Vec::new();
+            lines.push(format!("CALL INTERNAL FUNCTION: {:?}", function_call));
+            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
+        }
     }
 }
 
@@ -45,10 +56,22 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
             }
             format!("<|im_start|>user\n{}<|im_end|>", content)
         }
+        LLMInput::InternalFunctionResult(result) => {
+            let mut content = result.clone();
+            if content.len() > MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH {
+                content.truncate(content.ceil_char_boundary(MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH));
+                content.push_str("... (truncated)");
+            }
+
+            format!(
+                "<|im_start|>user\n[INTERNAL FUNCTION RESULT]:\n{}<|im_end|>",
+                content
+            )
+        }
         LLMInput::ToolResult(result) => {
             let mut content = result.clone();
-            if content.len() > MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
+            if content.len() > MAX_TOOL_OUTPUT_LENGTH {
+                content.truncate(content.ceil_char_boundary(MAX_TOOL_OUTPUT_LENGTH));
                 content.push_str("... (truncated)");
             }
 
