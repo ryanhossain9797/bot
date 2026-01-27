@@ -47,15 +47,31 @@ RULES:
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"progress_notification\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":{\"RecallShortTerm\":{\"reason\":\"Looking for user's name\"}}}}}
+{\"outcome\":{\"InternalFunctionCall\":{\"thoughts\":\"I need to recall earlier messages to find the user's name.\",\"function_call\":{\"RecallShortTerm\":{\"reason\":\"User's name was mentioned earlier in the conversation\"}}}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use \"Final\".
-2. If you need more information or need to perform an action, use \"IntermediateToolCall\".
-3. Use \"progress_notification\" to tell the user what you are doing (e.g. \"Searching for...\"). This is sent to the user immediately.
+2. If you need more information or need to perform an action, use \"IntermediateToolCall\" or \"InternalFunctionCall\".
+3. Use \"progress_notification\" for ToolCall to tell the user what you are doing (e.g. \"Searching for...\"). This is sent to the user immediately.
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
+
+pub enum LLMDecisionType {
+    IntermediateToolCall {
+        thoughts: String,
+        progress_notification: Option<String>,
+        tool_call: ToolCall,
+    },
+    InternalFunctionCall {
+        thoughts: String,
+        function_call: FunctionCall,
+    },
+    Final {
+        response: String,
+    },
+}
+
 pub enum MathOperation {
     Add(f32, f32),
     Sub(f32, f32),
@@ -71,19 +87,25 @@ pub enum ToolCall {
     MathCalculation { operations: Vec<MathOperation> },
     /// Visit a URL and extract its content. Use this to read the full content of pages found via WebSearch IF NEEDED.
     VisitUrl { url: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FunctionCall {
     /// Recall the last 20 messages of conversation history without redaction. Use this when you need to reference specific details from earlier in the conversation that might have been summarized or truncated.
     RecallShortTerm { reason: String },
 }
 ```
 
 CRITICAL INSTRUCTIONS:
-- ONLY use the tools defined above.
-- WebSearch ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
+- ONLY use the tools and internal functions defined above.
+- IntermediateToolCall and InternalFunctionCall are functionally EQUIVALENT
+  They have been partitioned only to distinguish which is considered your internal monlogue vs using an external tool.
+- WebSearch tool ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
-- Use \"progress_notification\" to keep the user informed during multi-step tasks.
+- Use \"progress_notification\" to keep the user informed during multi-step tool calls.
 - Conversation history will be truncated, use thoughsts to keep track of important details.
-- If you need to refer to earlier parts of the conversation that may have been truncated, use the RecallShortTerm tool to retrieve the last 20 messages.
+- If you need to refer to earlier parts of the conversation that may have been truncated, use the RecallShortTerm internal function to retrieve the last 20 messages.
 
 THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
