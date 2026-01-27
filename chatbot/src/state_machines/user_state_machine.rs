@@ -12,6 +12,7 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
+use serenity::futures::future::Pending;
 
 use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
@@ -21,13 +22,12 @@ use crate::externals::{
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
 
-/// Handle the outcome after a message is sent (or skipped for silent tool calls).
-/// Returns the next state transition based on the outcome.
 fn handle_outcome(
     env: Arc<Env>,
     is_timeout: bool,
     outcome: LLMDecisionType,
     recent_conversation: RecentConversation,
+    pending: Vec<String>,
 ) -> UserTransitionResult {
     match outcome {
         LLMDecisionType::Final { .. } => {
@@ -42,6 +42,7 @@ fn handle_outcome(
                         },
                     },
                     last_transition: Utc::now(),
+                    pending,
                 },
                 Vec::new(),
             ))
@@ -62,6 +63,7 @@ fn handle_outcome(
                         recent_conversation,
                     },
                     last_transition: Utc::now(),
+                    pending,
                 },
                 external,
             ))
@@ -76,9 +78,10 @@ pub fn user_transition(
     action: &UserAction,
 ) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send + '_>> {
     Box::pin(async move {
-        match (user.state, action) {
+        let state = match (user.state, action) {
             (_, UserAction::ForceReset) => Ok((
                 User {
+                    pending: Vec::new(),
                     state: UserState::default(),
                     last_transition: Utc::now(),
                 },
@@ -86,42 +89,26 @@ pub fn user_transition(
             )),
             (
                 UserState::Idle {
-                    recent_conversation: last_conversation,
+                    recent_conversation,
                 },
                 UserAction::NewMessage {
                     msg,
                     start_conversation: true,
                 },
             ) => {
-                let mut external = Vec::<UserExternalOperation>::new();
+                let mut pending = user.pending;
+                pending.push(msg.clone());
 
-                let recent_conversation = match last_conversation {
-                    Some((conv, _)) => conv,
-                    None => RecentConversation {
-                        history: Vec::new(),
+                Ok((
+                    User {
+                        pending,
+                        state: UserState::Idle {
+                            recent_conversation,
+                        },
+                        ..user
                     },
-                };
-
-                let current_input = LLMInput::UserMessage(msg.clone());
-
-                external.push(Box::pin(get_llm_decision(
-                    env.clone(),
-                    current_input.clone(),
-                    recent_conversation.history.clone(),
-                )));
-
-                let user = User {
-                    state: UserState::AwaitingLLMDecision {
-                        is_timeout: false,
-                        recent_conversation,
-                        current_input,
-                    },
-                    last_transition: Utc::now(),
-                };
-
-                println!("Id: {0} {1:?}", user_id.1, user.state);
-
-                Ok((user, external))
+                    Vec::new(),
+                ))
             }
             (
                 UserState::AwaitingLLMDecision {
@@ -170,19 +157,18 @@ pub fn user_transition(
                                         recent_conversation: updated_conversation,
                                     },
                                     last_transition: Utc::now(),
+                                    ..user
                                 },
                                 external,
                             ))
                         }
-                        None => {
-                            // Silent tool call - go directly to handle outcome
-                            handle_outcome(
-                                env.clone(),
-                                is_timeout,
-                                outcome.clone(),
-                                updated_conversation,
-                            )
-                        }
+                        None => handle_outcome(
+                            env.clone(),
+                            is_timeout,
+                            outcome.clone(),
+                            updated_conversation,
+                            user.pending,
+                        ),
                     }
                 }
                 Err(_) => Ok((
@@ -191,6 +177,7 @@ pub fn user_transition(
                             recent_conversation: None,
                         },
                         last_transition: Utc::now(),
+                        ..user
                     },
                     Vec::new(),
                 )),
@@ -202,11 +189,13 @@ pub fn user_transition(
                     recent_conversation,
                 },
                 UserAction::MessageSent(_res),
-            ) => {
-                // Ignore errors from message sending - continue with normal flow regardless
-                // Message sent (or failed, but we don't care) - check outcome to determine next state
-                handle_outcome(env.clone(), is_timeout, outcome, recent_conversation)
-            }
+            ) => handle_outcome(
+                env.clone(),
+                is_timeout,
+                outcome,
+                recent_conversation,
+                user.pending,
+            ),
             (
                 UserState::RunningTool {
                     recent_conversation,
@@ -234,6 +223,7 @@ pub fn user_transition(
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
+                                ..user
                             },
                             external,
                         ))
@@ -258,6 +248,7 @@ pub fn user_transition(
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
+                                ..user
                             },
                             external,
                         ))
@@ -291,13 +282,65 @@ pub fn user_transition(
                             current_input,
                         },
                         last_transition: Utc::now(),
+                        ..user
                     },
                     external,
                 ))
             }
             _ => Err(anyhow::anyhow!("Invalid state or action")),
-        }
+        };
+
+        post_transition(env, user_id, state)
     })
+}
+
+fn post_transition(
+    env: Arc<Env>,
+    user_id: UserId,
+    result: UserTransitionResult,
+) -> UserTransitionResult {
+    let (user, mut external) = result?;
+
+    match (&user.state, user.pending.len() > 0) {
+        (
+            UserState::Idle {
+                recent_conversation: last_conversation,
+            },
+            true,
+        ) => {
+            let recent_conversation = match last_conversation {
+                Some((conv, _)) => conv.clone(),
+                None => RecentConversation {
+                    history: Vec::new(),
+                },
+            };
+
+            let msg = user.pending.join("\n");
+
+            let current_input = LLMInput::UserMessage(msg.clone());
+
+            external.push(Box::pin(get_llm_decision(
+                env.clone(),
+                current_input.clone(),
+                recent_conversation.history.clone(),
+            )));
+
+            let user = User {
+                state: UserState::AwaitingLLMDecision {
+                    is_timeout: false,
+                    recent_conversation,
+                    current_input,
+                },
+                last_transition: Utc::now(),
+                pending: Vec::new(),
+            };
+
+            println!("Id: {0} {1:?}", user_id.1, user.state);
+
+            Ok((user, external))
+        }
+        _ => Ok((user, external)),
+    }
 }
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {

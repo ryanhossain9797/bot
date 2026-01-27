@@ -59,6 +59,7 @@ impl Default for UserState {
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct User {
+    pub pending: Vec<String>,
     pub state: UserState,
     pub last_transition: DateTime<Utc>,
 }
