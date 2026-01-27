@@ -5,7 +5,7 @@ root ::= object
 object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "}" ws
 
 # LLMDecisionType is an externally tagged enum
-outcome-object ::= final-outcome | intermediate-tool-call-outcome
+outcome-object ::= final-outcome | intermediate-tool-call-outcome | internal-function-call-outcome
 
 # Final outcome: {"Final": {"response": "..."}}
 final-outcome ::= "{" ws "\"Final\"" ws ":" ws final-value "}" ws
@@ -15,11 +15,18 @@ final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
 intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"progress_notification\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
 
+# InternalFunctionCall outcome: {"InternalFunctionCall": {"thoughts": "...", "function_call": {...}}}
+internal-function-call-outcome ::= "{" ws "\"InternalFunctionCall\"" ws ":" ws internal-function-call-value "}" ws
+internal-function-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"function_call\"" ws ":" ws function-call-object "}" ws
+
 # Optional string (null or string)
 optional-string ::= null | string
 
 # ToolCall is an externally tagged enum
-tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call | recall-history-tool-call
+tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call
+
+# FunctionCall is an externally tagged enum
+function-call-object ::= recall-history-function-call
 
 # GetWeather tool call: {"GetWeather": {"location": "..."}}
 get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
@@ -49,8 +56,8 @@ number-pair ::= "[" ws number "," ws number "]" ws
 visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
 visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
 
-# RecallShortTerm tool call: {"RecallShortTerm": {"reason": "..."}}
-recall-history-tool-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-history-value "}" ws
+# RecallShortTerm function call: {"RecallShortTerm": {"reason": "..."}}
+recall-history-function-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-history-value "}" ws
 recall-history-value ::= "{" ws "\"reason\"" ws ":" ws string "}" ws
 
 # Basic JSON types
