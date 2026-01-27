@@ -40,7 +40,7 @@ pub async fn execute_tool(
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::RecallHistory { reason: _ } => {
+        ToolCall::RecallShortTerm { reason: _ } => {
             // Return the most recent 20 history entries without redaction
             let start_index = if history.len() > 20 {
                 history.len() - 20

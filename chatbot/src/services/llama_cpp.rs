@@ -47,7 +47,7 @@ RULES:
 RESPONSE FORMAT:
 {\"outcome\":{\"Final\":{\"response\":\"Hello! How can I help you today?\"}}}
 {\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"User asked for weather in London. I need to call the weather tool.\",\"progress_notification\":\"Checking weather for London\",\"tool_call\":{\"GetWeather\":{\"location\":\"London\"}}}}}
-{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":{\"RecallHistory\":{\"reason\":\"Looking for user's name\"}}}}}
+{\"outcome\":{\"IntermediateToolCall\":{\"thoughts\":\"I need to review the earlier conversation to find the user's name.\",\"progress_notification\":\"Recalling history...\",\"tool_call\":{\"RecallShortTerm\":{\"reason\":\"Looking for user's name\"}}}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use \"Final\".
@@ -72,7 +72,7 @@ pub enum ToolCall {
     /// Visit a URL and extract its content. Use this to read the full content of pages found via WebSearch IF NEEDED.
     VisitUrl { url: String },
     /// Recall the last 20 messages of conversation history without redaction. Use this when you need to reference specific details from earlier in the conversation that might have been summarized or truncated.
-    RecallHistory { reason: String },
+    RecallShortTerm { reason: String },
 }
 ```
 
@@ -82,6 +82,8 @@ CRITICAL INSTRUCTIONS:
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
 - Use \"progress_notification\" to keep the user informed during multi-step tasks.
+- Conversation history will be truncated, use thoughsts to keep track of important details.
+- If you need to refer to earlier parts of the conversation that may have been truncated, use the RecallShortTerm tool to retrieve the last 20 messages.
 
 THOUGHTS FIELD USAGE:
 The 'thoughts' field in IntermediateToolCall is CRITICAL for maintaining state across multiple turns.
