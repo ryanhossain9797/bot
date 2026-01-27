@@ -88,9 +88,7 @@ pub fn user_transition(
                 Vec::new(),
             )),
             (
-                UserState::Idle {
-                    recent_conversation,
-                },
+                user_state,
                 UserAction::NewMessage {
                     msg,
                     start_conversation: true,
@@ -102,9 +100,7 @@ pub fn user_transition(
                 Ok((
                     User {
                         pending,
-                        state: UserState::Idle {
-                            recent_conversation,
-                        },
+                        state: user_state,
                         ..user
                     },
                     Vec::new(),
