@@ -48,6 +48,7 @@ RESPONSE FORMAT:
 {"outcome":{"Final":{"response":"Hello! How can I help you today?"}}}
 {"outcome":{"IntermediateToolCall":{"thoughts":"User asked for weather in London. I need to call the weather tool.","progress_notification":"Checking weather for London","tool_call":{"GetWeather":{"location":"London"}}}}}
 {"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall earlier messages to find the user's name.","function_call":{"RecallShortTerm":{"reason":"User's name was mentioned earlier in the conversation"}}}}}
+{"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall long term memory to look up our talk about oranges","function_call":{"RecallLongTerm":{"search_term":"orange fruit"}}}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use "Final".
@@ -93,8 +94,8 @@ pub enum ToolCall {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FunctionCall {
-    /// Recall the last 20 messages of conversation history without redaction. Use this when you need to reference specific details from earlier in the conversation that might have been summarized or truncated.
     RecallShortTerm { reason: String },
+    RecallLongTerm { search_term: String },
 }
 ```
 

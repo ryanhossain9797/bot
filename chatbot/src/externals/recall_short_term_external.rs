@@ -5,7 +5,7 @@ use crate::{
     Env,
 };
 
-pub async fn execute_recall(env: Arc<Env>, history: Vec<HistoryEntry>) -> UserAction {
+pub async fn execute_short_recall(env: Arc<Env>, history: Vec<HistoryEntry>) -> UserAction {
     let _ = env;
     let start_index = if history.len() > 20 {
         history.len() - 20

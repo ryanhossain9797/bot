@@ -107,6 +107,7 @@ pub enum ToolCall {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FunctionCall {
     RecallShortTerm { reason: String },
+    RecallLongTerm { search_term: String },
 }
 
 /// Represents the input to the LLM decision-making process

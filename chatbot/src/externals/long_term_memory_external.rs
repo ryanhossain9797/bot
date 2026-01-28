@@ -7,11 +7,38 @@ use arrow_array::{
     FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
 };
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use lancedb::arrow::arrow_schema::{DataType, Field};
+use lancedb::{
+    arrow::arrow_schema::{DataType, Field},
+    index::{vector::IvfFlatIndexBuilder, Index},
+    Table,
+};
 use std::sync::Arc;
 
-// Assuming you initialize the model once (e.g., in your Env or LanceService)
-// For this example, I'll show how to use it within the function.
+pub async fn ensure_embedding_index(table: &Table, column: &str) -> Result<(), String> {
+    // Check if index already exists
+    let existing_indexes = table.list_indices().await.map_err(|e| e.to_string())?;
+
+    let index_exists = existing_indexes
+        .iter()
+        .any(|idx| idx.columns.contains(&column.to_string()));
+
+    if !index_exists {
+        println!("Creating vector index on column '{}'", column);
+
+        // Build HNSW index (fast and accurate for small-to-medium datasets)
+        table
+            .create_index(&[column], Index::IvfFlat(IvfFlatIndexBuilder::default()))
+            .execute()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        println!("Index created!");
+    } else {
+        println!("Index already exists, skipping creation");
+    }
+
+    Ok(())
+}
 
 async fn commit(
     lance_service: Arc<LanceService>,
@@ -87,6 +114,8 @@ async fn commit(
         .execute()
         .await
         .map_err(|e| e.to_string())?;
+
+    ensure_embedding_index(&table, "embedding").await?;
 
     Ok(())
 }
