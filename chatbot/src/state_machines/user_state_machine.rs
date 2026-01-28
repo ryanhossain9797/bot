@@ -17,7 +17,6 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
-use serenity::model::user;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -27,7 +26,7 @@ type UserExternalOperation = ExternalOperation<UserAction>;
 
 fn handle_outcome(
     env: Arc<Env>,
-    user_id: String,
+    user_id: &UserId,
     is_timeout: bool,
     outcome: LLMDecisionType,
     recent_conversation: RecentConversation,
@@ -81,7 +80,7 @@ fn handle_outcome(
                 FunctionCall::RecallLongTerm { search_term } => {
                     external.push(Box::pin(execute_long_recall(
                         env.clone(),
-                        user_id,
+                        user_id.to_string(),
                         search_term,
                     )));
                 }
@@ -207,7 +206,7 @@ pub fn user_transition(
                         }
                         None => handle_outcome(
                             env.clone(),
-                            user_id.to_string(),
+                            &user_id,
                             is_timeout,
                             outcome.clone(),
                             updated_conversation,
@@ -235,7 +234,7 @@ pub fn user_transition(
                 UserAction::MessageSent(_res),
             ) => handle_outcome(
                 env.clone(),
-                user_id.to_string(),
+                &user_id,
                 is_timeout,
                 outcome,
                 recent_conversation,
