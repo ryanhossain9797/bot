@@ -26,7 +26,7 @@ optional-string ::= null | string
 tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call
 
 # FunctionCall is an externally tagged enum
-function-call-object ::= recall-history-function-call
+function-call-object ::= recall-short-history-function-call | recall-long-history-function-call
 
 # GetWeather tool call: {"GetWeather": {"location": "..."}}
 get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
@@ -57,8 +57,12 @@ visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
 visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
 
 # RecallShortTerm function call: {"RecallShortTerm": {"reason": "..."}}
-recall-history-function-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-history-value "}" ws
-recall-history-value ::= "{" ws "\"reason\"" ws ":" ws string "}" ws
+recall-short-history-function-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-short-history-value "}" ws
+recall-short-history-value ::= "{" ws "\"reason\"" ws ":" ws string "}" ws
+
+# RecallLongTerm function call: {"RecallLongTerm": {"search_term": "..."}}
+recall-long-history-function-call ::= "{" ws "\"RecallLongTerm\"" ws ":" ws recall-long-history-value "}" ws
+recall-long-history-value ::= "{" ws "\"search_term\"" ws ":" ws string "}" ws
 
 # Basic JSON types
 string ::= "\"" string-char* "\""

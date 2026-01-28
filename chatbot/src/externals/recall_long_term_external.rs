@@ -52,7 +52,11 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
     Ok(buf)
 }
 
-async fn execute_recall(env: Arc<Env>, user_id: String, search_term: String) -> UserAction {
+pub async fn execute_long_recall(
+    env: Arc<Env>,
+    user_id: String,
+    search_term: String,
+) -> UserAction {
     let result = recall(env, user_id, search_term)
         .await
         .map_err(|e| e.to_string());

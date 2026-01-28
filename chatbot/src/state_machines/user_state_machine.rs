@@ -1,10 +1,11 @@
 use crate::externals::long_term_memory_external::commit_to_memory;
+use crate::externals::recall_long_term_external::execute_long_recall;
 use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
 use crate::{
-    externals::recall_short_term_external::execute_recall,
+    externals::recall_short_term_external::execute_short_recall,
     models::user::{
         FunctionCall, HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User,
         UserAction, UserId, UserState,
@@ -16,6 +17,7 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
+use serenity::model::user;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,6 +27,7 @@ type UserExternalOperation = ExternalOperation<UserAction>;
 
 fn handle_outcome(
     env: Arc<Env>,
+    user_id: String,
     is_timeout: bool,
     outcome: LLMDecisionType,
     recent_conversation: RecentConversation,
@@ -70,15 +73,16 @@ fn handle_outcome(
 
             match function_call {
                 FunctionCall::RecallShortTerm { .. } => {
-                    external.push(Box::pin(execute_recall(
+                    external.push(Box::pin(execute_short_recall(
                         env.clone(),
                         recent_conversation.history.clone(),
                     )));
                 }
                 FunctionCall::RecallLongTerm { search_term } => {
-                    external.push(Box::pin(execute_recall(
+                    external.push(Box::pin(execute_long_recall(
                         env.clone(),
-                        recent_conversation.history.clone(),
+                        user_id,
+                        search_term,
                     )));
                 }
             }
@@ -203,6 +207,7 @@ pub fn user_transition(
                         }
                         None => handle_outcome(
                             env.clone(),
+                            user_id.to_string(),
                             is_timeout,
                             outcome.clone(),
                             updated_conversation,
@@ -230,6 +235,7 @@ pub fn user_transition(
                 UserAction::MessageSent(_res),
             ) => handle_outcome(
                 env.clone(),
+                user_id.to_string(),
                 is_timeout,
                 outcome,
                 recent_conversation,
@@ -482,7 +488,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::Idle {
             recent_conversation: Some((_, last_activity)),
         } => schedules.push(Scheduled {
-            at: last_activity + ChronoDuration::milliseconds(10_000),
+            at: last_activity + ChronoDuration::milliseconds(300_000),
             action: UserAction::Timeout,
         }),
         UserState::AwaitingLLMDecision { .. }
