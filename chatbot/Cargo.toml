@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 llama-cpp-2 = { version = "0.1.131", features = ["vulkan"] }
-num_cpus = "1.16"
-tokio = { version = "1.48", features = ["full"] }
+num_cpus = "1.17"
+tokio = { version = "1.49", features = ["full"] }
 framework = { path = "../framework" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -25,9 +25,7 @@ serenity = { version = "0.12", default-features = false, features = [
 ] }
 regex = "1.12"
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2.1"
-ollama-rs = { version = "0.3", default-features = false, features = ["rustls"] }
-schemars = "1.1"
-scraper = "0.24"
+scraper = "0.25"
 readability = "0.3.0"
