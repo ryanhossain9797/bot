@@ -2,24 +2,6 @@
 # Manual cross-compilation to x86_64 (robust against Docker-in-Docker issues)
 FROM rustlang/rust:nightly-bookworm AS builder
 
-# Add x86_64 target
-RUN rustup target add x86_64-unknown-linux-gnu
-
-# Set working directory
-WORKDIR /app
-
-# Copy workspace files (build context should be parent directory)
-COPY Cargo.toml Cargo.lock ./
-COPY framework ./framework
-COPY chatbot ./chatbot
-COPY .git ./.git
-
-# Configure environment for cross-compilation
-ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
-    CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
-    CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++ \
-    AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
-
 # Update package list
 RUN apt-get update
 
@@ -37,6 +19,24 @@ RUN apt-get install -y \
     glslc \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
+
+# Add x86_64 target
+RUN rustup target add x86_64-unknown-linux-gnu
+
+# Set working directory
+WORKDIR /app
+
+# Copy workspace files (build context should be parent directory)
+COPY Cargo.toml Cargo.lock ./
+COPY framework ./framework
+COPY chatbot ./chatbot
+COPY .git ./.git
+
+# Configure environment for cross-compilation
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+    CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
+    CXX_x86_64_unknown_linux_gnu=x86_64-linux-gnu-g++ \
+    AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
 
 # Build the project in release mode for x86_64
 RUN cargo build --release --target x86_64-unknown-linux-gnu --package chatbot
