@@ -87,7 +87,7 @@ pub struct User {
     pub last_transition: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ollama_rs::generation::parameters::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MathOperation {
     Add(f32, f32),
     Sub(f32, f32),
