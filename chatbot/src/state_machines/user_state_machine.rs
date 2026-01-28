@@ -30,25 +30,21 @@ fn handle_outcome(
     pending: Vec<String>,
 ) -> UserTransitionResult {
     match outcome {
-        LLMDecisionType::Final { .. } => {
-            // Final response sent - transition to Idle
-            Ok((
-                User {
-                    state: UserState::Idle {
-                        recent_conversation: if is_timeout {
-                            None
-                        } else {
-                            Some((recent_conversation, Utc::now()))
-                        },
+        LLMDecisionType::Final { .. } => Ok((
+            User {
+                state: UserState::Idle {
+                    recent_conversation: if is_timeout {
+                        None
+                    } else {
+                        Some((recent_conversation, Utc::now()))
                     },
-                    last_transition: Utc::now(),
-                    pending,
                 },
-                Vec::new(),
-            ))
-        }
+                last_transition: Utc::now(),
+                pending,
+            },
+            Vec::new(),
+        )),
         LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
-            // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
             external.push(Box::pin(execute_tool(
                 env,
@@ -69,7 +65,6 @@ fn handle_outcome(
             ))
         }
         LLMDecisionType::InternalFunctionCall { function_call, .. } => {
-            // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
 
             match function_call {
