@@ -35,6 +35,7 @@ RUN apt-get install -y \
     g++-x86-64-linux-gnu \
     libvulkan-dev \
     glslc \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Build the project in release mode for x86_64

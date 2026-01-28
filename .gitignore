@@ -1,4 +1,5 @@
 /target
+/longterm
 configuration.json
 configuration.rs
 *.gguf
