@@ -364,6 +364,7 @@ pub fn user_transition(
                 let mut external = Vec::<UserExternalOperation>::new();
 
                 external.push(Box::pin(commit_to_memory(
+                    Arc::clone(&env),
                     user_id.to_string(),
                     recent_conversation.history.clone(),
                 )));

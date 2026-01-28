@@ -1,37 +1,25 @@
-use crate::models::user::{HistoryEntry, UserAction};
+use crate::{
+    models::user::{HistoryEntry, UserAction},
+    services::lance_db::LanceService,
+    Env,
+};
 
 use arrow_array::{RecordBatch, RecordBatchIterator, StringArray};
 use lancedb::{
     arrow::arrow_schema::{DataType, Field, Schema},
-    connect,
+    connect, Table,
 };
 use std::sync::Arc;
 
-async fn commit(user_id: String, history: Vec<HistoryEntry>) -> Result<(), String> {
-    let db = connect("long_term/memory")
-        .execute()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    println!("Connected");
-
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("user_id", DataType::Utf8, false),
-        Field::new("content", DataType::Utf8, false),
-    ]));
-
-    println!("Schema");
-
-    let table = match db.open_table("history").execute().await {
-        Ok(t) => t,
-        Err(_) => db
-            .create_empty_table("history", schema.clone())
-            .execute()
-            .await
-            .map_err(|e| e.to_string())?,
-    };
-
-    println!("Table Ready");
+async fn commit(
+    lance_service: Arc<LanceService>,
+    user_id: String,
+    history: Vec<HistoryEntry>,
+) -> Result<(), String> {
+    let (schema, table) = (
+        Arc::clone(&lance_service.history_schema),
+        &lance_service.history_table,
+    );
 
     let user_ids: Vec<&str> = history.iter().map(|_| user_id.as_str()).collect();
     let contents: Vec<&str> = history.iter().map(|h| "PLACEHOLDER").collect();
@@ -60,6 +48,10 @@ async fn commit(user_id: String, history: Vec<HistoryEntry>) -> Result<(), Strin
     Ok(())
 }
 
-pub async fn commit_to_memory(user_id: String, history: Vec<HistoryEntry>) -> UserAction {
-    UserAction::CommitResult(commit(user_id, history).await)
+pub async fn commit_to_memory(
+    env: Arc<Env>,
+    user_id: String,
+    history: Vec<HistoryEntry>,
+) -> UserAction {
+    UserAction::CommitResult(commit(Arc::clone(&env.lance_service), user_id, history).await)
 }
