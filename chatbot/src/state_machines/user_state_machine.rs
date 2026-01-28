@@ -364,6 +364,7 @@ pub fn user_transition(
                 let mut external = Vec::<UserExternalOperation>::new();
 
                 external.push(Box::pin(commit_to_memory(
+                    Arc::clone(&env),
                     user_id.to_string(),
                     recent_conversation.history.clone(),
                 )));
@@ -475,7 +476,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::Idle {
             recent_conversation: Some((_, last_activity)),
         } => schedules.push(Scheduled {
-            at: last_activity + ChronoDuration::milliseconds(300_000),
+            at: last_activity + ChronoDuration::milliseconds(600_000),
             action: UserAction::Timeout,
         }),
         UserState::AwaitingLLMDecision { .. }

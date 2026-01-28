@@ -1,6 +1,7 @@
 /target
-/long_term
+long_term/
 configuration.json
 configuration.rs
 *.gguf
 *.session
+/.fastembed_cache
