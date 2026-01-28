@@ -2,13 +2,10 @@ use std::sync::Arc;
 
 use arrow_array::StringArray;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use lancedb::{query::ExecutableQuery, DistanceType};
-use serenity::futures::{StreamExt, TryStreamExt};
+use lancedb::query::ExecutableQuery;
+use serenity::futures::TryStreamExt;
 
-use crate::{
-    models::user::{HistoryEntry, UserAction},
-    Env,
-};
+use crate::{models::user::UserAction, Env};
 
 async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::Result<String> {
     let mut options = InitOptions::default();
@@ -20,9 +17,9 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
 
     let query_embedding = model.embed(vec![search_term], None)?[0].clone();
 
-    let mut res = env
-        .lance_service
-        .history_table
+    let history_table = env.lance_service.table_for_user(&user_id).await;
+
+    let mut res = history_table
         .query()
         .nearest_to(query_embedding)?
         .column("embedding")

@@ -36,7 +36,7 @@ pub struct UserId(pub UserChannel, pub String);
 
 impl Display for UserId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.0.to_string(), self.1)
+        write!(f, "{}_{}", self.0.to_string(), self.1)
     }
 }
 

@@ -45,10 +45,9 @@ async fn commit(
     user_id: String,
     history: Vec<HistoryEntry>,
 ) -> Result<(), String> {
-    let (schema, table) = (
-        Arc::clone(&lance_service.history_schema),
-        &lance_service.history_table,
-    );
+    let schema = Arc::clone(&lance_service.history_schema);
+
+    let table = lance_service.table_for_user(&user_id).await;
 
     let filtered: Vec<String> = history
         .iter()
