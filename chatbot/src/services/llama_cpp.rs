@@ -82,6 +82,7 @@ pub enum MathOperation {
 }
 
 pub enum ToolCall {
+    /// IMPORTANT: Do not use this tool without the user's specific City.
     GetWeather { location: String },
     /// IMPORTANT: You SHOULD USUALLY follow up this tool call with a VisitUrl call to read the actual content of the found pages.
     WebSearch { query: String },
