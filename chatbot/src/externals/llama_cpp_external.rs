@@ -80,21 +80,25 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
     }
 }
 
-fn format_history(history: &[HistoryEntry]) -> String {
+fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
     history
         .iter()
         .map(|entry| match entry {
-            HistoryEntry::Input(input) => format_input(input, true),
+            HistoryEntry::Input(input) => format_input(input, truncate),
             HistoryEntry::Output(output) => format_output(output),
         })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn build_dynamic_prompt(current_input: &LLMInput, history: &[HistoryEntry]) -> String {
+fn build_dynamic_prompt(
+    current_input: &LLMInput,
+    history: &[HistoryEntry],
+    truncate: bool,
+) -> String {
     let mut parts = Vec::new();
 
-    let history_str = format_history(history);
+    let history_str = format_history(history, truncate);
     if !history_str.is_empty() {
         parts.push(history_str);
     }
@@ -130,11 +134,12 @@ async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
     history: &[HistoryEntry],
+    truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
     let mut ctx = llama_cpp.new_context()?;
     println!("[DEBUG] llama Context created.");
 
-    let dynamic_prompt = build_dynamic_prompt(current_input, history);
+    let dynamic_prompt = build_dynamic_prompt(current_input, history, truncate);
 
     let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
     println!("[DEBUG] Base prompt loaded ({base_token_count} tokens).",);
@@ -232,10 +237,16 @@ pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
     history: Vec<HistoryEntry>,
+    truncate_history: bool,
 ) -> UserAction {
     println!("[DEBUG] Starting get_llm_decision...");
-    let llama_cpp_result =
-        get_response_from_llm(env.llama_cpp.as_ref(), &current_input, &history).await;
+    let llama_cpp_result = get_response_from_llm(
+        env.llama_cpp.as_ref(),
+        &current_input,
+        &history,
+        truncate_history,
+    )
+    .await;
     eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
 
     match llama_cpp_result {

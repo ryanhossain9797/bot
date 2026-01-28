@@ -155,13 +155,9 @@ impl LLMDecisionType {
     }
 }
 
-/// Represents a single entry in the conversation history
-/// History alternates between inputs (LLMInput) and outputs (LLMDecisionType)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HistoryEntry {
-    /// An input to the LLM (user message or tool result)
     Input(LLMInput),
-    /// An output from the LLM (decision/response)
     Output(LLMDecisionType),
 }
 

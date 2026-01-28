@@ -1,5 +1,7 @@
-use std::{future::Future, pin::Pin, sync::Arc};
-
+use crate::externals::{
+    llama_cpp_external::get_llm_decision, message_external::send_message,
+    tool_call_external::execute_tool,
+};
 use crate::{
     externals::recall_short_term_external::execute_recall,
     models::user::{
@@ -13,11 +15,9 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
-
-use crate::externals::{
-    llama_cpp_external::get_llm_decision, message_external::send_message,
-    tool_call_external::execute_tool,
-};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -30,25 +30,21 @@ fn handle_outcome(
     pending: Vec<String>,
 ) -> UserTransitionResult {
     match outcome {
-        LLMDecisionType::Final { .. } => {
-            // Final response sent - transition to Idle
-            Ok((
-                User {
-                    state: UserState::Idle {
-                        recent_conversation: if is_timeout {
-                            None
-                        } else {
-                            Some((recent_conversation, Utc::now()))
-                        },
+        LLMDecisionType::Final { .. } => Ok((
+            User {
+                state: UserState::Idle {
+                    recent_conversation: if is_timeout {
+                        None
+                    } else {
+                        Some((recent_conversation, Utc::now()))
                     },
-                    last_transition: Utc::now(),
-                    pending,
                 },
-                Vec::new(),
-            ))
-        }
+                last_transition: Utc::now(),
+                pending,
+            },
+            Vec::new(),
+        )),
         LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
-            // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
             external.push(Box::pin(execute_tool(
                 env,
@@ -69,7 +65,6 @@ fn handle_outcome(
             ))
         }
         LLMDecisionType::InternalFunctionCall { function_call, .. } => {
-            // Intermediate message sent - now execute the tool
             let mut external = Vec::<UserExternalOperation>::new();
 
             match function_call {
@@ -251,6 +246,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -277,6 +273,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -311,6 +308,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -336,6 +334,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -370,6 +369,7 @@ pub fn user_transition(
                     env.clone(),
                     current_input.clone(),
                     recent_conversation.history.clone(),
+                    true,
                 )));
 
                 Ok((
@@ -421,6 +421,7 @@ fn post_transition(
                 env.clone(),
                 current_input.clone(),
                 recent_conversation.history.clone(),
+                false,
             )));
 
             let user = User {
