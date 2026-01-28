@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-llama-cpp-2 = { version = "=0.1.131", features = ["vulkan"] } # stick to this version for now
+llama-cpp-2 = { version = "=0.1.132", features = ["vulkan"] } # stick to this version for now
 num_cpus = "1.16"
 tokio = { version = "1.48", features = ["full"] }
 framework = { path = "../framework" }
