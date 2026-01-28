@@ -4,3 +4,4 @@ configuration.json
 configuration.rs
 *.gguf
 *.session
+/.fastembed_cache

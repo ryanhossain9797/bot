@@ -32,3 +32,4 @@ readability = "0.3.0"
 lancedb = { version = "=0.23.1", default-features = false }
 lzma-sys = { version = "*", features = ["static"] } # static recommended by lance
 arrow-array = "=56" # must match lancedb internal version, use `cargo tree | grep arrow` to see
+fastembed = "5.8"

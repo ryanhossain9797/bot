@@ -30,9 +30,15 @@ async fn setup_table_and_schema() -> (Arc<Schema>, Table) {
 
     println!("Connected");
 
+    let dim = 384;
     let schema = Arc::new(Schema::new(vec![
         Field::new("user_id", DataType::Utf8, false),
         Field::new("content", DataType::Utf8, false),
+        Field::new(
+            "embedding",
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), dim),
+            false,
+        ),
     ]));
 
     println!("Schema");
