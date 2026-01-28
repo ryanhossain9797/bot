@@ -1,3 +1,4 @@
+use crate::externals::long_term_memory_external::commit_to_memory;
 use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
@@ -360,6 +361,32 @@ pub fn user_transition(
             ) => {
                 println!("Timed Out");
 
+                let mut external = Vec::<UserExternalOperation>::new();
+
+                external.push(Box::pin(commit_to_memory(
+                    user_id.to_string(),
+                    recent_conversation.history.clone(),
+                )));
+
+                Ok((
+                    User {
+                        state: UserState::CommitingToMemory {
+                            recent_conversation,
+                        },
+                        last_transition: Utc::now(),
+                        ..user
+                    },
+                    external,
+                ))
+            }
+            (
+                UserState::CommitingToMemory {
+                    recent_conversation,
+                },
+                UserAction::CommitResult(_),
+            ) => {
+                println!("Commited to Memory");
+
                 let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
                 let current_input = LLMInput::UserMessage(timeout_message);
 
@@ -434,7 +461,7 @@ fn post_transition(
                 pending: Vec::new(),
             };
 
-            println!("Id: {0} {1:?}", user_id.1, user.state);
+            println!("Id: {0} {1:?}", user_id, user.state);
 
             Ok((user, external))
         }
@@ -453,6 +480,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         }),
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
+        | UserState::CommitingToMemory { .. }
         | UserState::RunningInternalFunction { .. }
         | UserState::RunningTool { .. } => schedules.push(Scheduled {
             at: user.last_transition + ChronoDuration::milliseconds(600_000),
