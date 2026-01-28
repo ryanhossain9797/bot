@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
 pub const MAX_SEARCH_RESULTS_LENGTH: usize = 800;
@@ -11,6 +12,14 @@ pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
 pub enum UserChannel {
     Telegram,
     Discord,
+}
+impl Display for UserChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserChannel::Telegram => write!(f, "Telegram"),
+            UserChannel::Discord => write!(f, "Discord"),
+        }
+    }
 }
 
 impl UserChannel {
@@ -25,6 +34,12 @@ impl UserChannel {
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct UserId(pub UserChannel, pub String);
 
+impl Display for UserId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.0.to_string(), self.1)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentConversation {
     pub history: Vec<HistoryEntry>,
@@ -34,6 +49,9 @@ pub struct RecentConversation {
 pub enum UserState {
     Idle {
         recent_conversation: Option<(RecentConversation, DateTime<Utc>)>,
+    },
+    CommitingToMemory {
+        recent_conversation: RecentConversation,
     },
     AwaitingLLMDecision {
         is_timeout: bool,
@@ -178,6 +196,7 @@ pub enum UserAction {
         start_conversation: bool,
     },
     Timeout,
+    CommitResult(Result<(), String>),
     LLMDecisionResult(Result<LLMDecisionType, String>),
     InternalFunctionResult(Result<String, String>),
     MessageSent(Result<(), String>),
@@ -197,6 +216,10 @@ impl std::fmt::Debug for UserAction {
                 .field("start_conversation", start_conversation)
                 .finish(),
             Self::Timeout => write!(f, "Timeout"),
+            Self::CommitResult(res) => match res {
+                Ok(_) => f.debug_tuple("CommitResult").field(&"Ok").finish(),
+                Err(e) => f.debug_tuple("CommitResult").field(&e).finish(),
+            },
             Self::LLMDecisionResult(res) => f.debug_tuple("LLMDecisionResult").field(res).finish(),
             Self::InternalFunctionResult(res) => match res {
                 Ok(content) => {
