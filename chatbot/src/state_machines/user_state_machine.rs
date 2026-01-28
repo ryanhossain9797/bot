@@ -480,6 +480,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         }),
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
+        | UserState::CommitingToMemory { .. }
         | UserState::RunningInternalFunction { .. }
         | UserState::RunningTool { .. } => schedules.push(Scheduled {
             at: user.last_transition + ChronoDuration::milliseconds(600_000),
