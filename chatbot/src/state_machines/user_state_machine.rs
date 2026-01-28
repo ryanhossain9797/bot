@@ -1,5 +1,7 @@
-use std::{future::Future, pin::Pin, sync::Arc};
-
+use crate::externals::{
+    llama_cpp_external::get_llm_decision, message_external::send_message,
+    tool_call_external::execute_tool,
+};
 use crate::{
     externals::recall_short_term_external::execute_recall,
     models::user::{
@@ -13,11 +15,9 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
-
-use crate::externals::{
-    llama_cpp_external::get_llm_decision, message_external::send_message,
-    tool_call_external::execute_tool,
-};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
@@ -251,6 +251,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -277,6 +278,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -311,6 +313,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -336,6 +339,7 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             recent_conversation.history.clone(),
+                            true,
                         )));
 
                         Ok((
@@ -370,6 +374,7 @@ pub fn user_transition(
                     env.clone(),
                     current_input.clone(),
                     recent_conversation.history.clone(),
+                    true,
                 )));
 
                 Ok((
@@ -421,6 +426,7 @@ fn post_transition(
                 env.clone(),
                 current_input.clone(),
                 recent_conversation.history.clone(),
+                false,
             )));
 
             let user = User {

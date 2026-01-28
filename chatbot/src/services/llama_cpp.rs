@@ -51,8 +51,9 @@ RESPONSE FORMAT:
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use \"Final\".
-2. If you need more information or need to perform an action, use \"IntermediateToolCall\" or \"InternalFunctionCall\".
-3. Use \"progress_notification\" for ToolCall to tell the user what you are doing (e.g. \"Searching for...\"). This is sent to the user immediately.
+2. If you need more information from the user themselves, use \"Final\" too.
+3. If you need more information or need to perform an action, use \"IntermediateToolCall\" or \"InternalFunctionCall\".
+4. Use \"progress_notification\" for ToolCall to tell the user what you are doing (e.g. \"Searching for...\"). This is sent to the user immediately.
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
