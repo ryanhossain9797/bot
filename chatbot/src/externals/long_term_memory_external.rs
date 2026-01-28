@@ -1,5 +1,5 @@
 use crate::{
-    models::user::{HistoryEntry, UserAction},
+    models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
     services::lance_db::LanceService,
     Env,
 };
@@ -21,14 +21,30 @@ async fn commit(
         &lance_service.history_table,
     );
 
-    let user_ids: Vec<&str> = history.iter().map(|_| user_id.as_str()).collect();
-    let contents: Vec<&str> = history.iter().map(|h| "PLACEHOLDER").collect();
+    let filtered: Vec<String> = history
+        .iter()
+        .filter_map(|h| match h {
+            HistoryEntry::Input(LLMInput::UserMessage(text)) => {
+                Some(format!("USER MESSAGE: {text}"))
+            }
+            HistoryEntry::Output(LLMDecisionType::Final { response }) => {
+                Some(format!("FINAL RESPONSE: {response}"))
+            }
+            HistoryEntry::Output(LLMDecisionType::IntermediateToolCall {
+                progress_notification: Some(progress_notification),
+                ..
+            }) => Some(format!("INTERMEDIATE TOOL CALL: {progress_notification}")),
+            _ => None,
+        })
+        .collect();
+
+    let user_ids: Vec<&str> = vec![user_id.as_str(); filtered.len()];
 
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(user_ids)),
-            Arc::new(StringArray::from(contents)),
+            Arc::new(StringArray::from(filtered)),
         ],
     )
     .map_err(|e| e.to_string())?;
