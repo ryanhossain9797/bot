@@ -46,15 +46,15 @@ RULES:
 5. Use RecallLongTerm and RecallShortTerm often to try and be helpful. use the alternative if one does not yield useful results.
 
 RESPONSE FORMAT:
-{"outcome":{"Final":{"response":"Hello! How can I help you today?"}}}
+{"outcome":{"MessageUser":{"response":"Hello! How can I help you today?"}}}
 {"outcome":{"IntermediateToolCall":{"thoughts":"User asked for weather in London. I need to call the weather tool.","tool_call":{"GetWeather":{"location":"London"}}}}}
 {"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall earlier messages to find the user's name.","function_call":{"RecallShortTerm":{"reason":"User's name was mentioned earlier in the conversation"}}}}}
 {"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall long term memory to look up our talk about oranges","function_call":{"RecallLongTerm":{"search_term":"orange fruit"}}}}}
 
 DECISION MAKING:
-1. If you have enough information to answer the user request, use "Final".
-2. If you need more information from the user themselves, use "Final" too.
-3. If you need more information or need to perform an action, use "IntermediateToolCall" or "InternalFunctionCall".
+1. If you have enough information to answer the user request, use "MessageUser".
+2. If you need more information from the user themselves, use "MessageUser" too, like getting city for weather when they don't specify it.
+3. If you have to perform an action, use "IntermediateToolCall" or "InternalFunctionCall".
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
@@ -68,7 +68,7 @@ pub enum LLMDecisionType {
         thoughts: String,
         function_call: FunctionCall,
     },
-    Final {
+    MessageUser {
         response: String,
     },
 }
@@ -119,7 +119,7 @@ The 'thoughts' field in InternalFunctionCall and IntermediateToolCall is CRITICA
 - PREFER using a Markdown-style TODO list to track progress (e.g., "- [x] Task 1", "- [ ] Task 2").
 - TRACK ATTEMPTS: Explicitly track failures and retries. E.g., "Attempt 1/3 failed. Trying new query..."
 - Include summaries of information gathered so far in 'thoughts' so you don't lose it.
-- This field is your PRIMARY memory. Use it to decide if you have enough info to finish with a "Final" response.
+- This field is your PRIMARY memory. Use it to keep all information you might need in subsequent runs.
 <|im_end|>"#
     }
 

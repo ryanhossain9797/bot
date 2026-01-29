@@ -143,7 +143,7 @@ pub enum LLMDecisionType {
         thoughts: String,
         function_call: FunctionCall,
     },
-    Final {
+    MessageUser {
         response: String,
     },
 }
@@ -151,7 +151,7 @@ pub enum LLMDecisionType {
 impl LLMDecisionType {
     pub fn format_output(&self) -> String {
         match self {
-            LLMDecisionType::Final { response } => format!("assistant: {response}"),
+            LLMDecisionType::MessageUser { response } => format!("assistant: {response}"),
             LLMDecisionType::InternalFunctionCall {
                 thoughts: _,
                 function_call,

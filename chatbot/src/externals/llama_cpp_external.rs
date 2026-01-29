@@ -14,7 +14,7 @@ use std::{io::Write, ops::ControlFlow, sync::Arc};
 
 fn format_output(output: &LLMDecisionType) -> String {
     match output {
-        LLMDecisionType::Final { response } => {
+        LLMDecisionType::MessageUser { response } => {
             let mut content = response.clone();
             if content.len() > MAX_HISTORY_TEXT_LENGTH {
                 content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
