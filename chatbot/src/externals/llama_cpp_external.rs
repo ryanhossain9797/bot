@@ -24,14 +24,10 @@ fn format_output(output: &LLMDecisionType) -> String {
         }
         LLMDecisionType::IntermediateToolCall {
             thoughts: _,
-            progress_notification,
             tool_call,
         } => {
             let mut lines = Vec::new();
 
-            if let Some(msg) = progress_notification {
-                lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
-            }
             lines.push(format!("CALL TOOL: {:?}", tool_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
         }
@@ -145,16 +141,13 @@ async fn get_response_from_llm(
     truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
     let mut ctx = llama_cpp.new_context()?;
-    println!("[DEBUG] llama Context created.");
 
     let dynamic_prompt = build_dynamic_prompt(current_input, history, truncate);
 
     let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
-    println!("[DEBUG] Base prompt loaded ({base_token_count} tokens).",);
 
     let (total_tokens, last_batch_size) =
         llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
-    println!("[DEBUG] Dynamic prompt appended (Total tokens: {total_tokens}).");
 
     let initial_state = GenerationState {
         tokens: Vec::new(),
@@ -165,7 +158,6 @@ async fn get_response_from_llm(
     };
 
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
-    println!("[DEBUG] Starting inference (max_tokens: {max_generation_tokens}).");
 
     let result = (0..max_generation_tokens).try_fold(
         initial_state,
@@ -219,10 +211,7 @@ async fn get_response_from_llm(
         ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
         ControlFlow::Break(res) => res,
     }?;
-    println!(
-        "[DEBUG] Inference loop finished. Generated {} tokens.",
-        generated_tokens.len()
-    );
+    println!("[DEBUG] Generated tokens: {}.", generated_tokens.len());
 
     let mut response_bytes = Vec::new();
     for token in &generated_tokens {
@@ -247,7 +236,6 @@ pub async fn get_llm_decision(
     history: Vec<HistoryEntry>,
     truncate_history: bool,
 ) -> UserAction {
-    println!("[DEBUG] Starting get_llm_decision...");
     let llama_cpp_result = get_response_from_llm(
         env.llama_cpp.as_ref(),
         &current_input,
@@ -255,7 +243,6 @@ pub async fn get_llm_decision(
         truncate_history,
     )
     .await;
-    eprintln!("[DEBUG] llama_cpp_result: {:#?}", llama_cpp_result);
 
     match llama_cpp_result {
         Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),

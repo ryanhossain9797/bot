@@ -70,13 +70,16 @@ async fn run_entity<
         let now = Utc::now();
 
         let activity_str = match &activity {
-            Activity::StateMachineAction(action) => format!("Action: {:?}", action),
+            Activity::StateMachineAction(action) => format!("Action: {action:?}"),
             Activity::ScheduledWakeup => "ScheduledWakeup".to_string(),
             Activity::DeleteSelf => "DeleteSelf".to_string(),
         };
         println!(
             "TRANSITION AT {now} - StateMachine: {} - {}",
-            std::any::type_name::<State>(),
+            std::any::type_name::<State>()
+                .split("::")
+                .last()
+                .expect("Split should have at least one element"),
             activity_str
         );
         match activity {

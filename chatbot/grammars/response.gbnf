@@ -11,9 +11,9 @@ outcome-object ::= final-outcome | intermediate-tool-call-outcome | internal-fun
 final-outcome ::= "{" ws "\"Final\"" ws ":" ws final-value "}" ws
 final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 
-# IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "progress_notification": ... | null, "tool_call": {...}}}
+# IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "tool_call": {...}}}
 intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
-intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"progress_notification\"" ws ":" ws optional-string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
+intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
 
 # InternalFunctionCall outcome: {"InternalFunctionCall": {"thoughts": "...", "function_call": {...}}}
 internal-function-call-outcome ::= "{" ws "\"InternalFunctionCall\"" ws ":" ws internal-function-call-value "}" ws

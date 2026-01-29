@@ -137,8 +137,6 @@ impl LLMInput {
 pub enum LLMDecisionType {
     IntermediateToolCall {
         thoughts: String,
-        /// A brief message to the user notifying them of the current progress (e.g., "Searching for...")
-        progress_notification: Option<String>,
         tool_call: ToolCall,
     },
     InternalFunctionCall {
@@ -160,13 +158,9 @@ impl LLMDecisionType {
             } => format!("assistant\nfunction_call: {function_call:?}"),
             LLMDecisionType::IntermediateToolCall {
                 thoughts: _,
-                progress_notification,
                 tool_call,
             } => {
                 let mut lines = Vec::new();
-                if let Some(msg) = progress_notification {
-                    lines.push(format!("progress_notification: {msg}"));
-                }
                 lines.push(format!("tool_call: {tool_call:?}"));
                 format!("assistant\n{}", lines.join("\n"))
             }
@@ -207,54 +201,14 @@ pub enum UserAction {
 impl std::fmt::Debug for UserAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ForceReset => write!(f, "ForceReset"),
-            Self::NewMessage {
-                msg,
-                start_conversation,
-            } => f
-                .debug_struct("NewMessage")
-                .field("msg", msg)
-                .field("start_conversation", start_conversation)
-                .finish(),
-            Self::Timeout => write!(f, "Timeout"),
-            Self::CommitResult(res) => match res {
-                Ok(_) => f.debug_tuple("CommitResult").field(&"Ok").finish(),
-                Err(e) => f.debug_tuple("CommitResult").field(&e).finish(),
-            },
-            Self::LLMDecisionResult(res) => f.debug_tuple("LLMDecisionResult").field(res).finish(),
-            Self::InternalFunctionResult(res) => match res {
-                Ok(content) => {
-                    let mut s = content.clone();
-                    if s.len() > MAX_TOOL_OUTPUT_LENGTH {
-                        s.truncate(content.ceil_char_boundary(MAX_TOOL_OUTPUT_LENGTH));
-                        s.push_str("... (truncated)");
-                    }
-                    f.debug_tuple("ToolResult")
-                        .field(&Ok::<String, String>(s))
-                        .finish()
-                }
-                Err(e) => f
-                    .debug_tuple("ToolResult")
-                    .field(&Err::<String, String>(e.clone()))
-                    .finish(),
-            },
-            Self::MessageSent(res) => f.debug_tuple("MessageSent").field(res).finish(),
-            Self::ToolResult(res) => match res {
-                Ok(content) => {
-                    let mut s = content.clone();
-                    if s.len() > MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH {
-                        s.truncate(content.ceil_char_boundary(MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH));
-                        s.push_str("... (truncated)");
-                    }
-                    f.debug_tuple("ToolResult")
-                        .field(&Ok::<String, String>(s))
-                        .finish()
-                }
-                Err(e) => f
-                    .debug_tuple("ToolResult")
-                    .field(&Err::<String, String>(e.clone()))
-                    .finish(),
-            },
+            UserAction::ForceReset => write!(f, "ForceReset"),
+            UserAction::NewMessage { .. } => write!(f, "NewMessage"),
+            UserAction::Timeout => write!(f, "Timeout"),
+            UserAction::CommitResult(_) => write!(f, "CommitResult"),
+            UserAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
+            UserAction::InternalFunctionResult(_) => write!(f, "InternalFunctionResult"),
+            UserAction::MessageSent(_) => write!(f, "MessageSent"),
+            UserAction::ToolResult(_) => write!(f, "ToolResult"),
         }
     }
 }

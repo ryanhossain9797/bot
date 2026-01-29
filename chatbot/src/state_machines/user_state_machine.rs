@@ -172,15 +172,10 @@ pub fn user_transition(
                     // Extract message to send from outcome
                     let message_to_send = match &outcome {
                         LLMDecisionType::Final { response } => Some(response.clone()),
-                        LLMDecisionType::InternalFunctionCall { .. } => None,
-                        LLMDecisionType::IntermediateToolCall {
-                            progress_notification,
-                            ..
-                        } => progress_notification.clone(),
+                        LLMDecisionType::InternalFunctionCall { .. }
+                        | LLMDecisionType::IntermediateToolCall { .. } => None,
                     };
 
-                    // If there's a message to send, go to SendingMessage state
-                    // Otherwise (silent tool call), go directly to RunningTool
                     match message_to_send {
                         Some(message) => {
                             // Transition to SendingMessage state and trigger message sending
@@ -472,8 +467,6 @@ fn post_transition(
                 last_transition: Utc::now(),
                 pending: Vec::new(),
             };
-
-            println!("Id: {0} {1:?}", user_id, user.state);
 
             Ok((user, external))
         }
