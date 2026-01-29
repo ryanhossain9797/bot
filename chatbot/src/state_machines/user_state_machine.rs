@@ -4,6 +4,7 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
+use crate::models::user::LLMResponse;
 use crate::{
     externals::recall_short_term_external::execute_short_recall,
     models::user::{
@@ -28,11 +29,11 @@ fn handle_outcome(
     env: Arc<Env>,
     user_id: &UserId,
     is_timeout: bool,
-    outcome: LLMDecisionType,
+    response: LLMResponse,
     recent_conversation: RecentConversation,
     pending: Vec<String>,
 ) -> UserTransitionResult {
-    match outcome {
+    match response.outcome {
         LLMDecisionType::MessageUser { .. } => Ok((
             User {
                 state: UserState::Idle {
@@ -154,23 +155,24 @@ pub fn user_transition(
             (
                 UserState::AwaitingLLMDecision {
                     is_timeout,
-                    recent_conversation,
+                    history,
                     current_input,
                 },
                 UserAction::LLMDecisionResult(res),
             ) => match res {
-                Ok(outcome) => {
+                Ok(response) => {
                     // Add the input and output to history
-                    let mut updated_history = recent_conversation.history;
+                    let mut updated_history = history;
                     updated_history.push(HistoryEntry::Input(current_input));
-                    updated_history.push(HistoryEntry::Output(outcome.clone()));
+                    updated_history.push(HistoryEntry::Output(response.clone()));
 
                     let updated_conversation = RecentConversation {
+                        thoughts: response.thoughts.clone(),
                         history: updated_history,
                     };
 
                     // Extract message to send from outcome
-                    let message_to_send = match &outcome {
+                    let message_to_send = match &response.outcome {
                         LLMDecisionType::MessageUser { response } => Some(response.clone()),
                         LLMDecisionType::InternalFunctionCall { .. }
                         | LLMDecisionType::IntermediateToolCall { .. } => None,
@@ -190,7 +192,7 @@ pub fn user_transition(
                                 User {
                                     state: UserState::SendingMessage {
                                         is_timeout,
-                                        outcome: outcome.clone(),
+                                        outcome: response.clone(),
                                         recent_conversation: updated_conversation,
                                     },
                                     last_transition: Utc::now(),
@@ -203,7 +205,7 @@ pub fn user_transition(
                             env.clone(),
                             &user_id,
                             is_timeout,
-                            outcome.clone(),
+                            response.clone(),
                             updated_conversation,
                             user.pending,
                         ),
@@ -252,7 +254,7 @@ pub fn user_transition(
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             current_input.clone(),
-                            recent_conversation.history.clone(),
+                            Some(recent_conversation.thoughts),
                             true,
                         )));
 
@@ -260,7 +262,7 @@ pub fn user_transition(
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    recent_conversation,
+                                    history: recent_conversation.history,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -279,7 +281,7 @@ pub fn user_transition(
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             current_input.clone(),
-                            recent_conversation.history.clone(),
+                            Some(recent_conversation.thoughts),
                             true,
                         )));
 
@@ -287,7 +289,7 @@ pub fn user_transition(
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    recent_conversation,
+                                    history: recent_conversation.history,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -314,7 +316,7 @@ pub fn user_transition(
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             current_input.clone(),
-                            recent_conversation.history.clone(),
+                            Some(recent_conversation.thoughts.clone()),
                             true,
                         )));
 
@@ -322,7 +324,7 @@ pub fn user_transition(
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    recent_conversation,
+                                    history: recent_conversation.history,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -340,7 +342,7 @@ pub fn user_transition(
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             current_input.clone(),
-                            recent_conversation.history.clone(),
+                            Some(recent_conversation.thoughts),
                             true,
                         )));
 
@@ -348,7 +350,7 @@ pub fn user_transition(
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    recent_conversation,
+                                    history: recent_conversation.history,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -402,7 +404,7 @@ pub fn user_transition(
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
                     current_input.clone(),
-                    recent_conversation.history.clone(),
+                    Some(recent_conversation.thoughts),
                     true,
                 )));
 
@@ -410,7 +412,7 @@ pub fn user_transition(
                     User {
                         state: UserState::AwaitingLLMDecision {
                             is_timeout: true,
-                            recent_conversation,
+                            history: recent_conversation.history,
                             current_input,
                         },
                         last_transition: Utc::now(),
@@ -440,28 +442,26 @@ fn post_transition(
             },
             true,
         ) => {
-            let recent_conversation = match last_conversation {
-                Some((conv, _)) => conv.clone(),
-                None => RecentConversation {
-                    history: Vec::new(),
-                },
-            };
-
             let msg = user.pending.join("\n");
 
             let current_input = LLMInput::UserMessage(msg.clone());
 
+            let (maybe_thoughts, history) = match last_conversation {
+                Some((r, _)) => (Some(r.thoughts.clone()), r.history.clone()),
+                None => (None, Vec::new()),
+            };
+
             external.push(Box::pin(get_llm_decision(
                 env.clone(),
                 current_input.clone(),
-                recent_conversation.history.clone(),
+                maybe_thoughts,
                 false,
             )));
 
             let user = User {
                 state: UserState::AwaitingLLMDecision {
                     is_timeout: false,
-                    recent_conversation,
+                    history,
                     current_input,
                 },
                 last_transition: Utc::now(),

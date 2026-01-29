@@ -42,6 +42,7 @@ impl Display for UserId {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentConversation {
+    pub thoughts: String,
     pub history: Vec<HistoryEntry>,
 }
 
@@ -55,7 +56,7 @@ pub enum UserState {
     },
     AwaitingLLMDecision {
         is_timeout: bool,
-        recent_conversation: RecentConversation,
+        history: Vec<HistoryEntry>,
         current_input: LLMInput,
     },
     RunningInternalFunction {
@@ -64,7 +65,7 @@ pub enum UserState {
     },
     SendingMessage {
         is_timeout: bool,
-        outcome: LLMDecisionType,
+        outcome: LLMResponse,
         recent_conversation: RecentConversation,
     },
     RunningTool {
@@ -148,6 +149,12 @@ pub enum LLMDecisionType {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LLMResponse {
+    pub thoughts: String,
+    pub outcome: LLMDecisionType,
+}
+
 impl LLMDecisionType {
     pub fn format_output(&self) -> String {
         match self {
@@ -171,14 +178,14 @@ impl LLMDecisionType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HistoryEntry {
     Input(LLMInput),
-    Output(LLMDecisionType),
+    Output(LLMResponse),
 }
 
 impl HistoryEntry {
     pub fn format(&self) -> String {
         match self {
             HistoryEntry::Input(input) => input.format(),
-            HistoryEntry::Output(output) => output.format_output(),
+            HistoryEntry::Output(output) => output.outcome.format_output(),
         }
     }
 }
@@ -192,7 +199,7 @@ pub enum UserAction {
     },
     Timeout,
     CommitResult(Result<(), String>),
-    LLMDecisionResult(Result<LLMDecisionType, String>),
+    LLMDecisionResult(Result<LLMResponse, String>),
     InternalFunctionResult(Result<String, String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<String, String>),

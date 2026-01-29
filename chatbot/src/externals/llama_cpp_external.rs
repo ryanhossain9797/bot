@@ -1,6 +1,6 @@
 use crate::{
     models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, UserAction, MAX_HISTORY_TEXT_LENGTH,
+        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
         MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
     },
     services::llama_cpp::LlamaCppService,
@@ -81,7 +81,7 @@ fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
         .iter()
         .map(|entry| match entry {
             HistoryEntry::Input(input) => format_input(input, truncate),
-            HistoryEntry::Output(output) => format_output(output),
+            HistoryEntry::Output(output) => format_output(&output.outcome),
         })
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -89,41 +89,23 @@ fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
 
 fn build_dynamic_prompt(
     current_input: &LLMInput,
-    history: &[HistoryEntry],
+    maybe_last_thoughts: Option<String>,
     truncate: bool,
 ) -> String {
     let mut parts = Vec::new();
 
-    let history_str = format_history(history, truncate);
-    if !history_str.is_empty() {
-        parts.push(history_str);
-    }
-
-    if let Some(HistoryEntry::Output(
-        LLMDecisionType::IntermediateToolCall { thoughts, .. }
-        | LLMDecisionType::InternalFunctionCall { thoughts, .. },
-    )) = history.last()
-    {
+    if let Some(last_thoughts) = maybe_last_thoughts {
         parts.push(format!(
-            "<|im_start|>system\nREMINDER: Your current plan was:\n{}<|im_end|>",
-            thoughts
+            "system\nREMINDER: Your current plan was:\n{}",
+            last_thoughts
         ));
     } else {
-        parts.push("<|im_start|>system\nREMINDER: You have no current plan. Below is the conversation history<|im_end|>".to_string());
-        let history_str = format_history(history, truncate);
-        if !history_str.is_empty() {
-            parts.push(history_str);
-        }
+        parts.push("system\nREMINDER: You have no current plan. If you want to see recent messages use RecallShortTerm".to_string());
     }
 
     parts.push(format_input(current_input, false));
 
     format!("\n{}\n<|im_start|>assistant\n", parts.join("\n\n"))
-}
-
-#[derive(Debug, Deserialize)]
-struct LLMResponse {
-    outcome: LLMDecisionType,
 }
 
 struct GenerationState {
@@ -137,12 +119,12 @@ struct GenerationState {
 async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
-    history: &[HistoryEntry],
+    maybe_last_thoughts: Option<String>,
     truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
     let mut ctx = llama_cpp.new_context()?;
 
-    let dynamic_prompt = build_dynamic_prompt(current_input, history, truncate);
+    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts, truncate);
 
     let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
 
@@ -233,19 +215,19 @@ async fn get_response_from_llm(
 pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
-    history: Vec<HistoryEntry>,
+    maybe_last_thoughts: Option<String>,
     truncate_history: bool,
 ) -> UserAction {
     let llama_cpp_result = get_response_from_llm(
         env.llama_cpp.as_ref(),
         &current_input,
-        &history,
+        maybe_last_thoughts,
         truncate_history,
     )
     .await;
 
     match llama_cpp_result {
-        Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),
+        Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response)),
         Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
     }
 }
