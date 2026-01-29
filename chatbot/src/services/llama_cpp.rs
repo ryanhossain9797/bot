@@ -58,19 +58,15 @@ DECISION MAKING:
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
-
 pub enum LLMDecisionType {
-    IntermediateToolCall {
-        thoughts: String,
-        tool_call: ToolCall,
-    },
-    InternalFunctionCall {
-        thoughts: String,
-        function_call: FunctionCall,
-    },
-    MessageUser {
-        response: String,
-    },
+    IntermediateToolCall { tool_call: ToolCall },
+    InternalFunctionCall { function_call: FunctionCall },
+    MessageUser { response: String },
+}
+
+pub struct LLMResponse {
+    pub thoughts: String,
+    pub outcome: LLMDecisionType,
 }
 
 pub enum MathOperation {

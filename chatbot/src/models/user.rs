@@ -136,17 +136,9 @@ impl LLMInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
-    IntermediateToolCall {
-        thoughts: String,
-        tool_call: ToolCall,
-    },
-    InternalFunctionCall {
-        thoughts: String,
-        function_call: FunctionCall,
-    },
-    MessageUser {
-        response: String,
-    },
+    IntermediateToolCall { tool_call: ToolCall },
+    InternalFunctionCall { function_call: FunctionCall },
+    MessageUser { response: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,14 +151,10 @@ impl LLMDecisionType {
     pub fn format_output(&self) -> String {
         match self {
             LLMDecisionType::MessageUser { response } => format!("assistant: {response}"),
-            LLMDecisionType::InternalFunctionCall {
-                thoughts: _,
-                function_call,
-            } => format!("assistant\nfunction_call: {function_call:?}"),
-            LLMDecisionType::IntermediateToolCall {
-                thoughts: _,
-                tool_call,
-            } => {
+            LLMDecisionType::InternalFunctionCall { function_call } => {
+                format!("assistant\nfunction_call: {function_call:?}")
+            }
+            LLMDecisionType::IntermediateToolCall { tool_call } => {
                 let mut lines = Vec::new();
                 lines.push(format!("tool_call: {tool_call:?}"));
                 format!("assistant\n{}", lines.join("\n"))

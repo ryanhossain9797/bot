@@ -22,19 +22,13 @@ fn format_output(output: &LLMDecisionType) -> String {
             }
             format!("<|im_start|>assistant\n{}<|im_end|>", content)
         }
-        LLMDecisionType::IntermediateToolCall {
-            thoughts: _,
-            tool_call,
-        } => {
+        LLMDecisionType::IntermediateToolCall { tool_call } => {
             let mut lines = Vec::new();
 
             lines.push(format!("CALL TOOL: {:?}", tool_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
         }
-        LLMDecisionType::InternalFunctionCall {
-            thoughts: _,
-            function_call,
-        } => {
+        LLMDecisionType::InternalFunctionCall { function_call } => {
             let mut lines = Vec::new();
             lines.push(format!("CALL INTERNAL FUNCTION: {:?}", function_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
