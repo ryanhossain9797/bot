@@ -12,7 +12,7 @@ COPY models/GLM-4-32B-0414-Q8_0-matteov2.gguf /app/models/GLM-4-32B-0414-Q8_0-ma
 COPY .fastembed_cache* /app/.fastembed_cache
 
 # Copy grammar file
-COPY grammars/response.gbnf /app/grammars/response.gbnf
+COPY grammars/ /app/grammars/
 
 # Set environment variables
 ENV MODEL_PATH=/app/models/GLM-4-32B-0414-Q8_0-matteov2.gguf
