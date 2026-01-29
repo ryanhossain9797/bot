@@ -33,7 +33,7 @@ fn handle_outcome(
     pending: Vec<String>,
 ) -> UserTransitionResult {
     match outcome {
-        LLMDecisionType::Final { .. } => Ok((
+        LLMDecisionType::MessageUser { .. } => Ok((
             User {
                 state: UserState::Idle {
                     recent_conversation: if is_timeout {
@@ -171,7 +171,7 @@ pub fn user_transition(
 
                     // Extract message to send from outcome
                     let message_to_send = match &outcome {
-                        LLMDecisionType::Final { response } => Some(response.clone()),
+                        LLMDecisionType::MessageUser { response } => Some(response.clone()),
                         LLMDecisionType::InternalFunctionCall { .. }
                         | LLMDecisionType::IntermediateToolCall { .. } => None,
                     };

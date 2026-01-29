@@ -123,7 +123,7 @@ chatbot/
     - Appends dynamic conversation history.
     - Generates response using `response.gbnf` grammar for structured JSON.
 4.  **Action**:
-    - **Final Response**: Sends message to user.
+    - **Message User Response**: Sends message to user.
     - **Tool Call**: Executes tool (e.g., weather), feeds result back to LLM, and repeats.
 
 ## Development

@@ -5,11 +5,11 @@ root ::= object
 object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "}" ws
 
 # LLMDecisionType is an externally tagged enum
-outcome-object ::= final-outcome | intermediate-tool-call-outcome | internal-function-call-outcome
+outcome-object ::= message-user-outcome | intermediate-tool-call-outcome | internal-function-call-outcome
 
-# Final outcome: {"Final": {"response": "..."}}
-final-outcome ::= "{" ws "\"Final\"" ws ":" ws final-value "}" ws
-final-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
+# MessageUser outcome: {"MessageUser": {"response": "..."}}
+message-user-outcome ::= "{" ws "\"MessageUser\"" ws ":" ws message-user-value "}" ws
+message-user-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 
 # IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "tool_call": {...}}}
 intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
