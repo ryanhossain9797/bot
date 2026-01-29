@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use arrow_array::StringArray;
+use arrow_array::{Array, StringArray};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use lancedb::query::ExecutableQuery;
+use lancedb::query::{ExecutableQuery, QueryBase};
 use serenity::futures::TryStreamExt;
 
 use crate::{models::user::UserAction, Env};
@@ -23,6 +23,7 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
         .query()
         .nearest_to(query_embedding)?
         .column("embedding")
+        .limit(5)
         .execute()
         .await?;
 
@@ -40,8 +41,12 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
                 anyhow::Error::msg("column 'content' is not a StringArray".to_string())
             })?;
 
-        // 3. Extract and push
-        buf.push_str(array.value(0));
+        for i in 0..array.len() {
+            if !array.is_null(i) {
+                buf.push_str(array.value(i));
+                buf.push('\n');
+            }
+        }
         buf.push('\n');
     }
 

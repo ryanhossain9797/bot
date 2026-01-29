@@ -103,13 +103,21 @@ fn build_dynamic_prompt(
         parts.push(history_str);
     }
 
-    if let Some(HistoryEntry::Output(LLMDecisionType::IntermediateToolCall { thoughts, .. })) =
-        history.last()
+    if let Some(HistoryEntry::Output(
+        LLMDecisionType::IntermediateToolCall { thoughts, .. }
+        | LLMDecisionType::InternalFunctionCall { thoughts, .. },
+    )) = history.last()
     {
         parts.push(format!(
             "<|im_start|>system\nREMINDER: Your current plan was:\n{}<|im_end|>",
             thoughts
         ));
+    } else {
+        parts.push("<|im_start|>system\nREMINDER: You have no current plan. Below is the conversation history<|im_end|>".to_string());
+        let history_str = format_history(history, truncate);
+        if !history_str.is_empty() {
+            parts.push(history_str);
+        }
     }
 
     parts.push(format_input(current_input, false));
