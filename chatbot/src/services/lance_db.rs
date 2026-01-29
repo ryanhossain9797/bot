@@ -43,8 +43,6 @@ async fn setup_table_and_schema() -> (Connection, Arc<Schema>) {
         .map_err(|e| e.to_string())
         .expect("Edge cases should be handled at compile time");
 
-    println!("Connected");
-
     let dim = 384;
     let schema = Arc::new(Schema::new(vec![
         Field::new("user_id", DataType::Utf8, false),
@@ -56,20 +54,5 @@ async fn setup_table_and_schema() -> (Connection, Arc<Schema>) {
         ),
     ]));
 
-    println!("Schema Ready");
-
-    // let table = match db.open_table("history").execute().await {
-    //     Ok(t) => t,
-    //     Err(_) => db
-    //         .create_empty_table("history", schema.clone())
-    //         .execute()
-    //         .await
-    //         .map_err(|e| e.to_string())
-    //         .expect("Edge cases should be handled at compile time"),
-    // };
-
-    // println!("Table Ready");
-
-    // (schema, table)
     (db_conn, schema)
 }

@@ -473,8 +473,6 @@ fn post_transition(
                 pending: Vec::new(),
             };
 
-            println!("Id: {0} {1:?}", user_id, user.state);
-
             Ok((user, external))
         }
         _ => Ok((user, external)),
