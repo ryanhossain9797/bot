@@ -92,7 +92,6 @@ fn generate_llm_response_examples() -> String {
     };
 
     let mut examples = String::new();
-    examples.push_str("--- LLMResponse Examples ---\n");
 
     // Example 1: MessageUser
     let message_user_response = LLMResponse {
@@ -162,31 +161,48 @@ fn generate_llm_response_examples() -> String {
         serde_json::to_string_pretty(&internal_call_long_term_response).unwrap()
     ));
 
-    examples.push_str("--- End LLMResponse Examples ---");
     examples
 }
 
 fn build_dynamic_prompt(
-    current_input: &LLMInput,
+    new_input: &LLMInput,
     maybe_last_thoughts: Option<String>,
     truncate: bool,
 ) -> String {
-    let mut parts = Vec::new();
-
     let llm_response_examples = generate_llm_response_examples();
-    parts.push(llm_response_examples);
-
-    if let Some(last_thoughts) = maybe_last_thoughts {
-        print!("Last thoughts: {} ", last_thoughts);
-        parts.push(format!("system\nTHOUGHTS:\n{last_thoughts}"));
+    let prev_thoughts = if let Some(last_thoughts) = maybe_last_thoughts {
+        print!("Thoughts from last turn: {} ", last_thoughts);
+        format!("system\nTHOUGHTS:\n{last_thoughts}")
     } else {
-        print!("Last thoughts: null ");
-        parts.push("system\nTHOUGHTS: NULL;".to_string());
-    }
+        print!("Thoughts from last turn: null ");
+        "system\nPREVIOUS THOUGHTS: NULL;".to_string()
+    };
+    let new_input = format_input(new_input, false);
 
-    parts.push(format_input(current_input, false));
+    format!(
+        r#"
+    
+    --- LLMResponse Examples ---
 
-    format!("\n{}\n<|im_start|>assistant\n", parts.join("\n\n"))
+    {llm_response_examples}
+
+    --- End LLMResponse Examples ---
+
+    --- Thoughts from the previous iteration ---
+
+    {prev_thoughts}
+
+    --- End previous thoughts ---
+
+    --- New input (User message or an outcome of previous thoughts) ---
+
+    {new_input}
+
+    --- End new input
+
+    <|im_start|>assistant:
+    "#
+    )
 }
 
 struct GenerationState {
