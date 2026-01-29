@@ -2,7 +2,7 @@
 # Matches the Rust schema defined in models/user.rs
 
 root ::= object
-object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "}" ws
+object ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"outcome\"" ws ":" ws outcome-object "}" ws
 
 # LLMDecisionType is an externally tagged enum
 outcome-object ::= message-user-outcome | intermediate-tool-call-outcome | internal-function-call-outcome
@@ -11,13 +11,13 @@ outcome-object ::= message-user-outcome | intermediate-tool-call-outcome | inter
 message-user-outcome ::= "{" ws "\"MessageUser\"" ws ":" ws message-user-value "}" ws
 message-user-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
 
-# IntermediateToolCall outcome: {"IntermediateToolCall": {"thoughts": "...", "tool_call": {...}}}
+# IntermediateToolCall outcome: {"IntermediateToolCall": {"tool_call": {...}}}
 intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
-intermediate-tool-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
+intermediate-tool-call-value ::= "{" ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
 
-# InternalFunctionCall outcome: {"InternalFunctionCall": {"thoughts": "...", "function_call": {...}}}
+# InternalFunctionCall outcome: {"InternalFunctionCall": {"function_call": {...}}}
 internal-function-call-outcome ::= "{" ws "\"InternalFunctionCall\"" ws ":" ws internal-function-call-value "}" ws
-internal-function-call-value ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"function_call\"" ws ":" ws function-call-object "}" ws
+internal-function-call-value ::= "{" ws "\"function_call\"" ws ":" ws function-call-object "}" ws
 
 # Optional string (null or string)
 optional-string ::= null | string

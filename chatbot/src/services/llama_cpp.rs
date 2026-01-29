@@ -46,10 +46,10 @@ RULES:
 5. Use RecallLongTerm and RecallShortTerm often to try and be helpful. use the alternative if one does not yield useful results.
 
 RESPONSE FORMAT:
-{"outcome":{"MessageUser":{"response":"Hello! How can I help you today?"}}}
-{"outcome":{"IntermediateToolCall":{"thoughts":"User asked for weather in London. I need to call the weather tool.","tool_call":{"GetWeather":{"location":"London"}}}}}
-{"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall earlier messages to find the user's name.","function_call":{"RecallShortTerm":{"reason":"User's name was mentioned earlier in the conversation"}}}}}
-{"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall long term memory to look up our talk about oranges","function_call":{"RecallLongTerm":{"search_term":"orange fruit"}}}}}
+{"thoughts":"I will respond to the user.","outcome":{"MessageUser":{"response":"Hello! How can I help you today?"}}}
+{"thoughts":"User asked for weather in London. I need to call the weather tool.","outcome":{"IntermediateToolCall":{"tool_call":{"GetWeather":{"location":"London"}}}}}
+{"thoughts":"I need to recall earlier messages to find the user's name.","outcome":{"InternalFunctionCall":{"function_call":{"RecallShortTerm":{"reason":"User's name was mentioned earlier in the conversation"}}}}}
+{"thoughts":"I need to recall long term memory to look up our talk about oranges","outcome":{"InternalFunctionCall":{"function_call":{"RecallLongTerm":{"search_term":"orange fruit"}}}}}
 
 DECISION MAKING:
 1. If you have enough information to answer the user request, use "MessageUser".
