@@ -5,7 +5,7 @@ This directory contains GGUF format language models for use with this llama.cpp-
 ## Current Models
 
 - `Llama-3.2-1B-Instruct-Q4_K_M.gguf` - Lightweight Llama 3.2 model (1B parameters)
-- `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` - Default model (14B parameters)
+- `GLM-4-32B-0414-Q8_0-matteov2.gguf` - Default model (14B parameters)
 
 ## Supported Format
 
@@ -29,13 +29,13 @@ The easiest way to get GGUF models is from Hugging Face repositories that provid
 ```bash
 # Using huggingface-cli (install with: pip install huggingface-hub)
 huggingface-cli download Qwen/Qwen2.5-14B-Instruct-GGUF \
-  Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf \
+  GLM-4-32B-0414-Q8_0-matteov2.gguf \
   --local-dir models/ \
   --local-dir-use-symlinks False
 
 # Or using wget/curl from a direct URL
-wget https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf \
-  -O models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
+wget https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/GLM-4-32B-0414-Q8_0-matteov2.gguf \
+  -O models/GLM-4-32B-0414-Q8_0-matteov2.gguf
 ```
 
 ### 2. Ollama
@@ -78,7 +78,7 @@ GGUF models come in different quantization levels. The format is typically: `Q[b
 - **Mistral 7B**: `Mistral-7B-Instruct-v0.3-Q4_K_M.gguf` (~4.4GB)
 
 ### Large Models (16GB+ RAM)
-- **Qwen2.5 14B**: `Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf` (~8.7GB) **[Default]**
+- **Qwen2.5 14B**: `GLM-4-32B-0414-Q8_0-matteov2.gguf` (~8.7GB) **[Default]**
 - **Llama 3.1 70B**: `Llama-3.1-70B-Instruct-Q4_K_M.gguf` (~39GB)
 - **Qwen2.5 32B**: `Qwen2.5-32B-Instruct-Q4_K_M.gguf` (~19GB)
 

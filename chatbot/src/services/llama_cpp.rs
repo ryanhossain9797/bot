@@ -222,7 +222,7 @@ impl LlamaCppService {
 
     pub fn new() -> anyhow::Result<Self> {
         let model_path = std::env::var("MODEL_PATH")
-            .unwrap_or_else(|_| "./models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf".to_string());
+            .unwrap_or_else(|_| "./models/GLM-4-32B-0414-Q8_0-matteov2.gguf".to_string());
 
         println!("Loading model from: {}", model_path);
 

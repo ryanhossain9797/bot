@@ -6,7 +6,7 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Copy model file (large, rarely changes)
-COPY models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf /app/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
+COPY models/GLM-4-32B-0414-Q8_0-matteov2.gguf /app/models/GLM-4-32B-0414-Q8_0-matteov2.gguf
 
 # Copy FastEmbed cache
 COPY .fastembed_cache* /app/.fastembed_cache
@@ -15,7 +15,7 @@ COPY .fastembed_cache* /app/.fastembed_cache
 COPY grammars/response.gbnf /app/grammars/response.gbnf
 
 # Set environment variables
-ENV MODEL_PATH=/app/models/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf
+ENV MODEL_PATH=/app/models/GLM-4-32B-0414-Q8_0-matteov2.gguf
 ENV RUST_LOG=info
 
 # Update package list and install runtime dependencies
