@@ -1,73 +1,49 @@
-# GBNF Grammar for Bot Response with Tool Calls (Serde externally tagged enums)
-# Matches the Rust schema defined in models/user.rs
+root ::= object ws
+object ::= "{" ws "\"outcome\"" ws ":" ws outcome-object "," ws "\"thoughts\"" ws ":" ws string512 ws "}"
 
-root ::= object
-object ::= "{" ws "\"thoughts\"" ws ":" ws string "," ws "\"outcome\"" ws ":" ws outcome-object "}" ws
-
-# LLMDecisionType is an externally tagged enum
 outcome-object ::= message-user-outcome | intermediate-tool-call-outcome | internal-function-call-outcome
 
-# MessageUser outcome: {"MessageUser": {"response": "..."}}
-message-user-outcome ::= "{" ws "\"MessageUser\"" ws ":" ws message-user-value "}" ws
-message-user-value ::= "{" ws "\"response\"" ws ":" ws string "}" ws
+message-user-outcome ::= "{" ws "\"MessageUser\"" ws ":" ws message-user-value "}"
+message-user-value ::= "{" ws "\"response\"" ws ":" ws string512 "}"
 
-# IntermediateToolCall outcome: {"IntermediateToolCall": {"tool_call": {...}}}
-intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}" ws
-intermediate-tool-call-value ::= "{" ws "\"tool_call\"" ws ":" ws tool-call-object "}" ws
+intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}"
+intermediate-tool-call-value ::= "{" ws "\"tool_call\"" ws ":" ws tool-call-object "}"
 
-# InternalFunctionCall outcome: {"InternalFunctionCall": {"function_call": {...}}}
-internal-function-call-outcome ::= "{" ws "\"InternalFunctionCall\"" ws ":" ws internal-function-call-value "}" ws
-internal-function-call-value ::= "{" ws "\"function_call\"" ws ":" ws function-call-object "}" ws
+internal-function-call-outcome ::= "{" ws "\"InternalFunctionCall\"" ws ":" ws internal-function-call-value "}"
+internal-function-call-value ::= "{" ws "\"function_call\"" ws ":" ws function-call-object "}"
 
-# Optional string (null or string)
-optional-string ::= null | string
-
-# ToolCall is an externally tagged enum
 tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call
 
-# FunctionCall is an externally tagged enum
 function-call-object ::= recall-short-history-function-call | recall-long-history-function-call
 
-# GetWeather tool call: {"GetWeather": {"location": "..."}}
-get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}" ws
-get-weather-value ::= "{" ws "\"location\"" ws ":" ws string "}" ws
+get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}"
+get-weather-value ::= "{" ws "\"location\"" ws ":" ws string512 "}"
 
-# WebSearch tool call: {"WebSearch": {"query": "..."}}
-web-search-tool-call ::= "{" ws "\"WebSearch\"" ws ":" ws web-search-value "}" ws
-web-search-value ::= "{" ws "\"query\"" ws ":" ws string "}" ws
+web-search-tool-call ::= "{" ws "\"WebSearch\"" ws ":" ws web-search-value "}"
+web-search-value ::= "{" ws "\"query\"" ws ":" ws string512 "}"
 
-# MathCalculation tool call: {"MathCalculation": {"operations": [...]}}
-math-calculation-tool-call ::= "{" ws "\"MathCalculation\"" ws ":" ws math-calculation-value "}" ws
-math-calculation-value ::= "{" ws "\"operations\"" ws ":" ws math-operations-array "}" ws
+math-calculation-tool-call ::= "{" ws "\"MathCalculation\"" ws ":" ws math-calculation-value "}"
+math-calculation-value ::= "{" ws "\"operations\"" ws ":" ws math-operations-array "}"
+math-operations-array ::= "[" ws (math-operation ("," ws math-operation)*)? "]"
 
-# Math operations array
-math-operations-array ::= "[" ws (math-operation ("," ws math-operation)*)? "]" ws
-
-# MathOperation is an externally tagged enum with tuple variants
 math-operation ::= add-op | sub-op | mul-op | div-op | exp-op
-add-op ::= "{" ws "\"Add\"" ws ":" ws number-pair "}" ws
-sub-op ::= "{" ws "\"Sub\"" ws ":" ws number-pair "}" ws
-mul-op ::= "{" ws "\"Mul\"" ws ":" ws number-pair "}" ws
-div-op ::= "{" ws "\"Div\"" ws ":" ws number-pair "}" ws
-exp-op ::= "{" ws "\"Exp\"" ws ":" ws number-pair "}" ws
-number-pair ::= "[" ws number "," ws number "]" ws
+add-op ::= "{" ws "\"Add\"" ws ":" ws number-pair "}"
+sub-op ::= "{" ws "\"Sub\"" ws ":" ws number-pair "}"
+mul-op ::= "{" ws "\"Mul\"" ws ":" ws number-pair "}"
+div-op ::= "{" ws "\"Div\"" ws ":" ws number-pair "}"
+exp-op ::= "{" ws "\"Exp\"" ws ":" ws number-pair "}"
 
-# VisitUrl tool call: {"VisitUrl": {"url": "..."}}
-visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}" ws
-visit-url-value ::= "{" ws "\"url\"" ws ":" ws string "}" ws
+number-pair ::= "[" ws number "," ws number "]"
 
-# RecallShortTerm function call: {"RecallShortTerm": {"reason": "..."}}
-recall-short-history-function-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-short-history-value "}" ws
-recall-short-history-value ::= "{" ws "\"reason\"" ws ":" ws string "}" ws
+visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}"
+visit-url-value ::= "{" ws "\"url\"" ws ":" ws string512 "}"
 
-# RecallLongTerm function call: {"RecallLongTerm": {"search_term": "..."}}
-recall-long-history-function-call ::= "{" ws "\"RecallLongTerm\"" ws ":" ws recall-long-history-value "}" ws
-recall-long-history-value ::= "{" ws "\"search_term\"" ws ":" ws string "}" ws
+recall-short-history-function-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-short-history-value "}"
+recall-short-history-value ::= "{" ws "\"reason\"" ws ":" ws string512 "}"
 
-# Basic JSON types
-string ::= "\"" string-char* "\""
-string-char ::= [^"\\\x00-\x1F] | "\\" escape-char
-escape-char ::= ["\\bfnrt/] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]
+recall-long-history-function-call ::= "{" ws "\"RecallLongTerm\"" ws ":" ws recall-long-history-value "}"
+recall-long-history-value ::= "{" ws "\"search_term\"" ws ":" ws string512 "}"
+
+string512 ::= "\"" ([^"\\\x00-\x1F\n\r] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
 number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
-null ::= "null"
-ws ::= [ \t\n]*
+ws ::= [ \t]*

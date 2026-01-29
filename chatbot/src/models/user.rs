@@ -88,29 +88,6 @@ pub struct User {
     pub last_transition: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MathOperation {
-    Add(f32, f32),
-    Sub(f32, f32),
-    Mul(f32, f32),
-    Div(f32, f32),
-    Exp(f32, f32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ToolCall {
-    GetWeather { location: String },
-    WebSearch { query: String },
-    MathCalculation { operations: Vec<MathOperation> },
-    VisitUrl { url: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum FunctionCall {
-    RecallShortTerm { reason: String },
-    RecallLongTerm { search_term: String },
-}
-
 /// Represents the input to the LLM decision-making process
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
@@ -135,18 +112,31 @@ impl LLMInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MathOperation {
+    Add(f32, f32),
+    Sub(f32, f32),
+    Mul(f32, f32),
+    Div(f32, f32),
+    Exp(f32, f32),
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ToolCall {
+    GetWeather { location: String },
+    WebSearch { query: String },
+    MathCalculation { operations: Vec<MathOperation> },
+    VisitUrl { url: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FunctionCall {
+    RecallShortTerm { reason: String },
+    RecallLongTerm { search_term: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
     IntermediateToolCall { tool_call: ToolCall },
     InternalFunctionCall { function_call: FunctionCall },
     MessageUser { response: String },
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LLMResponse {
-    pub thoughts: String,
-    pub outcome: LLMDecisionType,
-}
-
 impl LLMDecisionType {
     pub fn format_output(&self) -> String {
         match self {
@@ -161,6 +151,11 @@ impl LLMDecisionType {
             }
         }
     }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LLMResponse {
+    pub thoughts: String,
+    pub outcome: LLMDecisionType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

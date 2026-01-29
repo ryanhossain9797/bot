@@ -240,6 +240,10 @@ async fn get_response_from_llm(
          nth| {
             let token = sampler.sample(&ctx, last_idx);
 
+            if let Ok(output) = llama_cpp.token_to_str(token, Special::Tokenize) {
+                print!("{output}");
+            }
+
             if llama_cpp.is_eog_token(token) {
                 return ControlFlow::Break(Ok(tokens));
             }
