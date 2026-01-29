@@ -47,7 +47,7 @@ RULES:
 
 RESPONSE FORMAT:
 {"outcome":{"Final":{"response":"Hello! How can I help you today?"}}}
-{"outcome":{"IntermediateToolCall":{"thoughts":"User asked for weather in London. I need to call the weather tool.","progress_notification":"Checking weather for London","tool_call":{"GetWeather":{"location":"London"}}}}}
+{"outcome":{"IntermediateToolCall":{"thoughts":"User asked for weather in London. I need to call the weather tool.","tool_call":{"GetWeather":{"location":"London"}}}}}
 {"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall earlier messages to find the user's name.","function_call":{"RecallShortTerm":{"reason":"User's name was mentioned earlier in the conversation"}}}}}
 {"outcome":{"InternalFunctionCall":{"thoughts":"I need to recall long term memory to look up our talk about oranges","function_call":{"RecallLongTerm":{"search_term":"orange fruit"}}}}}
 
@@ -55,7 +55,6 @@ DECISION MAKING:
 1. If you have enough information to answer the user request, use "Final".
 2. If you need more information from the user themselves, use "Final" too.
 3. If you need more information or need to perform an action, use "IntermediateToolCall" or "InternalFunctionCall".
-4. Use "progress_notification" for ToolCall to tell the user what you are doing (e.g. "Searching for..."). This is sent to the user immediately.
 
 TOOLS (RUST TYPE DEFINITIONS):
 ```rust
@@ -63,7 +62,6 @@ TOOLS (RUST TYPE DEFINITIONS):
 pub enum LLMDecisionType {
     IntermediateToolCall {
         thoughts: String,
-        progress_notification: Option<String>,
         tool_call: ToolCall,
     },
     InternalFunctionCall {
@@ -113,7 +111,6 @@ CRITICAL INSTRUCTIONS:
 - WebSearch tool ONLY gives you a summary. To answer the user's question, you ALMOST ALWAYS need to read the page content using VisitUrl.
 - You can make multiple tool calls in separate steps. Make one call, receive the result in history, then make another if needed.
 - Do not invent new tools.
-- Use "progress_notification" to keep the user informed during multi-step tool calls.
 - Conversation history will be truncated, use thoughsts to keep track of important details.
 - If you need to refer to earlier parts of the conversation that may have been truncated, use the RecallShortTerm internal function to retrieve the last 20 messages.
 

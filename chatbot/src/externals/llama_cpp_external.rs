@@ -24,14 +24,10 @@ fn format_output(output: &LLMDecisionType) -> String {
         }
         LLMDecisionType::IntermediateToolCall {
             thoughts: _,
-            progress_notification,
             tool_call,
         } => {
             let mut lines = Vec::new();
 
-            if let Some(msg) = progress_notification {
-                lines.push(format!("INTERMEDIATE PROGRESS: {}", msg));
-            }
             lines.push(format!("CALL TOOL: {:?}", tool_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
         }

@@ -137,8 +137,6 @@ impl LLMInput {
 pub enum LLMDecisionType {
     IntermediateToolCall {
         thoughts: String,
-        /// A brief message to the user notifying them of the current progress (e.g., "Searching for...")
-        progress_notification: Option<String>,
         tool_call: ToolCall,
     },
     InternalFunctionCall {
@@ -160,13 +158,9 @@ impl LLMDecisionType {
             } => format!("assistant\nfunction_call: {function_call:?}"),
             LLMDecisionType::IntermediateToolCall {
                 thoughts: _,
-                progress_notification,
                 tool_call,
             } => {
                 let mut lines = Vec::new();
-                if let Some(msg) = progress_notification {
-                    lines.push(format!("progress_notification: {msg}"));
-                }
                 lines.push(format!("tool_call: {tool_call:?}"));
                 format!("assistant\n{}", lines.join("\n"))
             }
