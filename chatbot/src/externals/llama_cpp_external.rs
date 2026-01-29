@@ -9,6 +9,7 @@ use crate::{
 use llama_cpp_2::{
     llama_batch::LlamaBatch, model::Special, sampling::LlamaSampler, token::LlamaToken,
 };
+use serde_json;
 
 use std::{
     io::{self, Write},
@@ -85,12 +86,95 @@ fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
         .join("\n\n")
 }
 
+fn generate_llm_response_examples() -> String {
+    use crate::models::user::{
+        FunctionCall, LLMDecisionType, LLMResponse, MathOperation, ToolCall,
+    };
+
+    let mut examples = String::new();
+    examples.push_str("--- LLMResponse Examples ---\n");
+
+    // Example 1: MessageUser
+    let message_user_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::MessageUser {
+            response: "Hello there! How can I help you today?".to_string(),
+        },
+    };
+    examples.push_str(&format!(
+        "MessageUser Example:\n{}\n\n",
+        serde_json::to_string_pretty(&message_user_response).unwrap()
+    ));
+
+    // Example 2: IntermediateToolCall - WebSearch
+    let tool_call_websearch_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::WebSearch {
+                query: "latest news headlines".to_string(),
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "IntermediateToolCall (WebSearch) Example:\n{}\n\n",
+        serde_json::to_string(&tool_call_websearch_response).unwrap()
+    ));
+
+    // Example 3: IntermediateToolCall - MathCalculation
+    let tool_call_math_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::MathCalculation {
+                operations: vec![MathOperation::Add(5.0, 3.0), MathOperation::Mul(2.0, 4.0)],
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "IntermediateToolCall (MathCalculation) Example:\n{}\n\n",
+        serde_json::to_string_pretty(&tool_call_math_response).unwrap()
+    ));
+
+    // Example 4: InternalFunctionCall - RecallShortTerm
+    let internal_call_short_term_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::InternalFunctionCall {
+            function_call: FunctionCall::RecallShortTerm {
+                reason: "User asked about previous topic.".to_string(),
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "InternalFunctionCall (RecallShortTerm) Example:\n{}\n\n",
+        serde_json::to_string_pretty(&internal_call_short_term_response).unwrap()
+    ));
+
+    // Example 5: InternalFunctionCall - RecallLongTerm
+    let internal_call_long_term_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::InternalFunctionCall {
+            function_call: FunctionCall::RecallLongTerm {
+                search_term: "project details".to_string(),
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "InternalFunctionCall (RecallLongTerm) Example:\n{}\n\n",
+        serde_json::to_string_pretty(&internal_call_long_term_response).unwrap()
+    ));
+
+    examples.push_str("--- End LLMResponse Examples ---");
+    examples
+}
+
 fn build_dynamic_prompt(
     current_input: &LLMInput,
     maybe_last_thoughts: Option<String>,
     truncate: bool,
 ) -> String {
     let mut parts = Vec::new();
+
+    let llm_response_examples = generate_llm_response_examples();
+    parts.push(llm_response_examples);
 
     if let Some(last_thoughts) = maybe_last_thoughts {
         print!("Last thoughts: {} ", last_thoughts);
