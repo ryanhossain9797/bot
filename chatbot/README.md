@@ -85,22 +85,7 @@ To improve startup performance, the bot pre-evaluates the static base prompt (sy
 chatbot/
 ├── src/
 │   ├── main.rs                 # Entry point, Env initialization
-│   ├── configuration.rs        # Token configuration
-│   ├── services/               # Core services
-│   │   ├── discord.rs          # Discord client & event handler
-│   │   └── llama_cpp.rs        # Local LLM inference service
-│   │
-│   ├── externals/              # External operation handlers
-│   │   ├── llm_external.rs     # LLM decision making
-│   │   ├── message_external.rs # Message sending
-│   │   └── tool_call_external.rs  # Tool execution
-│   │
-│   ├── state_machines/         # User state machine logic
-│   └── models/                 # Data models
-├── grammars/
-│   └── response.gbnf           # GBNF grammar for JSON output
-└── resources/
-    └── base_prompt.session     # Pre-cached prompt session
+- todo() -
 ```
 
 ### Core Components

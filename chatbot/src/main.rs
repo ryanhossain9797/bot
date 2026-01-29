@@ -1,19 +1,17 @@
 #![feature(never_type)]
 
+mod base_prompt;
 mod configuration;
 mod externals;
 mod models;
 mod services;
 mod state_machines;
 
-use framework::{new_state_machine, Schedule, Transition};
-use models::bot::{BotAction, BotHandle};
-use models::user::{User, UserId};
+use models::bot::BotHandle;
 use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use services::llama_cpp::LlamaCppService;
-use state_machines::user_state_machine::user_transition;
 // use services::ollama::OllamaService;
 use std::sync::Arc;
 use tokio::task::JoinSet;

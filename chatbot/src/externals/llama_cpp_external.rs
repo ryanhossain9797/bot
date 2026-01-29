@@ -226,7 +226,7 @@ async fn get_response_from_llm(
 
     let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts, truncate);
 
-    let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
+    let base_token_count = llama_cpp.load_thinking_base_prompt(&mut ctx)?;
 
     let (total_tokens, last_batch_size) =
         llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
@@ -234,18 +234,18 @@ async fn get_response_from_llm(
     print!("Total tokens: {total_tokens} ");
     let _ = io::stdout().flush();
 
-    let initial_state = GenerationState {
+    let thinking_prompt_initial_state = GenerationState {
         tokens: Vec::new(),
         n_cur: total_tokens,
         last_idx: last_batch_size - 1,
-        sampler: llama_cpp.create_sampler(),
+        sampler: llama_cpp.create_sampler(llama_cpp.thinking_base_prompt),
         batch: LlamaCppService::new_batch(),
     };
 
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
 
     let result = (0..max_generation_tokens).try_fold(
-        initial_state,
+        thinking_prompt_initial_state,
         |GenerationState {
              mut tokens,
              mut n_cur,
