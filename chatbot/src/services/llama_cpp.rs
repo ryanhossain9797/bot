@@ -38,25 +38,7 @@ impl BasePrompt {
     const fn build_prompt() -> &'static str {
         r#"<|im_start|>system\nYour name is Terminal Alpha Beta. Respond with ONLY valid JSON.
 
-RULES:
-1. Keep responses brief and to the point.
-2. NO HTML TAGS. Plain text only.
-3. No emojis, no markdown.
-4. Output must be valid JSON.
-5. Use RecallLongTerm and RecallShortTerm often to try and be helpful. use the alternative if one does not yield useful results.
-
-RESPONSE FORMAT:
-{"thoughts":"I will respond to the user.","outcome":{"MessageUser":{"response":"Hello! How can I help you today?"}}}
-{"thoughts":"User asked for weather in London. I need to call the weather tool.","outcome":{"IntermediateToolCall":{"tool_call":{"GetWeather":{"location":"London"}}}}}
-{"thoughts":"I need to recall earlier messages to find the user's name.","outcome":{"InternalFunctionCall":{"function_call":{"RecallShortTerm":{"reason":"User's name was mentioned earlier in the conversation"}}}}}
-{"thoughts":"I need to recall long term memory to look up our talk about oranges","outcome":{"InternalFunctionCall":{"function_call":{"RecallLongTerm":{"search_term":"orange fruit"}}}}}
-
-DECISION MAKING:
-1. If you have enough information to answer the user request, use "MessageUser".
-2. If you need more information from the user themselves, use "MessageUser" too, like getting city for weather when they don't specify it.
-3. If you have to perform an action, use "IntermediateToolCall" or "InternalFunctionCall".
-
-TOOLS (RUST TYPE DEFINITIONS):
+RUST TYPE DEFINITIONS:
 ```rust
 pub enum LLMDecisionType {
     IntermediateToolCall { tool_call: ToolCall },
@@ -87,13 +69,22 @@ pub enum ToolCall {
     VisitUrl { url: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FunctionCall {
     /// Use this to recall recent UNTRUNCATED conversation history (last 20 messages). Use RecallLongTerm if this doesn't provide useful results.
     RecallShortTerm { reason: String },
     /// Keep search_term SHORT for maximum coverage. Opt to use this as often as possible if necessary.
     RecallLongTerm { search_term: String },
 }
+
+RULES:
+1. Your response needs to match LLMResponse type's JSON Serialization exactly.
+2. Keep responses brief and to the point.
+3. Use RecallLongTerm and RecallShortTerm often to try and be helpful. use the alternative if one does not yield useful results.
+
+DECISION MAKING:
+1. If you have enough information from thoughtsto answer the user request, use "MessageUser".
+2. If you need more information from the user themselves, use "MessageUser" too, like getting city for weather when they don't specify it.
+3. If you have to perform an action, use "IntermediateToolCall" or "InternalFunctionCall".
 ```
 
 CRITICAL INSTRUCTIONS:

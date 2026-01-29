@@ -9,8 +9,12 @@ use crate::{
 use llama_cpp_2::{
     llama_batch::LlamaBatch, model::Special, sampling::LlamaSampler, token::LlamaToken,
 };
-use serde::Deserialize;
-use std::{io::Write, ops::ControlFlow, sync::Arc};
+
+use std::{
+    io::{self, Write},
+    ops::ControlFlow,
+    sync::Arc,
+};
 
 fn format_output(output: &LLMDecisionType) -> String {
     match output {
@@ -89,12 +93,11 @@ fn build_dynamic_prompt(
     let mut parts = Vec::new();
 
     if let Some(last_thoughts) = maybe_last_thoughts {
-        parts.push(format!(
-            "system\nREMINDER: Your current plan was:\n{}",
-            last_thoughts
-        ));
+        print!("Last thoughts: {} ", last_thoughts);
+        parts.push(format!("system\nTHOUGHTS:\n{last_thoughts}"));
     } else {
-        parts.push("system\nREMINDER: You have no current plan. If you want to see recent messages use RecallShortTerm".to_string());
+        print!("Last thoughts: null ");
+        parts.push("system\nTHOUGHTS: NULL;".to_string());
     }
 
     parts.push(format_input(current_input, false));
@@ -116,6 +119,9 @@ async fn get_response_from_llm(
     maybe_last_thoughts: Option<String>,
     truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
+    print!("[DEBUG] ");
+    let _ = io::stdout().flush();
+
     let mut ctx = llama_cpp.new_context()?;
 
     let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts, truncate);
@@ -124,6 +130,9 @@ async fn get_response_from_llm(
 
     let (total_tokens, last_batch_size) =
         llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
+
+    print!("Total tokens: {total_tokens} ");
+    let _ = io::stdout().flush();
 
     let initial_state = GenerationState {
         tokens: Vec::new(),
@@ -187,7 +196,8 @@ async fn get_response_from_llm(
         ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
         ControlFlow::Break(res) => res,
     }?;
-    println!("[DEBUG] Generated tokens: {}.", generated_tokens.len());
+    print!("Generated tokens: {} ", generated_tokens.len());
+    let _ = io::stdout().flush();
 
     let mut response_bytes = Vec::new();
     for token in &generated_tokens {
@@ -197,8 +207,7 @@ async fn get_response_from_llm(
     }
     let response = String::from_utf8_lossy(&response_bytes).to_string();
 
-    print!("{}", response);
-    println!();
+    println!("\n{}\n", response);
     let _ = std::io::stdout().flush();
 
     let parsed_response: LLMResponse = serde_json::from_str(&response)?;
