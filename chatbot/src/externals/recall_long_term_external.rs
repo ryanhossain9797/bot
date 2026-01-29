@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Add, sync::Arc};
 
 use arrow_array::{Array, StringArray};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
@@ -50,6 +50,10 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
         buf.push('\n');
     }
 
+    if buf.len() == 0 {
+        buf = buf.add("NO RESULTS");
+    }
+
     Ok(buf)
 }
 
@@ -60,6 +64,9 @@ pub async fn execute_long_recall(
 ) -> UserAction {
     let result = recall(env, user_id, search_term)
         .await
+        .map(|recalled| {
+            format!("RecallLongTerm Results:\n{recalled}\nEnd of RecallLongTerm Results\nNote: if the recall results seem irrelevant try other functions or tools")
+        })
         .map_err(|e| e.to_string());
     UserAction::InternalFunctionResult(result)
 }

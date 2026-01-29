@@ -1,5 +1,5 @@
 use crate::{
-    models::user::{HistoryEntry, LLMDecisionType, LLMInput, UserAction},
+    models::user::{HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, UserAction},
     services::lance_db::LanceService,
     Env,
 };
@@ -55,9 +55,10 @@ async fn commit(
             HistoryEntry::Input(LLMInput::UserMessage(text)) => {
                 Some(format!("USER MESSAGE: {text}"))
             }
-            HistoryEntry::Output(LLMDecisionType::MessageUser { response }) => {
-                Some(format!("FINAL RESPONSE: {response}"))
-            }
+            HistoryEntry::Output(LLMResponse {
+                outcome: LLMDecisionType::MessageUser { response },
+                ..
+            }) => Some(format!("MESSAGE USER: {response}")),
             // ... other mappings
             _ => None,
         })

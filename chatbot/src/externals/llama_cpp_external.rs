@@ -1,6 +1,6 @@
 use crate::{
     models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, UserAction, MAX_HISTORY_TEXT_LENGTH,
+        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
         MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
     },
     services::llama_cpp::LlamaCppService,
@@ -9,8 +9,13 @@ use crate::{
 use llama_cpp_2::{
     llama_batch::LlamaBatch, model::Special, sampling::LlamaSampler, token::LlamaToken,
 };
-use serde::Deserialize;
-use std::{io::Write, ops::ControlFlow, sync::Arc};
+use serde_json;
+
+use std::{
+    io::{self, Write},
+    ops::ControlFlow,
+    sync::Arc,
+};
 
 fn format_output(output: &LLMDecisionType) -> String {
     match output {
@@ -22,19 +27,13 @@ fn format_output(output: &LLMDecisionType) -> String {
             }
             format!("<|im_start|>assistant\n{}<|im_end|>", content)
         }
-        LLMDecisionType::IntermediateToolCall {
-            thoughts: _,
-            tool_call,
-        } => {
+        LLMDecisionType::IntermediateToolCall { tool_call } => {
             let mut lines = Vec::new();
 
             lines.push(format!("CALL TOOL: {:?}", tool_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
         }
-        LLMDecisionType::InternalFunctionCall {
-            thoughts: _,
-            function_call,
-        } => {
+        LLMDecisionType::InternalFunctionCall { function_call } => {
             let mut lines = Vec::new();
             lines.push(format!("CALL INTERNAL FUNCTION: {:?}", function_call));
             format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
@@ -81,49 +80,129 @@ fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
         .iter()
         .map(|entry| match entry {
             HistoryEntry::Input(input) => format_input(input, truncate),
-            HistoryEntry::Output(output) => format_output(output),
+            HistoryEntry::Output(output) => format_output(&output.outcome),
         })
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-fn build_dynamic_prompt(
-    current_input: &LLMInput,
-    history: &[HistoryEntry],
-    truncate: bool,
-) -> String {
-    let mut parts = Vec::new();
+fn generate_llm_response_examples() -> String {
+    use crate::models::user::{
+        FunctionCall, LLMDecisionType, LLMResponse, MathOperation, ToolCall,
+    };
 
-    let history_str = format_history(history, truncate);
-    if !history_str.is_empty() {
-        parts.push(history_str);
-    }
+    let mut examples = String::new();
 
-    if let Some(HistoryEntry::Output(
-        LLMDecisionType::IntermediateToolCall { thoughts, .. }
-        | LLMDecisionType::InternalFunctionCall { thoughts, .. },
-    )) = history.last()
-    {
-        parts.push(format!(
-            "<|im_start|>system\nREMINDER: Your current plan was:\n{}<|im_end|>",
-            thoughts
-        ));
-    } else {
-        parts.push("<|im_start|>system\nREMINDER: You have no current plan. Below is the conversation history<|im_end|>".to_string());
-        let history_str = format_history(history, truncate);
-        if !history_str.is_empty() {
-            parts.push(history_str);
-        }
-    }
+    // Example 1: MessageUser
+    let message_user_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::MessageUser {
+            response: "Hello there! How can I help you today?".to_string(),
+        },
+    };
+    examples.push_str(&format!(
+        "MessageUser Example:\n{}\n\n",
+        serde_json::to_string_pretty(&message_user_response).unwrap()
+    ));
 
-    parts.push(format_input(current_input, false));
+    // Example 2: IntermediateToolCall - WebSearch
+    let tool_call_websearch_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::WebSearch {
+                query: "latest news headlines".to_string(),
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "IntermediateToolCall (WebSearch) Example:\n{}\n\n",
+        serde_json::to_string(&tool_call_websearch_response).unwrap()
+    ));
 
-    format!("\n{}\n<|im_start|>assistant\n", parts.join("\n\n"))
+    // Example 3: IntermediateToolCall - MathCalculation
+    let tool_call_math_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::MathCalculation {
+                operations: vec![MathOperation::Add(5.0, 3.0), MathOperation::Mul(2.0, 4.0)],
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "IntermediateToolCall (MathCalculation) Example:\n{}\n\n",
+        serde_json::to_string_pretty(&tool_call_math_response).unwrap()
+    ));
+
+    // Example 4: InternalFunctionCall - RecallShortTerm
+    let internal_call_short_term_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::InternalFunctionCall {
+            function_call: FunctionCall::RecallShortTerm {
+                reason: "User asked about previous topic.".to_string(),
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "InternalFunctionCall (RecallShortTerm) Example:\n{}\n\n",
+        serde_json::to_string_pretty(&internal_call_short_term_response).unwrap()
+    ));
+
+    // Example 5: InternalFunctionCall - RecallLongTerm
+    let internal_call_long_term_response = LLMResponse {
+        thoughts: "...".to_string(),
+        outcome: LLMDecisionType::InternalFunctionCall {
+            function_call: FunctionCall::RecallLongTerm {
+                search_term: "project details".to_string(),
+            },
+        },
+    };
+    examples.push_str(&format!(
+        "InternalFunctionCall (RecallLongTerm) Example:\n{}\n\n",
+        serde_json::to_string_pretty(&internal_call_long_term_response).unwrap()
+    ));
+
+    examples
 }
 
-#[derive(Debug, Deserialize)]
-struct LLMResponse {
-    outcome: LLMDecisionType,
+fn build_dynamic_prompt(
+    new_input: &LLMInput,
+    maybe_last_thoughts: Option<String>,
+    truncate: bool,
+) -> String {
+    let llm_response_examples = generate_llm_response_examples();
+    let prev_thoughts = if let Some(last_thoughts) = maybe_last_thoughts {
+        print!("Thoughts from last turn: {} ", last_thoughts);
+        format!("system\nTHOUGHTS:\n{last_thoughts}")
+    } else {
+        print!("Thoughts from last turn: null ");
+        "system\nPREVIOUS THOUGHTS: NULL;".to_string()
+    };
+    let new_input = format_input(new_input, false);
+
+    format!(
+        r#"
+    
+    --- LLMResponse Examples ---
+
+    {llm_response_examples}
+
+    --- End LLMResponse Examples ---
+
+    --- Thoughts from the previous iteration ---
+
+    {prev_thoughts}
+
+    --- End previous thoughts ---
+
+    --- New input (User message or an outcome of previous thoughts) ---
+
+    {new_input}
+
+    --- End new input
+
+    <|im_start|>assistant:
+    "#
+    )
 }
 
 struct GenerationState {
@@ -137,17 +216,23 @@ struct GenerationState {
 async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
-    history: &[HistoryEntry],
+    maybe_last_thoughts: Option<String>,
     truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
+    print!("[DEBUG] ");
+    let _ = io::stdout().flush();
+
     let mut ctx = llama_cpp.new_context()?;
 
-    let dynamic_prompt = build_dynamic_prompt(current_input, history, truncate);
+    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts, truncate);
 
     let base_token_count = llama_cpp.load_base_prompt(&mut ctx)?;
 
     let (total_tokens, last_batch_size) =
         llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
+
+    print!("Total tokens: {total_tokens} ");
+    let _ = io::stdout().flush();
 
     let initial_state = GenerationState {
         tokens: Vec::new(),
@@ -170,6 +255,10 @@ async fn get_response_from_llm(
          },
          nth| {
             let token = sampler.sample(&ctx, last_idx);
+
+            if let Ok(output) = llama_cpp.token_to_str(token, Special::Tokenize) {
+                print!("{output}");
+            }
 
             if llama_cpp.is_eog_token(token) {
                 return ControlFlow::Break(Ok(tokens));
@@ -211,7 +300,8 @@ async fn get_response_from_llm(
         ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
         ControlFlow::Break(res) => res,
     }?;
-    println!("[DEBUG] Generated tokens: {}.", generated_tokens.len());
+    print!("Generated tokens: {} ", generated_tokens.len());
+    let _ = io::stdout().flush();
 
     let mut response_bytes = Vec::new();
     for token in &generated_tokens {
@@ -221,8 +311,7 @@ async fn get_response_from_llm(
     }
     let response = String::from_utf8_lossy(&response_bytes).to_string();
 
-    print!("{}", response);
-    println!();
+    println!("\n{}\n", response);
     let _ = std::io::stdout().flush();
 
     let parsed_response: LLMResponse = serde_json::from_str(&response)?;
@@ -233,19 +322,19 @@ async fn get_response_from_llm(
 pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
-    history: Vec<HistoryEntry>,
+    maybe_last_thoughts: Option<String>,
     truncate_history: bool,
 ) -> UserAction {
     let llama_cpp_result = get_response_from_llm(
         env.llama_cpp.as_ref(),
         &current_input,
-        &history,
+        maybe_last_thoughts,
         truncate_history,
     )
     .await;
 
     match llama_cpp_result {
-        Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response.outcome)),
+        Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response)),
         Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
     }
 }

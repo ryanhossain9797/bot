@@ -42,6 +42,7 @@ impl Display for UserId {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentConversation {
+    pub thoughts: String,
     pub history: Vec<HistoryEntry>,
 }
 
@@ -55,7 +56,7 @@ pub enum UserState {
     },
     AwaitingLLMDecision {
         is_timeout: bool,
-        recent_conversation: RecentConversation,
+        history: Vec<HistoryEntry>,
         current_input: LLMInput,
     },
     RunningInternalFunction {
@@ -64,7 +65,7 @@ pub enum UserState {
     },
     SendingMessage {
         is_timeout: bool,
-        outcome: LLMDecisionType,
+        outcome: LLMResponse,
         recent_conversation: RecentConversation,
     },
     RunningTool {
@@ -85,29 +86,6 @@ pub struct User {
     pub pending: Vec<String>,
     pub state: UserState,
     pub last_transition: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MathOperation {
-    Add(f32, f32),
-    Sub(f32, f32),
-    Mul(f32, f32),
-    Div(f32, f32),
-    Exp(f32, f32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ToolCall {
-    GetWeather { location: String },
-    WebSearch { query: String },
-    MathCalculation { operations: Vec<MathOperation> },
-    VisitUrl { url: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum FunctionCall {
-    RecallShortTerm { reason: String },
-    RecallLongTerm { search_term: String },
 }
 
 /// Represents the input to the LLM decision-making process
@@ -134,32 +112,39 @@ impl LLMInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LLMDecisionType {
-    IntermediateToolCall {
-        thoughts: String,
-        tool_call: ToolCall,
-    },
-    InternalFunctionCall {
-        thoughts: String,
-        function_call: FunctionCall,
-    },
-    MessageUser {
-        response: String,
-    },
+pub enum MathOperation {
+    Add(f32, f32),
+    Sub(f32, f32),
+    Mul(f32, f32),
+    Div(f32, f32),
+    Exp(f32, f32),
 }
-
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ToolCall {
+    GetWeather { location: String },
+    WebSearch { query: String },
+    MathCalculation { operations: Vec<MathOperation> },
+    VisitUrl { url: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum FunctionCall {
+    RecallShortTerm { reason: String },
+    RecallLongTerm { search_term: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LLMDecisionType {
+    IntermediateToolCall { tool_call: ToolCall },
+    InternalFunctionCall { function_call: FunctionCall },
+    MessageUser { response: String },
+}
 impl LLMDecisionType {
     pub fn format_output(&self) -> String {
         match self {
             LLMDecisionType::MessageUser { response } => format!("assistant: {response}"),
-            LLMDecisionType::InternalFunctionCall {
-                thoughts: _,
-                function_call,
-            } => format!("assistant\nfunction_call: {function_call:?}"),
-            LLMDecisionType::IntermediateToolCall {
-                thoughts: _,
-                tool_call,
-            } => {
+            LLMDecisionType::InternalFunctionCall { function_call } => {
+                format!("assistant\nfunction_call: {function_call:?}")
+            }
+            LLMDecisionType::IntermediateToolCall { tool_call } => {
                 let mut lines = Vec::new();
                 lines.push(format!("tool_call: {tool_call:?}"));
                 format!("assistant\n{}", lines.join("\n"))
@@ -167,18 +152,23 @@ impl LLMDecisionType {
         }
     }
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LLMResponse {
+    pub thoughts: String,
+    pub outcome: LLMDecisionType,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HistoryEntry {
     Input(LLMInput),
-    Output(LLMDecisionType),
+    Output(LLMResponse),
 }
 
 impl HistoryEntry {
     pub fn format(&self) -> String {
         match self {
             HistoryEntry::Input(input) => input.format(),
-            HistoryEntry::Output(output) => output.format_output(),
+            HistoryEntry::Output(output) => output.outcome.format_output(),
         }
     }
 }
@@ -192,7 +182,7 @@ pub enum UserAction {
     },
     Timeout,
     CommitResult(Result<(), String>),
-    LLMDecisionResult(Result<LLMDecisionType, String>),
+    LLMDecisionResult(Result<LLMResponse, String>),
     InternalFunctionResult(Result<String, String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<String, String>),
