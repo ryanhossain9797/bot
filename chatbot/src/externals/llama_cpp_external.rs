@@ -6,6 +6,7 @@ use crate::{
     services::llama_cpp::LlamaCppService,
     Env,
 };
+use anyhow::anyhow;
 use serde_json;
 
 use std::sync::Arc;
@@ -54,7 +55,7 @@ fn generate_llm_response_examples() -> String {
     // Example 1: MessageUser
     let message_user_response = LLMResponse {
         thoughts: "...".to_string(),
-        outcome: LLMDecisionType::MessageUser {
+        output: LLMDecisionType::MessageUser {
             response: "Hello there! How can I help you today?".to_string(),
         },
     };
@@ -66,7 +67,7 @@ fn generate_llm_response_examples() -> String {
     // Example 2: IntermediateToolCall - WebSearch
     let tool_call_websearch_response = LLMResponse {
         thoughts: "...".to_string(),
-        outcome: LLMDecisionType::IntermediateToolCall {
+        output: LLMDecisionType::IntermediateToolCall {
             tool_call: ToolCall::WebSearch {
                 query: "latest news headlines".to_string(),
             },
@@ -80,7 +81,7 @@ fn generate_llm_response_examples() -> String {
     // Example 3: IntermediateToolCall - MathCalculation
     let tool_call_math_response = LLMResponse {
         thoughts: "...".to_string(),
-        outcome: LLMDecisionType::IntermediateToolCall {
+        output: LLMDecisionType::IntermediateToolCall {
             tool_call: ToolCall::MathCalculation {
                 operations: vec![MathOperation::Add(5.0, 3.0), MathOperation::Mul(2.0, 4.0)],
             },
@@ -94,7 +95,7 @@ fn generate_llm_response_examples() -> String {
     // Example 4: InternalFunctionCall - RecallShortTerm
     let internal_call_short_term_response = LLMResponse {
         thoughts: "...".to_string(),
-        outcome: LLMDecisionType::InternalFunctionCall {
+        output: LLMDecisionType::InternalFunctionCall {
             function_call: FunctionCall::RecallShortTerm {
                 reason: "User asked about previous topic.".to_string(),
             },
@@ -108,7 +109,7 @@ fn generate_llm_response_examples() -> String {
     // Example 5: InternalFunctionCall - RecallLongTerm
     let internal_call_long_term_response = LLMResponse {
         thoughts: "...".to_string(),
-        outcome: LLMDecisionType::InternalFunctionCall {
+        output: LLMDecisionType::InternalFunctionCall {
             function_call: FunctionCall::RecallLongTerm {
                 search_term: "project details".to_string(),
             },
@@ -167,18 +168,32 @@ async fn get_response_from_llm(
     let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts);
     let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
 
-    let parsed_response: LLMResponse = serde_json::from_str(&response)?;
+    println!("MAIN RESPONSE: {response}");
 
-    // Also prompt the executor agent to respond with "PONG"
-    let executor_prompt = "system\n get_weather dhaka\nagent: ";
-    let executor_response = llama_cpp.get_executor_response(executor_prompt)?;
+    let mut parts = response.splitn(2, "output:");
+
+    let before = parts.next().ok_or(anyhow!("Missing thoughts section"))?;
+    let after = parts.next().ok_or(anyhow!("Missing output section"))?;
+
+    let thoughts = before
+        .trim()
+        .strip_prefix("thoughts:")
+        .ok_or(anyhow!("Missing 'thoughts:' prefix"))?
+        .trim()
+        .to_string();
+
+    let output = after.trim().to_string();
+
+    println!("T: {thoughts}\nO: {output}");
+
+    let executor_prompt = format!("system\n{output}\nagent: ");
+    let executor_response = llama_cpp.get_executor_response(&executor_prompt)?;
 
     println!("Executor agent: {executor_response}");
 
-    let _executor_parsed: LLMDecisionType =
-        serde_json::from_str(&executor_response).expect("should parse");
+    let output: LLMDecisionType = serde_json::from_str(&executor_response).expect("should parse");
 
-    Ok(parsed_response)
+    Ok(LLMResponse { thoughts, output })
 }
 
 pub async fn get_llm_decision(

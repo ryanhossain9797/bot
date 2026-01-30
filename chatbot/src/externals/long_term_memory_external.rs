@@ -56,7 +56,7 @@ async fn commit(
                 Some(format!("USER MESSAGE: {text}"))
             }
             HistoryEntry::Output(LLMResponse {
-                outcome: LLMDecisionType::MessageUser { response },
+                output: LLMDecisionType::MessageUser { response },
                 ..
             }) => Some(format!("MESSAGE USER: {response}")),
             // ... other mappings

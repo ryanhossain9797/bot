@@ -155,7 +155,7 @@ impl LLMDecisionType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub thoughts: String,
-    pub outcome: LLMDecisionType,
+    pub output: LLMDecisionType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ impl HistoryEntry {
     pub fn format(&self) -> String {
         match self {
             HistoryEntry::Input(input) => input.format(),
-            HistoryEntry::Output(output) => output.outcome.format_output(),
+            HistoryEntry::Output(output) => output.output.format_output(),
         }
     }
 }
