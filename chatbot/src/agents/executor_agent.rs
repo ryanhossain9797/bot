@@ -12,31 +12,37 @@ and it's contents are the items of the enum case
 
 
 ```rust
-pub enum MathOperation {
-    Add(f32, f32),
-    Sub(f32, f32),
-    Mul(f32, f32),
-    Div(f32, f32),
-    Exp(f32, f32),
-}
-pub enum ToolCall {
-    GetWeather { location: String },
-    WebSearch { query: String },
-    MathCalculation { operations: Vec<MathOperation> },
-    VisitUrl { url: String },
-}
-pub enum FunctionCall {
-    RecallShortTerm { reason: String },
-    RecallLongTerm { search_term: String },
-}
-pub enum LLMDecisionType {
-    IntermediateToolCall { tool_call: ToolCall },
-    InternalFunctionCall { function_call: FunctionCall },
-    MessageUser { response: String },
+enum FlatLLMDecision {
+    MessageUser(String),
+    GetWeather(String),
+    WebSearch(String),
+    VisitUrl(String),
+    RecallShortTerm(String),
+    RecallLongTerm(String),
 }
 ```
 
-Now map the following input to the LLMDecisionType json
+Here are examples of valid outputs:
+
+MessageUser Example:
+{"MessageUser": "Hello there! How can I help you today?"}
+
+GetWeather Example:
+{"GetWeather": "dhaka"}
+
+WebSearch Example:
+{"WebSearch": "latest news headlines"}
+
+VisitUrl Example:
+{"VisitUrl": "https://example.com/news/latest"}
+
+RecallShortTerm Example:
+{"RecallShortTerm": "User asked about previous topic."}
+
+RecallLongTerm Example:
+{"RecallLongTerm": "project details"}
+
+Now map the following input to the FlatLLMDecision json
 
 "#;
 

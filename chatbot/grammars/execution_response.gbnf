@@ -1,48 +1,14 @@
-root ::= outcome-object ws
+root ::= flat-decision ws
 
-outcome-object ::= message-user-outcome | intermediate-tool-call-outcome | internal-function-call-outcome
+flat-decision ::= message-user | get-weather | web-search | visit-url | recall-short-term | recall-long-term
 
-message-user-outcome ::= "{" ws "\"MessageUser\"" ws ":" ws message-user-value "}"
-message-user-value ::= "{" ws "\"response\"" ws ":" ws string512 "}"
+message-user ::= "{" ws "\"MessageUser\"" ws ":" ws string512 ws "}"
+get-weather ::= "{" ws "\"GetWeather\"" ws ":" ws string512 ws "}"
+web-search ::= "{" ws "\"WebSearch\"" ws ":" ws string512 ws "}"
+visit-url ::= "{" ws "\"VisitUrl\"" ws ":" ws string512 ws "}"
+recall-short-term ::= "{" ws "\"RecallShortTerm\"" ws ":" ws string512 ws "}"
+recall-long-term ::= "{" ws "\"RecallLongTerm\"" ws ":" ws string512 ws "}"
 
-intermediate-tool-call-outcome ::= "{" ws "\"IntermediateToolCall\"" ws ":" ws intermediate-tool-call-value "}"
-intermediate-tool-call-value ::= "{" ws "\"tool_call\"" ws ":" ws tool-call-object "}"
+string512 ::= "\"" ([^"\\\x00-\x1F\n\r] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\""
 
-internal-function-call-outcome ::= "{" ws "\"InternalFunctionCall\"" ws ":" ws internal-function-call-value "}"
-internal-function-call-value ::= "{" ws "\"function_call\"" ws ":" ws function-call-object "}"
-
-tool-call-object ::= get-weather-tool-call | web-search-tool-call | math-calculation-tool-call | visit-url-tool-call
-
-function-call-object ::= recall-short-history-function-call | recall-long-history-function-call
-
-get-weather-tool-call ::= "{" ws "\"GetWeather\"" ws ":" ws get-weather-value "}"
-get-weather-value ::= "{" ws "\"location\"" ws ":" ws string512 "}"
-
-web-search-tool-call ::= "{" ws "\"WebSearch\"" ws ":" ws web-search-value "}"
-web-search-value ::= "{" ws "\"query\"" ws ":" ws string512 "}"
-
-math-calculation-tool-call ::= "{" ws "\"MathCalculation\"" ws ":" ws math-calculation-value "}"
-math-calculation-value ::= "{" ws "\"operations\"" ws ":" ws math-operations-array "}"
-math-operations-array ::= "[" ws (math-operation ("," ws math-operation)*)? "]"
-
-math-operation ::= add-op | sub-op | mul-op | div-op | exp-op
-add-op ::= "{" ws "\"Add\"" ws ":" ws number-pair "}"
-sub-op ::= "{" ws "\"Sub\"" ws ":" ws number-pair "}"
-mul-op ::= "{" ws "\"Mul\"" ws ":" ws number-pair "}"
-div-op ::= "{" ws "\"Div\"" ws ":" ws number-pair "}"
-exp-op ::= "{" ws "\"Exp\"" ws ":" ws number-pair "}"
-
-number-pair ::= "[" ws number "," ws number "]"
-
-visit-url-tool-call ::= "{" ws "\"VisitUrl\"" ws ":" ws visit-url-value "}"
-visit-url-value ::= "{" ws "\"url\"" ws ":" ws string512 "}"
-
-recall-short-history-function-call ::= "{" ws "\"RecallShortTerm\"" ws ":" ws recall-short-history-value "}"
-recall-short-history-value ::= "{" ws "\"reason\"" ws ":" ws string512 "}"
-
-recall-long-history-function-call ::= "{" ws "\"RecallLongTerm\"" ws ":" ws recall-long-history-value "}"
-recall-long-history-value ::= "{" ws "\"search_term\"" ws ":" ws string512 "}"
-
-string512 ::= "\"" ([^"\\\x00-\x1F\n\r] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
-number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
 ws ::= [ \t]*

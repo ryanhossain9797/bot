@@ -1,12 +1,13 @@
 use crate::{
     models::user::{
-        LLMDecisionType, LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
-        MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
+        FunctionCall, LLMDecisionType, LLMInput, LLMResponse, MathOperation, ToolCall, UserAction,
+        MAX_HISTORY_TEXT_LENGTH, MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
     },
     services::llama_cpp::LlamaCppService,
     Env,
 };
 use anyhow::anyhow;
+use serde::Deserialize;
 use serde_json;
 
 use std::sync::Arc;
@@ -45,86 +46,7 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
     }
 }
 
-fn generate_llm_response_examples() -> String {
-    use crate::models::user::{
-        FunctionCall, LLMDecisionType, LLMResponse, MathOperation, ToolCall,
-    };
-
-    let mut examples = String::new();
-
-    // Example 1: MessageUser
-    let message_user_response = LLMResponse {
-        thoughts: "...".to_string(),
-        output: LLMDecisionType::MessageUser {
-            response: "Hello there! How can I help you today?".to_string(),
-        },
-    };
-    examples.push_str(&format!(
-        "MessageUser Example:\n{}\n\n",
-        serde_json::to_string_pretty(&message_user_response).unwrap()
-    ));
-
-    // Example 2: IntermediateToolCall - WebSearch
-    let tool_call_websearch_response = LLMResponse {
-        thoughts: "...".to_string(),
-        output: LLMDecisionType::IntermediateToolCall {
-            tool_call: ToolCall::WebSearch {
-                query: "latest news headlines".to_string(),
-            },
-        },
-    };
-    examples.push_str(&format!(
-        "IntermediateToolCall (WebSearch) Example:\n{}\n\n",
-        serde_json::to_string(&tool_call_websearch_response).unwrap()
-    ));
-
-    // Example 3: IntermediateToolCall - MathCalculation
-    let tool_call_math_response = LLMResponse {
-        thoughts: "...".to_string(),
-        output: LLMDecisionType::IntermediateToolCall {
-            tool_call: ToolCall::MathCalculation {
-                operations: vec![MathOperation::Add(5.0, 3.0), MathOperation::Mul(2.0, 4.0)],
-            },
-        },
-    };
-    examples.push_str(&format!(
-        "IntermediateToolCall (MathCalculation) Example:\n{}\n\n",
-        serde_json::to_string_pretty(&tool_call_math_response).unwrap()
-    ));
-
-    // Example 4: InternalFunctionCall - RecallShortTerm
-    let internal_call_short_term_response = LLMResponse {
-        thoughts: "...".to_string(),
-        output: LLMDecisionType::InternalFunctionCall {
-            function_call: FunctionCall::RecallShortTerm {
-                reason: "User asked about previous topic.".to_string(),
-            },
-        },
-    };
-    examples.push_str(&format!(
-        "InternalFunctionCall (RecallShortTerm) Example:\n{}\n\n",
-        serde_json::to_string_pretty(&internal_call_short_term_response).unwrap()
-    ));
-
-    // Example 5: InternalFunctionCall - RecallLongTerm
-    let internal_call_long_term_response = LLMResponse {
-        thoughts: "...".to_string(),
-        output: LLMDecisionType::InternalFunctionCall {
-            function_call: FunctionCall::RecallLongTerm {
-                search_term: "project details".to_string(),
-            },
-        },
-    };
-    examples.push_str(&format!(
-        "InternalFunctionCall (RecallLongTerm) Example:\n{}\n\n",
-        serde_json::to_string_pretty(&internal_call_long_term_response).unwrap()
-    ));
-
-    examples
-}
-
 fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String>) -> String {
-    let llm_response_examples = generate_llm_response_examples();
     let prev_thoughts = if let Some(last_thoughts) = maybe_last_thoughts {
         print!("Thoughts from last turn: {} ", last_thoughts);
         format!("system\nTHOUGHTS:\n{last_thoughts}")
@@ -136,12 +58,6 @@ fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String
 
     format!(
         r#"
-    
-    --- LLMResponse Examples ---
-
-    {llm_response_examples}
-
-    --- End LLMResponse Examples ---
 
     --- Thoughts from the previous iteration ---
 
@@ -158,6 +74,16 @@ fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String
     <|im_start|>assistant:
     "#
     )
+}
+
+#[derive(Debug, Clone, Deserialize)]
+enum FlatLLMDecision {
+    MessageUser(String),
+    GetWeather(String),
+    WebSearch(String),
+    VisitUrl(String),
+    RecallShortTerm(String),
+    RecallLongTerm(String),
 }
 
 async fn get_response_from_llm(
@@ -186,12 +112,41 @@ async fn get_response_from_llm(
 
     println!("T: {thoughts}\nO: {output}");
 
-    let executor_prompt = format!("system\n{output}\nagent: ");
+    let executor_prompt = format!(
+        r#"
+    system
+
+    if the input is message-user just generate MessageUser with the provided text
+    for all other input run the tool with the provided parameters
+
+    input: {output}
+    "#
+    );
     let executor_response = llama_cpp.get_executor_response(&executor_prompt)?;
 
     println!("Executor agent: {executor_response}");
 
-    let output: LLMDecisionType = serde_json::from_str(&executor_response).expect("should parse");
+    let decision_dto: FlatLLMDecision =
+        serde_json::from_str(&executor_response).expect("should parse");
+
+    let output: LLMDecisionType = match decision_dto {
+        FlatLLMDecision::MessageUser(response) => LLMDecisionType::MessageUser { response },
+        FlatLLMDecision::GetWeather(location) => LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::GetWeather { location },
+        },
+        FlatLLMDecision::WebSearch(query) => LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::WebSearch { query },
+        },
+        FlatLLMDecision::VisitUrl(url) => LLMDecisionType::IntermediateToolCall {
+            tool_call: ToolCall::VisitUrl { url },
+        },
+        FlatLLMDecision::RecallShortTerm(reason) => LLMDecisionType::InternalFunctionCall {
+            function_call: FunctionCall::RecallShortTerm { reason },
+        },
+        FlatLLMDecision::RecallLongTerm(search_term) => LLMDecisionType::InternalFunctionCall {
+            function_call: FunctionCall::RecallLongTerm { search_term },
+        },
+    };
 
     Ok(LLMResponse { thoughts, output })
 }

@@ -257,10 +257,6 @@ impl Agent {
              nth| {
                 let token = sampler.sample(&ctx, last_idx);
 
-                if let Ok(output) = model.token_to_str(token, Special::Tokenize) {
-                    print!("{output}");
-                }
-
                 if model.is_eog_token(token) {
                     return ControlFlow::Break(Ok(tokens));
                 }
