@@ -1,25 +1,25 @@
-mod executor_base_prompt;
-mod thinking_base_prompt;
+mod executor_agent;
+mod thinking_agent;
 
-pub use executor_base_prompt::*;
+pub use executor_agent::*;
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{AddBos, LlamaModel},
 };
-pub use thinking_base_prompt::*;
+pub use thinking_agent::*;
 
 use crate::services::llama_cpp::LlamaCppService;
 
 #[derive(Clone, Copy)]
-pub struct BasePrompt {
+pub struct Agent {
     prompt: &'static str,
     session_path: &'static str,
     associated_grammar: &'static str,
 }
 
-impl BasePrompt {
+impl Agent {
     pub const fn new(
         prompt: &'static str,
         session_path: &'static str,

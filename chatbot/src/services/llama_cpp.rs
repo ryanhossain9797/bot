@@ -10,12 +10,12 @@ use llama_cpp_2::{
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::num::NonZero;
 
-use crate::base_prompt::{BasePrompt, THINKING_BASE_PROMPT_IMPL};
+use crate::agents::{Agent, THINKING_BASE_PROMPT_IMPL};
 
 pub struct LlamaCppService {
     model: LlamaModel,
     backend: LlamaBackend,
-    pub thinking_base_prompt: BasePrompt,
+    pub thinking_base_prompt: Agent,
 }
 
 impl LlamaCppService {
@@ -95,7 +95,7 @@ impl LlamaCppService {
         self.model.token_to_str(token, special)
     }
 
-    pub fn create_sampler(&self, base_prompt: BasePrompt) -> LlamaSampler {
+    pub fn create_sampler(&self, base_prompt: Agent) -> LlamaSampler {
         LlamaSampler::chain_simple([
             LlamaSampler::temp(Self::TEMPERATURE),
             LlamaSampler::grammar(&self.model, base_prompt.associated_grammar(), "root")
@@ -111,7 +111,7 @@ impl LlamaCppService {
     fn create_session_file(
         model: &LlamaModel,
         backend: &LlamaBackend,
-        base_prompt: BasePrompt,
+        base_prompt: Agent,
     ) -> anyhow::Result<()> {
         base_prompt.create_session_file(
             model,
