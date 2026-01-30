@@ -169,6 +169,12 @@ async fn get_response_from_llm(
 
     let parsed_response: LLMResponse = serde_json::from_str(&response)?;
 
+    // Also prompt the test agent to respond with "PONG"
+    let test_prompt = "system\nSay PONG";
+    let _test_response = llama_cpp.get_test_response(test_prompt)?;
+
+    println!("Test agent: {_test_response}");
+
     Ok(parsed_response)
 }
 
