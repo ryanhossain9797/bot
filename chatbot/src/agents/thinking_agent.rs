@@ -92,5 +92,4 @@ const SESSION_PATH: &'static str = "./resources/thinking_agent.session";
 
 const ASSOCIATED_GRAMMAR: &'static str = include_str!("../../grammars/thinking_response.gbnf");
 
-pub const THINKING_AGENT_PROMPT_IMPL: Agent =
-    Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);
+pub const THINKING_AGENT_IMPL: Agent = Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);

@@ -14,4 +14,4 @@ root ::= "{ \"response\": " string " }"
 string ::= "\"" ( [^"] | "\"\"" )* "\""
 "#;
 
-pub const TEST_AGENT_PROMPT_IMPL: Agent = Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);
+pub const TEST_AGENT_IMPL: Agent = Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);

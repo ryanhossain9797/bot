@@ -1,18 +1,17 @@
 use llama_cpp_2::{
-    context::{params::LlamaContextParams, LlamaContext},
+    context::params::LlamaContextParams,
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel, Special},
-    sampling::LlamaSampler,
+    model::{params::LlamaModelParams, LlamaModel},
 };
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::num::NonZero;
 
-use crate::agents::{Agent, TEST_AGENT_PROMPT_IMPL, THINKING_AGENT_PROMPT_IMPL};
+use crate::agents::{Agent, TEST_AGENT_IMPL, THINKING_AGENT_IMPL};
 
 pub struct LlamaCppService {
     thinking_model: LlamaModel,
-    test_model: LlamaModel,
+    testing_model: LlamaModel,
     backend: LlamaBackend,
     thinking_agent: Agent,
     test_agent: Agent,
@@ -28,30 +27,48 @@ impl LlamaCppService {
         Self::MAX_GENERATION_TOKENS
     }
 
+    fn thinking_model(
+        backend: &LlamaBackend,
+        model_params: &LlamaModelParams,
+    ) -> anyhow::Result<LlamaModel> {
+        let thinking_model_path = std::env::var("THINKING_MODEL_PATH")
+            .unwrap_or_else(|_| "./models/GLM-4-32B-0414-Q8_0-matteov2.gguf".to_string());
+        println!("Loading thinking model from: {}", thinking_model_path);
+
+        Ok(LlamaModel::load_from_file(
+            backend,
+            &thinking_model_path,
+            model_params,
+        )?)
+    }
+
+    fn testing_model(
+        backend: &LlamaBackend,
+        model_params: &LlamaModelParams,
+    ) -> anyhow::Result<LlamaModel> {
+        let test_model_path = std::env::var("TEST_MODEL_PATH")
+            .unwrap_or_else(|_| "./models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf".to_string());
+        println!("Loading test model from: {}", test_model_path);
+        Ok(LlamaModel::load_from_file(
+            &backend,
+            &test_model_path,
+            &model_params,
+        )?)
+    }
+
     pub fn new() -> anyhow::Result<Self> {
         send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
 
         let backend = LlamaBackend::init()?;
         let model_params = LlamaModelParams::default();
 
-        let thinking_model_path = std::env::var("THINKING_MODEL_PATH")
-            .unwrap_or_else(|_| "./models/GLM-4-32B-0414-Q8_0-matteov2.gguf".to_string());
+        let thinking_model = Self::thinking_model(&backend, &model_params)?;
+        let testing_model = Self::testing_model(&backend, &model_params)?;
 
-        println!("Loading thinking model from: {}", thinking_model_path);
+        let thinking_agent = THINKING_AGENT_IMPL;
+        let test_agent = TEST_AGENT_IMPL;
 
-        let thinking_model =
-            LlamaModel::load_from_file(&backend, &thinking_model_path, &model_params)?;
-
-        let test_model_path = std::env::var("TEST_MODEL_PATH")
-            .unwrap_or_else(|_| "./models/qwen2.5-0.5b-instruct-q8_0.gguf".to_string());
-
-        println!("Loading test model from: {}", test_model_path);
-        let test_model = LlamaModel::load_from_file(&backend, &test_model_path, &model_params)?;
-
-        let thinking_agent = THINKING_AGENT_PROMPT_IMPL;
-        let test_agent = TEST_AGENT_PROMPT_IMPL;
-
-        // Create session files during construction
+        println!("Creating session files");
         if let Err(e) = thinking_agent.create_session_file(
             &thinking_model,
             &backend,
@@ -67,7 +84,7 @@ impl LlamaCppService {
         }
 
         if let Err(e) = test_agent.create_session_file(
-            &test_model,
+            &testing_model,
             &backend,
             Self::context_params(),
             Self::new_batch(),
@@ -82,7 +99,7 @@ impl LlamaCppService {
 
         Ok(Self {
             thinking_model,
-            test_model,
+            testing_model,
             backend,
             thinking_agent,
             test_agent,
@@ -130,7 +147,7 @@ impl LlamaCppService {
     pub fn get_test_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
         self.test_agent.get_response(
             Self::context_params(),
-            &self.test_model,
+            &self.testing_model,
             &self.backend,
             Self::CONTEXT_SIZE.get(),
             Self::TEMPERATURE,
