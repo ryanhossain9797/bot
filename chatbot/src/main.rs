@@ -1,6 +1,6 @@
 #![feature(never_type)]
 
-mod base_prompt;
+mod agents;
 mod configuration;
 mod externals;
 mod models;

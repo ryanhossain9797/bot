@@ -1,4 +1,4 @@
-use crate::base_prompt::BasePrompt;
+use super::Agent;
 
 const BASE_PROMPT: &'static str = r#"
 <|im_start|>system\nYour name is Terminal Alpha Beta. Respond with ONLY valid JSON.
@@ -92,5 +92,5 @@ const SESSION_PATH: &'static str = "./resources/base_prompt.session";
 
 const ASSOCIATED_GRAMMAR: &'static str = include_str!("../../grammars/thinking_response.gbnf");
 
-pub const THINKING_BASE_PROMPT_IMPL: BasePrompt =
-    BasePrompt::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);
+pub const THINKING_AGENT_PROMPT_IMPL: Agent =
+    Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);

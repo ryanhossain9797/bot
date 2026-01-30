@@ -1,45 +1,14 @@
 use crate::{
     models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
+        LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
         MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
     },
     services::llama_cpp::LlamaCppService,
     Env,
 };
-use llama_cpp_2::{
-    llama_batch::LlamaBatch, model::Special, sampling::LlamaSampler, token::LlamaToken,
-};
 use serde_json;
 
-use std::{
-    io::{self, Write},
-    ops::ControlFlow,
-    sync::Arc,
-};
-
-fn format_output(output: &LLMDecisionType) -> String {
-    match output {
-        LLMDecisionType::MessageUser { response } => {
-            let mut content = response.clone();
-            if content.len() > MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
-                content.push_str("... (truncated)");
-            }
-            format!("<|im_start|>assistant\n{}<|im_end|>", content)
-        }
-        LLMDecisionType::IntermediateToolCall { tool_call } => {
-            let mut lines = Vec::new();
-
-            lines.push(format!("CALL TOOL: {:?}", tool_call));
-            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
-        }
-        LLMDecisionType::InternalFunctionCall { function_call } => {
-            let mut lines = Vec::new();
-            lines.push(format!("CALL INTERNAL FUNCTION: {:?}", function_call));
-            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
-        }
-    }
-}
+use std::sync::Arc;
 
 fn format_input(input: &LLMInput, truncate: bool) -> String {
     match input {
@@ -73,17 +42,6 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
             format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
         }
     }
-}
-
-fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
-    history
-        .iter()
-        .map(|entry| match entry {
-            HistoryEntry::Input(input) => format_input(input, truncate),
-            HistoryEntry::Output(output) => format_output(&output.outcome),
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 fn generate_llm_response_examples() -> String {
@@ -164,11 +122,7 @@ fn generate_llm_response_examples() -> String {
     examples
 }
 
-fn build_dynamic_prompt(
-    new_input: &LLMInput,
-    maybe_last_thoughts: Option<String>,
-    truncate: bool,
-) -> String {
+fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String>) -> String {
     let llm_response_examples = generate_llm_response_examples();
     let prev_thoughts = if let Some(last_thoughts) = maybe_last_thoughts {
         print!("Thoughts from last turn: {} ", last_thoughts);
@@ -205,114 +159,13 @@ fn build_dynamic_prompt(
     )
 }
 
-struct GenerationState {
-    tokens: Vec<LlamaToken>,
-    n_cur: usize,
-    last_idx: i32,
-    sampler: LlamaSampler,
-    batch: LlamaBatch<'static>,
-}
-
 async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
     maybe_last_thoughts: Option<String>,
-    truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
-    print!("[DEBUG] ");
-    let _ = io::stdout().flush();
-
-    let mut ctx = llama_cpp.new_context()?;
-
-    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts, truncate);
-
-    let base_token_count = llama_cpp.load_thinking_base_prompt(&mut ctx)?;
-
-    let (total_tokens, last_batch_size) =
-        llama_cpp.append_prompt(&mut ctx, &dynamic_prompt, base_token_count)?;
-
-    print!("Total tokens: {total_tokens} ");
-    let _ = io::stdout().flush();
-
-    let thinking_prompt_initial_state = GenerationState {
-        tokens: Vec::new(),
-        n_cur: total_tokens,
-        last_idx: last_batch_size - 1,
-        sampler: llama_cpp.create_sampler(llama_cpp.thinking_base_prompt),
-        batch: LlamaCppService::new_batch(),
-    };
-
-    let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
-
-    let result = (0..max_generation_tokens).try_fold(
-        thinking_prompt_initial_state,
-        |GenerationState {
-             mut tokens,
-             mut n_cur,
-             mut last_idx,
-             mut sampler,
-             mut batch,
-         },
-         nth| {
-            let token = sampler.sample(&ctx, last_idx);
-
-            if let Ok(output) = llama_cpp.token_to_str(token, Special::Tokenize) {
-                print!("{output}");
-            }
-
-            if llama_cpp.is_eog_token(token) {
-                return ControlFlow::Break(Ok(tokens));
-            }
-
-            tokens.push(token);
-
-            if nth > 0 && nth % (max_generation_tokens / 4) == 0 {
-                println!(
-                    "{}/4 of limit crossed ({} tokens)",
-                    nth / (max_generation_tokens / 4),
-                    nth
-                );
-            }
-
-            match (|| -> anyhow::Result<()> {
-                batch.clear();
-                batch.add(token, n_cur as i32, &[0], true)?;
-                ctx.decode(&mut batch)?;
-                Ok(())
-            })() {
-                Ok(_) => {
-                    n_cur += 1;
-                    last_idx = batch.n_tokens() - 1;
-                    ControlFlow::Continue(GenerationState {
-                        tokens,
-                        n_cur,
-                        last_idx,
-                        sampler,
-                        batch,
-                    })
-                }
-                Err(e) => ControlFlow::Break(Err(e)),
-            }
-        },
-    );
-
-    let generated_tokens = match result {
-        ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
-        ControlFlow::Break(res) => res,
-    }?;
-    print!("Generated tokens: {} ", generated_tokens.len());
-    let _ = io::stdout().flush();
-
-    let mut response_bytes = Vec::new();
-    for token in &generated_tokens {
-        if let Ok(output) = llama_cpp.token_to_str(*token, Special::Tokenize) {
-            response_bytes.extend_from_slice(output.as_bytes());
-        }
-    }
-    let response = String::from_utf8_lossy(&response_bytes).to_string();
-
-    println!("\n{}\n", response);
-    let _ = std::io::stdout().flush();
+    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts);
+    let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
 
     let parsed_response: LLMResponse = serde_json::from_str(&response)?;
 
@@ -323,15 +176,9 @@ pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
     maybe_last_thoughts: Option<String>,
-    truncate_history: bool,
 ) -> UserAction {
-    let llama_cpp_result = get_response_from_llm(
-        env.llama_cpp.as_ref(),
-        &current_input,
-        maybe_last_thoughts,
-        truncate_history,
-    )
-    .await;
+    let llama_cpp_result =
+        get_response_from_llm(env.llama_cpp.as_ref(), &current_input, maybe_last_thoughts).await;
 
     match llama_cpp_result {
         Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response)),
