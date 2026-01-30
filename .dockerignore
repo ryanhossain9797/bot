@@ -21,11 +21,8 @@ Thumbs.db
 *.md
 !models/README.md
 
-# Models folder - exclude from bot_hive copy (model is in repo root now)
-bot_hive/models/
-
 # Large model file (already in base image, exclude from main build)
-models/GLM-4-32B-0414-Q8_0-matteov2.gguf
+models/
 
 # Debug files
 flycheck0/

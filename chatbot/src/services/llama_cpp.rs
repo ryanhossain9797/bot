@@ -47,7 +47,7 @@ impl LlamaCppService {
         model_params: &LlamaModelParams,
     ) -> anyhow::Result<LlamaModel> {
         let executor_model_path = std::env::var("EXECUTOR_MODEL_PATH")
-            .unwrap_or_else(|_| "./models/qwen2.5-0.5b-instruct-q8_0.gguf".to_string());
+            .unwrap_or_else(|_| "./models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf".to_string());
         println!("Loading executor model from: {}", executor_model_path);
         Ok(LlamaModel::load_from_file(
             &backend,

@@ -1,6 +1,6 @@
 use crate::{
     models::user::{
-        LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
+        LLMDecisionType, LLMInput, LLMResponse, UserAction, MAX_HISTORY_TEXT_LENGTH,
         MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
     },
     services::llama_cpp::LlamaCppService,
@@ -170,10 +170,13 @@ async fn get_response_from_llm(
     let parsed_response: LLMResponse = serde_json::from_str(&response)?;
 
     // Also prompt the executor agent to respond with "PONG"
-    let executor_prompt = "system\nSay PONG";
+    let executor_prompt = "system\n get_weather dhaka\nagent: ";
     let executor_response = llama_cpp.get_executor_response(executor_prompt)?;
 
     println!("Executor agent: {executor_response}");
+
+    let _executor_parsed: LLMDecisionType =
+        serde_json::from_str(&executor_response).expect("should parse");
 
     Ok(parsed_response)
 }
