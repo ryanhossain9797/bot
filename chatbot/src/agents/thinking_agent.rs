@@ -88,7 +88,7 @@ CRITICAL INSTRUCTIONS:
 - If you need to refer to earlier parts of the ongoing conversation, use the RecallShortTerm internal function to retrieve the last 20 messages.
 <|im_end|>"#;
 
-const SESSION_PATH: &'static str = "./resources/base_prompt.session";
+const SESSION_PATH: &'static str = "./resources/thinking_agent.session";
 
 const ASSOCIATED_GRAMMAR: &'static str = include_str!("../../grammars/thinking_response.gbnf");
 
