@@ -1,5 +1,4 @@
 mod executor_agent;
-mod test_agent;
 mod thinking_agent;
 
 use std::{
@@ -16,7 +15,6 @@ use llama_cpp_2::{
     sampling::LlamaSampler,
     token::LlamaToken,
 };
-pub use test_agent::*;
 pub use thinking_agent::*;
 
 use crate::services::llama_cpp::LlamaCppService;

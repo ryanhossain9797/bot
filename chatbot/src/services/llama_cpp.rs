@@ -7,14 +7,14 @@ use llama_cpp_2::{
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::num::NonZero;
 
-use crate::agents::{Agent, TEST_AGENT_IMPL, THINKING_AGENT_IMPL};
+use crate::agents::{Agent, EXECUTOR_AGENT_IMPL, THINKING_AGENT_IMPL};
 
 pub struct LlamaCppService {
     thinking_model: LlamaModel,
-    testing_model: LlamaModel,
+    executor_model: LlamaModel,
     backend: LlamaBackend,
     thinking_agent: Agent,
-    test_agent: Agent,
+    executor_agent: Agent,
 }
 
 impl LlamaCppService {
@@ -42,16 +42,16 @@ impl LlamaCppService {
         )?)
     }
 
-    fn testing_model(
+    fn executor_model(
         backend: &LlamaBackend,
         model_params: &LlamaModelParams,
     ) -> anyhow::Result<LlamaModel> {
-        let test_model_path = std::env::var("TEST_MODEL_PATH")
-            .unwrap_or_else(|_| "./models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf".to_string());
-        println!("Loading test model from: {}", test_model_path);
+        let executor_model_path = std::env::var("EXECUTOR_MODEL_PATH")
+            .unwrap_or_else(|_| "./models/qwen2.5-0.5b-instruct-q8_0.gguf".to_string());
+        println!("Loading executor model from: {}", executor_model_path);
         Ok(LlamaModel::load_from_file(
             &backend,
-            &test_model_path,
+            &executor_model_path,
             &model_params,
         )?)
     }
@@ -63,10 +63,10 @@ impl LlamaCppService {
         let model_params = LlamaModelParams::default();
 
         let thinking_model = Self::thinking_model(&backend, &model_params)?;
-        let testing_model = Self::testing_model(&backend, &model_params)?;
+        let executor_model = Self::executor_model(&backend, &model_params)?;
 
         let thinking_agent = THINKING_AGENT_IMPL;
-        let test_agent = TEST_AGENT_IMPL;
+        let executor_agent = EXECUTOR_AGENT_IMPL;
 
         println!("Creating session files");
         if let Err(e) = thinking_agent.create_session_file(
@@ -83,15 +83,15 @@ impl LlamaCppService {
             eprintln!("The bot will continue without session file caching.");
         }
 
-        if let Err(e) = test_agent.create_session_file(
-            &testing_model,
+        if let Err(e) = executor_agent.create_session_file(
+            &executor_model,
             &backend,
             Self::context_params(),
             Self::new_batch(),
             Self::BATCH_CHUNK_SIZE,
         ) {
             eprintln!(
-                "Warning: Failed to create session file for test agent: {}",
+                "Warning: Failed to create session file for executor agent: {}",
                 e
             );
             eprintln!("The bot will continue without session file caching.");
@@ -99,10 +99,10 @@ impl LlamaCppService {
 
         Ok(Self {
             thinking_model,
-            testing_model,
+            executor_model,
             backend,
             thinking_agent,
-            test_agent,
+            executor_agent,
         })
     }
 
@@ -144,10 +144,10 @@ impl LlamaCppService {
         )
     }
 
-    pub fn get_test_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
-        self.test_agent.get_response(
+    pub fn get_executor_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
+        self.executor_agent.get_response(
             Self::context_params(),
-            &self.testing_model,
+            &self.executor_model,
             &self.backend,
             Self::CONTEXT_SIZE.get(),
             Self::TEMPERATURE,
