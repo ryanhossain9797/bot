@@ -255,7 +255,6 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             Some(recent_conversation.thoughts),
-                            true,
                         )));
 
                         Ok((
@@ -282,7 +281,6 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             Some(recent_conversation.thoughts),
-                            true,
                         )));
 
                         Ok((
@@ -317,7 +315,6 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             Some(recent_conversation.thoughts.clone()),
-                            true,
                         )));
 
                         Ok((
@@ -343,7 +340,6 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             Some(recent_conversation.thoughts),
-                            true,
                         )));
 
                         Ok((
@@ -405,7 +401,6 @@ pub fn user_transition(
                     env.clone(),
                     current_input.clone(),
                     Some(recent_conversation.thoughts),
-                    true,
                 )));
 
                 Ok((
@@ -430,7 +425,7 @@ pub fn user_transition(
 
 fn post_transition(
     env: Arc<Env>,
-    user_id: UserId,
+    _user_id: UserId,
     result: UserTransitionResult,
 ) -> UserTransitionResult {
     let (user, mut external) = result?;
@@ -455,7 +450,6 @@ fn post_transition(
                 env.clone(),
                 current_input.clone(),
                 maybe_thoughts,
-                false,
             )));
 
             let user = User {

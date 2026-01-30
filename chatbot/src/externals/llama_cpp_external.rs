@@ -17,30 +17,6 @@ use std::{
     sync::Arc,
 };
 
-fn format_output(output: &LLMDecisionType) -> String {
-    match output {
-        LLMDecisionType::MessageUser { response } => {
-            let mut content = response.clone();
-            if content.len() > MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
-                content.push_str("... (truncated)");
-            }
-            format!("<|im_start|>assistant\n{}<|im_end|>", content)
-        }
-        LLMDecisionType::IntermediateToolCall { tool_call } => {
-            let mut lines = Vec::new();
-
-            lines.push(format!("CALL TOOL: {:?}", tool_call));
-            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
-        }
-        LLMDecisionType::InternalFunctionCall { function_call } => {
-            let mut lines = Vec::new();
-            lines.push(format!("CALL INTERNAL FUNCTION: {:?}", function_call));
-            format!("<|im_start|>assistant\n{}<|im_end|>", lines.join("\n"))
-        }
-    }
-}
-
 fn format_input(input: &LLMInput, truncate: bool) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
@@ -73,17 +49,6 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
             format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
         }
     }
-}
-
-fn format_history(history: &[HistoryEntry], truncate: bool) -> String {
-    history
-        .iter()
-        .map(|entry| match entry {
-            HistoryEntry::Input(input) => format_input(input, truncate),
-            HistoryEntry::Output(output) => format_output(&output.outcome),
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
 }
 
 fn generate_llm_response_examples() -> String {
@@ -164,11 +129,7 @@ fn generate_llm_response_examples() -> String {
     examples
 }
 
-fn build_dynamic_prompt(
-    new_input: &LLMInput,
-    maybe_last_thoughts: Option<String>,
-    truncate: bool,
-) -> String {
+fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String>) -> String {
     let llm_response_examples = generate_llm_response_examples();
     let prev_thoughts = if let Some(last_thoughts) = maybe_last_thoughts {
         print!("Thoughts from last turn: {} ", last_thoughts);
@@ -217,14 +178,13 @@ async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
     maybe_last_thoughts: Option<String>,
-    truncate: bool,
 ) -> anyhow::Result<LLMResponse> {
     print!("[DEBUG] ");
     let _ = io::stdout().flush();
 
     let mut ctx = llama_cpp.new_context()?;
 
-    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts, truncate);
+    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts);
 
     let base_token_count = llama_cpp.load_thinking_base_prompt(&mut ctx)?;
 
@@ -323,15 +283,9 @@ pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
     maybe_last_thoughts: Option<String>,
-    truncate_history: bool,
 ) -> UserAction {
-    let llama_cpp_result = get_response_from_llm(
-        env.llama_cpp.as_ref(),
-        &current_input,
-        maybe_last_thoughts,
-        truncate_history,
-    )
-    .await;
+    let llama_cpp_result =
+        get_response_from_llm(env.llama_cpp.as_ref(), &current_input, maybe_last_thoughts).await;
 
     match llama_cpp_result {
         Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response)),
