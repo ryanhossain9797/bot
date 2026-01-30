@@ -1,16 +1,31 @@
 mod executor_agent;
 mod thinking_agent;
 
+use std::{
+    io::{self, Write},
+    ops::ControlFlow,
+};
+
 pub use executor_agent::*;
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
-    model::{AddBos, LlamaModel},
+    model::{AddBos, LlamaModel, Special},
+    sampling::LlamaSampler,
+    token::LlamaToken,
 };
 pub use thinking_agent::*;
 
 use crate::services::llama_cpp::LlamaCppService;
+
+struct GenerationState {
+    tokens: Vec<LlamaToken>,
+    n_cur: usize,
+    last_idx: i32,
+    sampler: LlamaSampler,
+    batch: LlamaBatch<'static>,
+}
 
 #[derive(Clone, Copy)]
 pub struct Agent {
@@ -100,6 +115,7 @@ impl Agent {
         ctx: &mut LlamaContext<'_>,
         model: &LlamaModel,
         context_size: u32,
+        batch_chunk_size: usize,
     ) -> anyhow::Result<usize> {
         let session_load_result = ctx.load_session_file(self.session_path, context_size as usize);
 
@@ -117,7 +133,7 @@ impl Agent {
                 let tokens = model.str_to_token(self.prompt, AddBos::Always)?;
 
                 let mut batch = LlamaCppService::new_batch();
-                let batch_limit = LlamaCppService::BATCH_CHUNK_SIZE;
+                let batch_limit = batch_chunk_size;
 
                 for (i, token) in tokens.iter().enumerate() {
                     let is_last = i == tokens.len() - 1;
@@ -143,18 +159,19 @@ impl Agent {
         model: &LlamaModel,
         dynamic_prompt: &str,
         start_pos: usize,
+        batch_chunk_size: usize,
     ) -> anyhow::Result<(usize, i32)> {
         let dynamic_tokens = model.str_to_token(dynamic_prompt, AddBos::Never)?;
 
         let mut batch = LlamaCppService::new_batch();
-        let batch_limit = LlamaCppService::BATCH_CHUNK_SIZE;
+
         let mut last_batch_size = 0;
 
         for (offset, token) in dynamic_tokens.iter().enumerate() {
             let is_last = offset == dynamic_tokens.len() - 1;
             batch.add(*token, (start_pos + offset) as i32, &[0], is_last)?;
 
-            if batch.n_tokens() >= batch_limit as i32 {
+            if batch.n_tokens() >= batch_chunk_size as i32 {
                 last_batch_size = batch.n_tokens();
                 ctx.decode(&mut batch)?;
                 batch.clear();
@@ -182,5 +199,122 @@ impl Agent {
             println!("Ensured directory exists: {:?}", parent);
         }
         Ok(())
+    }
+
+    pub fn get_response(
+        &self,
+        ctx_params: LlamaContextParams,
+        model: &LlamaModel,
+        backend: &LlamaBackend,
+        ctx_size: u32,
+        temperature: f32,
+        batch_chunk_size: usize,
+        dynamic_prompt: &str,
+    ) -> anyhow::Result<String> {
+        print!("[DEBUG] ");
+        let _ = io::stdout().flush();
+
+        let mut ctx = model.new_context(backend, ctx_params)?;
+        let base_token_count = self.load(&mut ctx, model, ctx_size, batch_chunk_size)?;
+
+        let (total_tokens, last_batch_size) = self.append_prompt(
+            &mut ctx,
+            model,
+            dynamic_prompt,
+            base_token_count,
+            batch_chunk_size,
+        )?;
+
+        print!("Total tokens: {total_tokens} ");
+        let _ = io::stdout().flush();
+
+        let sampler = LlamaSampler::chain_simple([
+            LlamaSampler::temp(temperature),
+            LlamaSampler::grammar(model, self.associated_grammar(), "root")
+                .expect("Failed to load grammar - check GBNF syntax"),
+            LlamaSampler::dist(0),
+        ]);
+
+        let initial_prompt_state = GenerationState {
+            tokens: Vec::new(),
+            n_cur: total_tokens,
+            last_idx: last_batch_size - 1,
+            sampler: sampler,
+            batch: LlamaCppService::new_batch(),
+        };
+
+        let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
+
+        let result = (0..max_generation_tokens).try_fold(
+            initial_prompt_state,
+            |GenerationState {
+                 mut tokens,
+                 mut n_cur,
+                 mut last_idx,
+                 mut sampler,
+                 mut batch,
+             },
+             nth| {
+                let token = sampler.sample(&ctx, last_idx);
+
+                if let Ok(output) = model.token_to_str(token, Special::Tokenize) {
+                    print!("{output}");
+                }
+
+                if model.is_eog_token(token) {
+                    return ControlFlow::Break(Ok(tokens));
+                }
+
+                tokens.push(token);
+
+                if nth > 0 && nth % (max_generation_tokens / 4) == 0 {
+                    println!(
+                        "{}/4 of limit crossed ({} tokens)",
+                        nth / (max_generation_tokens / 4),
+                        nth
+                    );
+                }
+
+                match (|| -> anyhow::Result<()> {
+                    batch.clear();
+                    batch.add(token, n_cur as i32, &[0], true)?;
+                    ctx.decode(&mut batch)?;
+                    Ok(())
+                })() {
+                    Ok(_) => {
+                        n_cur += 1;
+                        last_idx = batch.n_tokens() - 1;
+                        ControlFlow::Continue(GenerationState {
+                            tokens,
+                            n_cur,
+                            last_idx,
+                            sampler,
+                            batch,
+                        })
+                    }
+                    Err(e) => ControlFlow::Break(Err(e)),
+                }
+            },
+        );
+
+        let generated_tokens = match result {
+            ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
+            ControlFlow::Break(res) => res,
+        }?;
+        print!("Generated tokens: {} ", generated_tokens.len());
+        let _ = io::stdout().flush();
+
+        let mut response_bytes = Vec::new();
+        for token in &generated_tokens {
+            if let Ok(output) = model.token_to_str(*token, Special::Tokenize) {
+                response_bytes.extend_from_slice(output.as_bytes());
+            }
+        }
+        let response = String::from_utf8_lossy(&response_bytes).to_string();
+
+        println!("\n{}\n", response);
+        let _ = std::io::stdout().flush();
+
+        Ok(response)
     }
 }
