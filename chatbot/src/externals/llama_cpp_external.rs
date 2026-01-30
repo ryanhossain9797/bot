@@ -20,7 +20,7 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
                 content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
                 content.push_str("... (truncated)");
             }
-            format!("user said\n{}", content)
+            format!("user said:\n\"{}\"", content)
         }
         LLMInput::InternalFunctionResult(result) => {
             let mut content = result.clone();
@@ -38,7 +38,7 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
                 content.push_str("... (truncated)");
             }
 
-            format!("tool result\n{}", content)
+            format!("tool result:\n\"{}\"", content)
         }
     }
 }
@@ -56,8 +56,10 @@ Previous thoughts:
 New input:
 {new_input}
 
-IMPORTANT: Based in the previous thoughts and new information. Try to answer the user's question.
+IMPORTANT: Based on the previous thoughts and new information. Try to answer the user's question.
 If you need more information call a different tool but prioritize answering the user if possible
+
+Answer the user briefly without any unnecessary details. Don't try to be polite or conversational just state facts
     "#
     )
 }
