@@ -20,7 +20,7 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
                 content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
                 content.push_str("... (truncated)");
             }
-            format!("<|im_start|>user\n{}<|im_end|>", content)
+            format!("user said\n{}", content)
         }
         LLMInput::InternalFunctionResult(result) => {
             let mut content = result.clone();
@@ -29,10 +29,7 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
                 content.push_str("... (truncated)");
             }
 
-            format!(
-                "<|im_start|>user\n[INTERNAL FUNCTION RESULT]:\n{}<|im_end|>",
-                content
-            )
+            format!("tool result\n{}", content)
         }
         LLMInput::ToolResult(result) => {
             let mut content = result.clone();
@@ -41,37 +38,26 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
                 content.push_str("... (truncated)");
             }
 
-            format!("<|im_start|>user\n[TOOL RESULT]:\n{}<|im_end|>", content)
+            format!("tool result\n{}", content)
         }
     }
 }
 
 fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String>) -> String {
-    let prev_thoughts = if let Some(last_thoughts) = maybe_last_thoughts {
-        print!("Thoughts from last turn: {} ", last_thoughts);
-        format!("system\nTHOUGHTS:\n{last_thoughts}")
-    } else {
-        print!("Thoughts from last turn: null ");
-        "system\nPREVIOUS THOUGHTS: NULL;".to_string()
-    };
+    let prev_thoughts = maybe_last_thoughts.unwrap_or("NULL".to_string());
     let new_input = format_input(new_input, false);
 
     format!(
         r#"
 
-    --- Thoughts from the previous iteration ---
+Previous thoughts:
+{prev_thoughts}
 
-    {prev_thoughts}
+New input:
+{new_input}
 
-    --- End previous thoughts ---
-
-    --- New input (User message or an outcome of previous thoughts) ---
-
-    {new_input}
-
-    --- End new input
-
-    <|im_start|>assistant:
+IMPORTANT: Based in the previous thoughts and new information. Try to answer the user's question.
+If you need more information call a different tool but prioritize answering the user if possible
     "#
     )
 }
@@ -92,6 +78,9 @@ async fn get_response_from_llm(
     maybe_last_thoughts: Option<String>,
 ) -> anyhow::Result<LLMResponse> {
     let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts);
+
+    println!("DYNAMIC: {dynamic_prompt}");
+
     let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
 
     println!("MAIN RESPONSE: {response}");

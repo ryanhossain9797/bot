@@ -34,26 +34,6 @@ THOUGHTS FIELD USAGE:
   either way, the key takeaway is that the thoughts are older information and the new input is newer and is usually an outcome of the thougts
   so don't rely on old thoughts to decide your response.... rather depend on the new input and use thoughts only as context.
 
-Example of thoughts
-Thoughts while information retrieval is in progress
-```
-Previously user was talking about ice cream, but seems to have changed topics
-
-User has asked me to fetch the weather of dhaka and london and then compare which is higher.
-[x] Fetch weather for dhaka. DONE: weather is 31.5 degrees
-[ ] Fetch weather for london.
-[ ] Compare weather to tell user which is higher
-```
-
-Thoughts after all work is done all information collected
-```
-I have completed fetching weather for dhaka and london and comparing them
-[x] Fetch weather for dhaka. DONE: weather is 31.5 degrees
-[x] Fetch weather for london. DONE: weather is 27.5 degrees
-[x] Compare weather to tell user which is higher. DONE: dhaka is higher
-I will notify the user
-```
-
 DECISION MAKING:
 - If you have enough information to answer the user request, use "message-user".
 - If you need more information from the user themselves, use "message-user" too, like getting city for weather when they don't specify it.
@@ -63,6 +43,10 @@ DECISION MAKING:
 - Use thoughts to keep track of important details accross tool calls and user interactions.
 - You can make multiple tool calls in separate steps. Make one call, commit the result in thoughts, then make another if needed.
 - If you need to refer to earlier parts of the ongoing conversation, use the recall-short-term internal function to retrieve the last 20 messages.
+- Don't generate meaningless tokens like im-end.
+- Rewrite your thoughts based on the new input every turn.
+
+Keep all reponses brief and concise.
 "#;
 
 const SESSION_PATH: &'static str = "./resources/thinking_agent.session";

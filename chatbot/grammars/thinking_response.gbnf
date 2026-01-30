@@ -1,11 +1,11 @@
-root ::= thoughts-line newline output-line newline
+root ::= thoughts-line output-line newline
 
 thoughts-line ::= "thoughts:" ws free-text
 output-line ::= "output:" ws output-kind ws free-text
 
 output-kind ::= "message-user" | "get-weather" | "web-search" | "visit-url" | "recall-short-term" | "recall-long-term"
 
-free-text ::= free-char free-char*
+free-text ::= free-char{1,1000}
 free-char ::= [^\n\r]
 
 ws ::= [ \t]*
