@@ -385,9 +385,7 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
         &extracted.content
     };
 
-    let mut output = String::new();
-    output.push_str(&format!("URL: {}\n\n", extracted.final_url));
-    output.push_str("Content:\n");
+    let mut output = format!("Visit Url content for {url}: \n");
     output.push_str(content);
 
     if !extracted.links.is_empty() {

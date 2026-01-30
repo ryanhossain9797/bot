@@ -32,8 +32,8 @@ static ENV: OnceCell<Arc<Env>> = OnceCell::new();
 
 async fn init_env() -> anyhow::Result<Arc<Env>> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
-    // Llama.cpp initialization disconnected - will be replaced by Ollama
-    let llama_cpp_service = LlamaCppService::new().expect("Failed to initialize Llama.cpp");
+
+    let llama_cpp_service = LlamaCppService::new()?;
     let lance_service = LanceService::new().await;
 
     // let ollama_service = OllamaService::new().await?;

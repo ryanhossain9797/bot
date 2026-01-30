@@ -33,7 +33,7 @@ fn handle_outcome(
     recent_conversation: RecentConversation,
     pending: Vec<String>,
 ) -> UserTransitionResult {
-    match response.outcome {
+    match response.output {
         LLMDecisionType::MessageUser { .. } => Ok((
             User {
                 state: UserState::Idle {
@@ -172,7 +172,7 @@ pub fn user_transition(
                     };
 
                     // Extract message to send from outcome
-                    let message_to_send = match &response.outcome {
+                    let message_to_send = match &response.output {
                         LLMDecisionType::MessageUser { response } => Some(response.clone()),
                         LLMDecisionType::InternalFunctionCall { .. }
                         | LLMDecisionType::IntermediateToolCall { .. } => None,

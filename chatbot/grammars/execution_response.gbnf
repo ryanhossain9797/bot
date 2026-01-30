@@ -1,0 +1,14 @@
+root ::= flat-decision ws
+
+flat-decision ::= message-user | get-weather | web-search | visit-url | recall-short-term | recall-long-term
+
+message-user ::= "{" ws "\"MessageUser\"" ws ":" ws string512 ws "}"
+get-weather ::= "{" ws "\"GetWeather\"" ws ":" ws string512 ws "}"
+web-search ::= "{" ws "\"WebSearch\"" ws ":" ws string512 ws "}"
+visit-url ::= "{" ws "\"VisitUrl\"" ws ":" ws string512 ws "}"
+recall-short-term ::= "{" ws "\"RecallShortTerm\"" ws ":" ws string512 ws "}"
+recall-long-term ::= "{" ws "\"RecallLongTerm\"" ws ":" ws string512 ws "}"
+
+string512 ::= "\"" ([^"\\\x00-\x1F\n\r] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}))* "\""
+
+ws ::= [ \t]*

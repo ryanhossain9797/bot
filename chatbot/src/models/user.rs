@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
-pub const MAX_SEARCH_RESULTS_LENGTH: usize = 800;
+pub const MAX_SEARCH_RESULTS_LENGTH: usize = 10000;
 pub const MAX_TOOL_OUTPUT_LENGTH: usize = 5000;
 pub const MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH: usize = 5000;
 pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
@@ -155,7 +155,7 @@ impl LLMDecisionType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub thoughts: String,
-    pub outcome: LLMDecisionType,
+    pub output: LLMDecisionType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ impl HistoryEntry {
     pub fn format(&self) -> String {
         match self {
             HistoryEntry::Input(input) => input.format(),
-            HistoryEntry::Output(output) => output.outcome.format_output(),
+            HistoryEntry::Output(output) => output.output.format_output(),
         }
     }
 }

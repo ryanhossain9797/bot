@@ -262,6 +262,7 @@ impl Agent {
                 }
 
                 if model.is_eog_token(token) {
+                    println!("EOG");
                     return ControlFlow::Break(Ok(tokens));
                 }
 
