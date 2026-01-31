@@ -8,49 +8,8 @@ use crate::{
 };
 use scraper::{Html, Selector};
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::sync::Arc;
-
-#[allow(unused_variables)]
-pub async fn execute_tool(
-    env: Arc<Env>,
-    tool_call: ToolCall,
-    history: Vec<HistoryEntry>,
-) -> UserAction {
-    match tool_call {
-        ToolCall::GetWeather { location } => {
-            // Actually fetch weather using wttr.in API
-            match fetch_weather(&location).await {
-                Ok(weather_info) => UserAction::ToolResult(Ok(ToolResultData {
-                    actual: format!("Weather for {}: {}", location, weather_info),
-                    simplified: format!("Weather for {}: {}", location, weather_info),
-                })),
-                Err(e) => UserAction::ToolResult(Err(e.to_string())),
-            }
-        }
-        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
-            Ok(search_results) => UserAction::ToolResult(Ok(ToolResultData {
-                actual: search_results.clone(),
-                simplified: search_results,
-            })),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
-        ToolCall::MathCalculation { operations } => {
-            let result = execute_math(operations).await;
-            UserAction::ToolResult(Ok(ToolResultData {
-                actual: result.clone(),
-                simplified: result,
-            }))
-        }
-        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
-            Ok(content) => UserAction::ToolResult(Ok(ToolResultData {
-                actual: content.clone(),
-                simplified: content,
-            })),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
-    }
-}
+use std::{collections::HashSet, fmt::format};
 
 /// Execute a list of math operations and return the results
 async fn execute_math(operations: Vec<MathOperation>) -> String {
@@ -183,7 +142,7 @@ struct BraveSearchResult {
     description: Option<String>,
 }
 
-async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
+async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     let search_url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}",
         urlencoding::encode(query)
@@ -253,13 +212,20 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<String> {
         })
         .collect();
 
-    let formatted_output = format!(
-        "Search query: {}\n\nResults:\n{}",
+    let (primary, secondary) = match formatted_results.len() > 2 {
+        true => formatted_results.split_at(2),
+        false => (formatted_results.as_slice(), &[][..]),
+    };
+
+    let simplified = format!(
+        "Search Results for {}:\n{}",
         original_query,
-        formatted_results.join("\n\n---\n\n")
+        primary.join("\n")
     );
 
-    Ok(formatted_output)
+    let actual = format!("{simplified}\n{}", secondary.join("\n"));
+
+    Ok(ToolResultData { actual, simplified })
 }
 
 #[derive(Debug)]
@@ -414,6 +380,41 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
     Ok(output)
 }
 
+#[allow(unused_variables)]
+pub async fn execute_tool(
+    env: Arc<Env>,
+    tool_call: ToolCall,
+    history: Vec<HistoryEntry>,
+) -> UserAction {
+    match tool_call {
+        ToolCall::GetWeather { location } => match fetch_weather(&location).await {
+            Ok(weather_info) => UserAction::ToolResult(Ok(ToolResultData {
+                actual: format!("Weather for {}: {}", location, weather_info),
+                simplified: format!("Weather for {}: {}", location, weather_info),
+            })),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
+        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
+            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
+        ToolCall::MathCalculation { operations } => {
+            let result = execute_math(operations).await;
+            UserAction::ToolResult(Ok(ToolResultData {
+                actual: result.clone(),
+                simplified: result,
+            }))
+        }
+        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
+            Ok(content) => UserAction::ToolResult(Ok(ToolResultData {
+                actual: content.clone(),
+                simplified: content,
+            })),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,9 +430,8 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_web_search() {
         let search_results = fetch_web_search("Rust programming").await.unwrap();
-        assert!(search_results.contains("Search query:"));
-        assert!(search_results.contains("Results:"));
-        assert!(search_results.contains("Rust programming"));
+        assert!(search_results.actual.contains("Search Results for"));
+        assert!(search_results.actual.contains("Rust programming"));
     }
 
     #[tokio::test]
