@@ -41,6 +41,11 @@ pub struct RecentConversation {
     pub thoughts: String,
     pub history: Vec<HistoryEntry>,
 }
+impl RecentConversation {
+    pub fn history(&self) -> Vec<HistoryEntry> {
+        self.history.clone()
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum UserState {

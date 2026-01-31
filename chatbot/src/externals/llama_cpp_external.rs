@@ -1,7 +1,7 @@
 use crate::{
     models::user::{
-        FunctionCall, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse, ToolCall,
-        ToolResultData, UserAction,
+        FunctionCall, HistoryEntry, InternalFunctionResultData, LLMDecisionType, LLMInput,
+        LLMResponse, RecentConversation, ToolCall, ToolResultData, UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -12,40 +12,34 @@ use serde_json;
 
 use std::sync::Arc;
 
-fn format_input(input: &LLMInput, truncate: bool) -> String {
+fn format_input(input: &LLMInput) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
-            let mut content = msg.clone();
-            if truncate && content.len() > 10 {
-                content.truncate(content.ceil_char_boundary(10));
-                content.push_str("... (truncated)");
-            }
-            format!("user said:\n\"{}\"", content)
+            format!("USER: {msg}")
         }
-        LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. }) => {
-            let mut content = actual.clone();
-            if content.len() > 10 {
-                content.truncate(content.ceil_char_boundary(10));
-                content.push_str("... (truncated)");
-            }
-
-            format!("tool result\n{}", content)
-        }
-        LLMInput::ToolResult(ToolResultData { actual, .. }) => {
-            let mut content = actual.clone();
-            if content.len() > 10 {
-                content.truncate(content.ceil_char_boundary(10));
-                content.push_str("... (truncated)");
-            }
-
-            format!("tool result:\n\"{}\"", content)
-        }
+        LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. })
+        | LLMInput::ToolResult(ToolResultData { actual, .. }) => actual.clone(),
     }
 }
 
-fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String>) -> String {
-    let prev_thoughts = maybe_last_thoughts.unwrap_or("NULL".to_string());
-    let new_input = format_input(new_input, false);
+fn build_dynamic_prompt(
+    new_input: &LLMInput,
+    maybe_recent_conversation: Option<RecentConversation>,
+) -> String {
+    let (prev_thoughts, history) = maybe_recent_conversation
+        .map(|rc| (rc.thoughts, rc.history))
+        .unwrap_or_else(|| ("NULL".to_string(), Vec::new()));
+
+    let history: String = match history.len() > 0 {
+        true => history
+            .iter()
+            .map(|h| h.format_simplified())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        false => "".to_string(),
+    };
+
+    let new_input = format_input(new_input);
 
     format!(
         r#"
@@ -53,13 +47,10 @@ fn build_dynamic_prompt(new_input: &LLMInput, maybe_last_thoughts: Option<String
 Previous thoughts:
 {prev_thoughts}
 
-New input:
+Conversation:
+{history}
 {new_input}
-
-IMPORTANT: Based on the previous thoughts and new information. Try to answer the user's question.
-If you need more information call a different tool but prioritize answering the user if possible
-
-Answer the user briefly without any unnecessary details. Don't try to be polite or conversational just state facts
+AGENT:
     "#
     )
 }
@@ -77,15 +68,15 @@ enum FlatLLMDecision {
 async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
-    maybe_last_thoughts: Option<String>,
+    maybe_recent_conversation: Option<RecentConversation>,
 ) -> anyhow::Result<LLMResponse> {
-    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_last_thoughts);
+    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_recent_conversation);
 
-    println!("DYNAMIC: {dynamic_prompt}");
+    println!("[DEBUG DYNAMIC]: {dynamic_prompt}");
 
     let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
 
-    println!("MAIN RESPONSE: {response}");
+    println!("[DEBUG MAIN RESPONSE]: {response}");
 
     let mut parts = response.splitn(2, "output:");
 
@@ -149,10 +140,14 @@ async fn get_response_from_llm(
 pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
-    maybe_last_thoughts: Option<String>,
+    maybe_recent_conversation: Option<RecentConversation>,
 ) -> UserAction {
-    let llama_cpp_result =
-        get_response_from_llm(env.llama_cpp.as_ref(), &current_input, maybe_last_thoughts).await;
+    let llama_cpp_result = get_response_from_llm(
+        env.llama_cpp.as_ref(),
+        &current_input,
+        maybe_recent_conversation,
+    )
+    .await;
 
     match llama_cpp_result {
         Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response)),
