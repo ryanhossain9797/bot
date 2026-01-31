@@ -3,10 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
-pub const MAX_SEARCH_RESULTS_LENGTH: usize = 10000;
-pub const MAX_TOOL_OUTPUT_LENGTH: usize = 5000;
-pub const MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH: usize = 5000;
-pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
+pub const MAX_WEB_CONTENT_LENGTH: usize = 10000;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {

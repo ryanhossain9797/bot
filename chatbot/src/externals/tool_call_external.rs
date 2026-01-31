@@ -2,17 +2,17 @@ use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
-        MAX_SEARCH_DESCRIPTION_LENGTH, MAX_SEARCH_RESULTS_LENGTH,
+        MAX_SEARCH_DESCRIPTION_LENGTH, MAX_WEB_CONTENT_LENGTH,
     },
     Env,
 };
 use scraper::{Html, Selector};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::{collections::HashSet, fmt::format};
 
 /// Execute a list of math operations and return the results
-async fn execute_math(operations: Vec<MathOperation>) -> String {
+async fn execute_math(operations: Vec<MathOperation>) -> ToolResultData {
     let mut results = Vec::new();
 
     for (index, op) in operations.iter().enumerate() {
@@ -45,7 +45,12 @@ async fn execute_math(operations: Vec<MathOperation>) -> String {
         results.push(format!("Operation {}: {}", index + 1, result));
     }
 
-    results.join("\n")
+    let actual = format!("MATH TOOL RESULT:\n{}", results.join("\n"));
+
+    ToolResultData {
+        simplified: actual.clone(),
+        actual,
+    }
 }
 
 #[derive(Deserialize)]
@@ -71,7 +76,7 @@ struct CurrentWeather {
     wind_speed_10m: f64,
 }
 
-async fn fetch_weather(location: &str) -> anyhow::Result<String> {
+async fn fetch_weather(location: &str) -> anyhow::Result<ToolResultData> {
     let geocoding_url = format!(
         "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1",
         urlencoding::encode(location)
@@ -110,10 +115,15 @@ async fn fetch_weather(location: &str) -> anyhow::Result<String> {
         .map_err(|e| anyhow::anyhow!("Failed to parse weather response: {}", e))?;
 
     let weather = weather_response.current;
-    Ok(format!(
-        "Temperature: {}°C, Humidity: {}%, Wind Speed: {} km/h",
+
+    let actual = format!(
+        "WEATHER TOOL RESULT: Temperature: {}°C, Humidity: {}%, Wind Speed: {} km/h",
         weather.temperature_2m, weather.relative_humidity_2m, weather.wind_speed_10m
-    ))
+    );
+    Ok(ToolResultData {
+        simplified: actual.clone(),
+        actual,
+    })
 }
 
 #[derive(Deserialize)]
@@ -218,7 +228,7 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     };
 
     let simplified = format!(
-        "Search Results for {}:\n{}",
+        "WEB SEARCH TOOL RESULT: Search Results for {}:\n{}",
         original_query,
         primary.join("\n")
     );
@@ -297,14 +307,6 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
 
     // Select block elements to preserve some structure
     let block_selector = Selector::parse("p, h1, h2, h3, h4, h5, h6, li, div").unwrap();
-    // If we just extract all text, we might lose paragraph breaks.
-    // Let's rely on readability's structure.
-    // Strategy: Iterate over elements, if it's a block, add newline.
-    // We can iterate over all text nodes.
-
-    // Let's try a robust approach: extract text from everything, but try to insert newlines for P tags.
-    // Since scraper iterates nodes, this is hard without recursion.
-    // Simplified approach: Select relevant elements.
 
     for element in fragment.select(&block_selector) {
         let text = element.text().collect::<Vec<_>>().join(" ");
@@ -351,33 +353,41 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
     })
 }
 
-async fn fetch_url_content(url: &str) -> anyhow::Result<String> {
+async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
+    pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 10000;
+    pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 300;
+
     let extracted = fetch_page(url).await?;
 
-    let content = if extracted.content.len() > MAX_SEARCH_RESULTS_LENGTH {
-        &extracted.content[..MAX_SEARCH_RESULTS_LENGTH]
+    let actual_content = if extracted.content.len() > MAX_ACTUAL_WEB_CONTENT_LENGTH {
+        &extracted.content[..MAX_ACTUAL_WEB_CONTENT_LENGTH]
     } else {
         &extracted.content
     };
 
-    let mut output = format!("Visit Url content for {url}: \n");
-    output.push_str(content);
+    let simplified_content = if extracted.content.len() > MAX_SIMPLIFIED_WEB_CONTENT_LENGTH {
+        &extracted.content[..MAX_SIMPLIFIED_WEB_CONTENT_LENGTH]
+    } else {
+        &extracted.content
+    };
+
+    let mut actual: String = format!("VISIT URL TOOL RESULT {url}: \n");
+    let mut simplified = actual.clone();
+    actual.push_str(actual_content);
+    simplified.push_str(simplified_content);
 
     if !extracted.links.is_empty() {
-        output.push_str("\n\nLinks:\n");
-        for (text, href) in extracted.links.iter().take(20) {
-            // Limit links to avoid spam
-            output.push_str(&format!("- [{}]({})\n", text, href));
-        }
-        if extracted.links.len() > 20 {
-            output.push_str(&format!(
-                "... and {} more links.",
-                extracted.links.len() - 20
-            ));
+        actual.push_str("\nLinks:\n");
+        simplified.push_str("\nLinks:\n");
+        for (index, (text, href)) in extracted.links.iter().enumerate().take(10) {
+            actual.push_str(&format!("- {} {}\n", text, href));
+            if index < 3 {
+                simplified.push_str(&format!("- {} {}\n", text, href));
+            }
         }
     }
 
-    Ok(output)
+    Ok(ToolResultData { actual, simplified })
 }
 
 #[allow(unused_variables)]
@@ -388,10 +398,7 @@ pub async fn execute_tool(
 ) -> UserAction {
     match tool_call {
         ToolCall::GetWeather { location } => match fetch_weather(&location).await {
-            Ok(weather_info) => UserAction::ToolResult(Ok(ToolResultData {
-                actual: format!("Weather for {}: {}", location, weather_info),
-                simplified: format!("Weather for {}: {}", location, weather_info),
-            })),
+            Ok(weather_info) => UserAction::ToolResult(Ok(weather_info)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
         ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
@@ -400,16 +407,10 @@ pub async fn execute_tool(
         },
         ToolCall::MathCalculation { operations } => {
             let result = execute_math(operations).await;
-            UserAction::ToolResult(Ok(ToolResultData {
-                actual: result.clone(),
-                simplified: result,
-            }))
+            UserAction::ToolResult(Ok(result))
         }
         ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
-            Ok(content) => UserAction::ToolResult(Ok(ToolResultData {
-                actual: content.clone(),
-                simplified: content,
-            })),
+            Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
     }
@@ -422,9 +423,9 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_weather() {
         let weather = fetch_weather("London").await.unwrap();
-        assert!(weather.contains("Temperature"));
-        assert!(weather.contains("Humidity"));
-        assert!(weather.contains("Wind Speed"));
+        assert!(weather.actual.contains("Temperature"));
+        assert!(weather.actual.contains("Humidity"));
+        assert!(weather.actual.contains("Wind Speed"));
     }
 
     #[tokio::test]
@@ -445,18 +446,18 @@ mod tests {
         ];
 
         let result = execute_math(operations).await;
-        assert!(result.contains("5 + 3 = 8"));
-        assert!(result.contains("10 - 4 = 6"));
-        assert!(result.contains("6 × 7 = 42"));
-        assert!(result.contains("20 ÷ 4 = 5"));
-        assert!(result.contains("2 ^ 8 = 256"));
+        assert!(result.actual.contains("5 + 3 = 8"));
+        assert!(result.actual.contains("10 - 4 = 6"));
+        assert!(result.actual.contains("6 × 7 = 42"));
+        assert!(result.actual.contains("20 ÷ 4 = 5"));
+        assert!(result.actual.contains("2 ^ 8 = 256"));
     }
 
     #[tokio::test]
     async fn test_division_by_zero() {
         let operations = vec![MathOperation::Div(10.0, 0.0)];
         let result = execute_math(operations).await;
-        assert!(result.contains("Division by zero"));
+        assert!(result.actual.contains("Division by zero"));
     }
 
     #[tokio::test]
@@ -468,9 +469,9 @@ mod tests {
         ];
 
         let result = execute_math(operations).await;
-        assert!(result.contains("5.5 + 3.2 = 8.7"));
-        assert!(result.contains("7 ÷ 2 = 3.5"));
-        assert!(result.contains("2 ^ 0.5")); // Should calculate sqrt(2)
+        assert!(result.actual.contains("5.5 + 3.2 = 8.7"));
+        assert!(result.actual.contains("7 ÷ 2 = 3.5"));
+        assert!(result.actual.contains("2 ^ 0.5")); // Should calculate sqrt(2)
     }
 
     #[tokio::test]
@@ -478,11 +479,13 @@ mod tests {
         // Test with example.com
         let content = fetch_url_content("https://example.com").await.unwrap();
         // println!("{}", content); // Keep it clean
-        assert!(content.contains("Example Domain"));
+        assert!(content.actual.contains("Example Domain"));
         // The text on example.com seems to vary or has changed.
         // We match parts of the text found in the debug run:
         // "This domain is for use in documentation examples without needing permission."
-        assert!(content.contains("This domain is for use in documentation examples"));
-        assert!(content.contains("https://iana.org/domains/example"));
+        assert!(content
+            .actual
+            .contains("This domain is for use in documentation examples"));
+        assert!(content.actual.contains("https://iana.org/domains/example"));
     }
 }

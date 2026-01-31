@@ -1,8 +1,7 @@
 use crate::{
     models::user::{
-        FunctionCall, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse,
-        MathOperation, ToolCall, ToolResultData, UserAction, MAX_HISTORY_TEXT_LENGTH,
-        MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
+        FunctionCall, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse, ToolCall,
+        ToolResultData, UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -17,16 +16,16 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
             let mut content = msg.clone();
-            if truncate && content.len() > crate::models::user::MAX_HISTORY_TEXT_LENGTH {
-                content.truncate(content.ceil_char_boundary(MAX_HISTORY_TEXT_LENGTH));
+            if truncate && content.len() > 10 {
+                content.truncate(content.ceil_char_boundary(10));
                 content.push_str("... (truncated)");
             }
             format!("user said:\n\"{}\"", content)
         }
         LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. }) => {
             let mut content = actual.clone();
-            if content.len() > MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH {
-                content.truncate(content.ceil_char_boundary(MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH));
+            if content.len() > 10 {
+                content.truncate(content.ceil_char_boundary(10));
                 content.push_str("... (truncated)");
             }
 
@@ -34,8 +33,8 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
         }
         LLMInput::ToolResult(ToolResultData { actual, .. }) => {
             let mut content = actual.clone();
-            if content.len() > MAX_TOOL_OUTPUT_LENGTH {
-                content.truncate(content.ceil_char_boundary(MAX_TOOL_OUTPUT_LENGTH));
+            if content.len() > 10 {
+                content.truncate(content.ceil_char_boundary(10));
                 content.push_str("... (truncated)");
             }
 
