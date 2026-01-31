@@ -94,19 +94,21 @@ pub enum LLMInput {
     /// A message from the user
     UserMessage(String),
     /// Continuation after an internal function execution with the function result
-    InternalFunctionResult(String),
+    InternalFunctionResult(InternalFunctionResultData),
     /// Continuation after a tool execution with the tool result
-    ToolResult(String),
+    ToolResult(ToolResultData),
 }
 
 impl LLMInput {
     pub fn format(&self) -> String {
         match self {
             LLMInput::UserMessage(msg) => format!("user: {msg}"),
-            LLMInput::InternalFunctionResult(result) => {
-                format!("internal_function_result: {result}")
+            LLMInput::InternalFunctionResult(InternalFunctionResultData { simplified, .. }) => {
+                format!("internal_function_result: {simplified}")
             }
-            LLMInput::ToolResult(result) => format!("tool_result: {result}"),
+            LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
+                format!("tool_result: {simplified}")
+            }
         }
     }
 }
@@ -156,6 +158,7 @@ impl LLMDecisionType {
 pub struct LLMResponse {
     pub thoughts: String,
     pub output: LLMDecisionType,
+    pub simple_output: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,9 +186,21 @@ pub enum UserAction {
     Timeout,
     CommitResult(Result<(), String>),
     LLMDecisionResult(Result<LLMResponse, String>),
-    InternalFunctionResult(Result<String, String>),
+    InternalFunctionResult(Result<InternalFunctionResultData, String>),
     MessageSent(Result<(), String>),
-    ToolResult(Result<String, String>),
+    ToolResult(Result<ToolResultData, String>),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InternalFunctionResultData {
+    pub actual: String,
+    pub simplified: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ToolResultData {
+    pub actual: String,
+    pub simplified: String,
 }
 
 impl std::fmt::Debug for UserAction {

@@ -4,7 +4,7 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::LLMResponse;
+use crate::models::user::{InternalFunctionResultData, LLMResponse, ToolResultData};
 use crate::{
     externals::recall_short_term_external::execute_short_recall,
     models::user::{
@@ -273,7 +273,11 @@ pub fn user_transition(
                     Err(error_msg) => {
                         let error_result =
                             format!("Internal function execution failed: {}", error_msg);
-                        let current_input = LLMInput::InternalFunctionResult(error_result);
+                        let current_input =
+                            LLMInput::InternalFunctionResult(InternalFunctionResultData {
+                                actual: error_result.clone(),
+                                simplified: error_result,
+                            });
 
                         // Let LLM handle the error and inform the user
                         let mut external = Vec::<UserExternalOperation>::new();
@@ -332,7 +336,10 @@ pub fn user_transition(
                     }
                     Err(error_msg) => {
                         let error_result = format!("Tool execution failed: {}", error_msg);
-                        let current_input = LLMInput::ToolResult(error_result);
+                        let current_input = LLMInput::ToolResult(ToolResultData {
+                            actual: error_result.clone(),
+                            simplified: error_result,
+                        });
 
                         // Let LLM handle the error and inform the user
                         let mut external = Vec::<UserExternalOperation>::new();
@@ -456,7 +463,7 @@ fn post_transition(
                 state: UserState::AwaitingLLMDecision {
                     is_timeout: false,
                     history,
-                    current_input,
+                    current_input: LLMInput::UserMessage(msg.clone()),
                 },
                 last_transition: Utc::now(),
                 pending: Vec::new(),

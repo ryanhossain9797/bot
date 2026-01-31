@@ -1,7 +1,8 @@
 use crate::{
     models::user::{
-        FunctionCall, LLMDecisionType, LLMInput, LLMResponse, MathOperation, ToolCall, UserAction,
-        MAX_HISTORY_TEXT_LENGTH, MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
+        FunctionCall, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse,
+        MathOperation, ToolCall, ToolResultData, UserAction, MAX_HISTORY_TEXT_LENGTH,
+        MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH, MAX_TOOL_OUTPUT_LENGTH,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -22,8 +23,8 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
             }
             format!("user said:\n\"{}\"", content)
         }
-        LLMInput::InternalFunctionResult(result) => {
-            let mut content = result.clone();
+        LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. }) => {
+            let mut content = actual.clone();
             if content.len() > MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH {
                 content.truncate(content.ceil_char_boundary(MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH));
                 content.push_str("... (truncated)");
@@ -31,8 +32,8 @@ fn format_input(input: &LLMInput, truncate: bool) -> String {
 
             format!("tool result\n{}", content)
         }
-        LLMInput::ToolResult(result) => {
-            let mut content = result.clone();
+        LLMInput::ToolResult(ToolResultData { actual, .. }) => {
+            let mut content = actual.clone();
             if content.len() > MAX_TOOL_OUTPUT_LENGTH {
                 content.truncate(content.ceil_char_boundary(MAX_TOOL_OUTPUT_LENGTH));
                 content.push_str("... (truncated)");
@@ -99,9 +100,9 @@ async fn get_response_from_llm(
         .trim()
         .to_string();
 
-    let output = after.trim().to_string();
+    let simple_output = after.trim().to_string();
 
-    println!("T: {thoughts}\nO: {output}");
+    println!("T: {thoughts}\nO: {simple_output}");
 
     let executor_prompt = format!(
         r#"
@@ -110,7 +111,7 @@ async fn get_response_from_llm(
     if the input is message-user just generate MessageUser with the provided text
     for all other input run the tool with the provided parameters
 
-    input: {output}
+    input: {simple_output}
     "#
     );
     let executor_response = llama_cpp.get_executor_response(&executor_prompt)?;
@@ -139,7 +140,11 @@ async fn get_response_from_llm(
         },
     };
 
-    Ok(LLMResponse { thoughts, output })
+    Ok(LLMResponse {
+        thoughts,
+        output,
+        simple_output,
+    })
 }
 
 pub async fn get_llm_decision(

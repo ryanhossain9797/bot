@@ -1,8 +1,8 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{
-        HistoryEntry, MathOperation, ToolCall, UserAction, MAX_SEARCH_DESCRIPTION_LENGTH,
-        MAX_SEARCH_RESULTS_LENGTH,
+        HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
+        MAX_SEARCH_DESCRIPTION_LENGTH, MAX_SEARCH_RESULTS_LENGTH,
     },
     Env,
 };
@@ -21,23 +21,32 @@ pub async fn execute_tool(
         ToolCall::GetWeather { location } => {
             // Actually fetch weather using wttr.in API
             match fetch_weather(&location).await {
-                Ok(weather_info) => UserAction::ToolResult(Ok(format!(
-                    "Weather for {}: {}",
-                    location, weather_info
-                ))),
+                Ok(weather_info) => UserAction::ToolResult(Ok(ToolResultData {
+                    actual: format!("Weather for {}: {}", location, weather_info),
+                    simplified: format!("Weather for {}: {}", location, weather_info),
+                })),
                 Err(e) => UserAction::ToolResult(Err(e.to_string())),
             }
         }
         ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
-            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
+            Ok(search_results) => UserAction::ToolResult(Ok(ToolResultData {
+                actual: search_results.clone(),
+                simplified: search_results,
+            })),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
         ToolCall::MathCalculation { operations } => {
             let result = execute_math(operations).await;
-            UserAction::ToolResult(Ok(result))
+            UserAction::ToolResult(Ok(ToolResultData {
+                actual: result.clone(),
+                simplified: result,
+            }))
         }
         ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
-            Ok(content) => UserAction::ToolResult(Ok(content)),
+            Ok(content) => UserAction::ToolResult(Ok(ToolResultData {
+                actual: content.clone(),
+                simplified: content,
+            })),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
     }

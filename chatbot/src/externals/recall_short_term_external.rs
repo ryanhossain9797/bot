@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    models::user::{HistoryEntry, UserAction},
+    models::user::{HistoryEntry, InternalFunctionResultData, UserAction},
     Env,
 };
 
@@ -20,8 +20,14 @@ pub async fn execute_short_recall(env: Arc<Env>, history: Vec<HistoryEntry>) -> 
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    UserAction::InternalFunctionResult(Ok(format!(
-        "Recent conversation history (last 20 entries):\n\n{}",
-        formatted_history
-    )))
+    UserAction::InternalFunctionResult(Ok(InternalFunctionResultData {
+        actual: format!(
+            "Recent conversation history (last 20 entries):\n\n{}",
+            formatted_history
+        ),
+        simplified: format!(
+            "Recent conversation history (last 20 entries):\n\n{}",
+            formatted_history
+        ),
+    }))
 }
