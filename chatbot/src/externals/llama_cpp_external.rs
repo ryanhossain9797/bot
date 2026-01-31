@@ -15,10 +15,10 @@ use std::sync::Arc;
 fn format_input(input: &LLMInput) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
-            format!("USER: {msg}")
+            format!("<USER>\n\n{msg}")
         }
         LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. })
-        | LLMInput::ToolResult(ToolResultData { actual, .. }) => actual.clone(),
+        | LLMInput::ToolResult(ToolResultData { actual, .. }) => format!("<SYSTEM>\n\n{actual}"),
     }
 }
 
