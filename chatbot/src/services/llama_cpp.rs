@@ -133,14 +133,11 @@ impl LlamaCppService {
     }
 
     pub async fn get_thinking_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
-        let model = Arc::clone(&self.thinking_model);
-        let backend = Arc::clone(&self.backend);
-
         self.thinking_agent
             .get_response(
                 Self::context_params(),
-                model,
-                backend,
+                Arc::clone(&self.thinking_model),
+                Arc::clone(&self.backend),
                 Self::CONTEXT_SIZE.get(),
                 Self::TEMPERATURE,
                 Self::BATCH_CHUNK_SIZE,
@@ -153,7 +150,7 @@ impl LlamaCppService {
         self.executor_agent
             .get_response(
                 Self::context_params(),
-                Arc::clone(&self.thinking_model),
+                Arc::clone(&self.executor_model),
                 Arc::clone(&self.backend),
                 Self::CONTEXT_SIZE.get(),
                 Self::TEMPERATURE,
