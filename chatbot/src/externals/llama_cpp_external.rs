@@ -75,7 +75,7 @@ async fn get_response_from_llm(
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
 
-    println!("[DEBUG DYNAMIC]: {dynamic_prompt}");
+    println!("{dynamic_prompt}");
 
     let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
 

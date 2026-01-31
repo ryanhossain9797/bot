@@ -371,6 +371,12 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
                 simplified.push_str(&format!("- {} {}\n", text, href));
             }
         }
+
+        let no_more_urls =
+            "\nDon't visit any further urls if you have sufficient info for an answer";
+
+        actual.push_str(no_more_urls);
+        simplified.push_str(no_more_urls);
     }
 
     Ok(ToolResultData { actual, simplified })
