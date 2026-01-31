@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
+pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 20;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
@@ -158,16 +158,16 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::UserMessage(m) => format!("<USER>\n\n{m}"),
+                LLMInput::UserMessage(m) => format!("<USER>\n{m}\n\n"),
                 LLMInput::InternalFunctionResult(InternalFunctionResultData {
                     simplified, ..
                 })
                 | LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
-                    format!("<System>\n\n{simplified}")
+                    format!("<SYSTEM>\n{simplified}\n\n")
                 }
             },
             HistoryEntry::Output(LLMResponse { simple_output, .. }) => {
-                format!("<AGENT>\n\n{simple_output}")
+                format!("<AGENT>\n{simple_output}\n\n")
             }
         }
     }

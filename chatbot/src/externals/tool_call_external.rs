@@ -195,35 +195,21 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
         .web
         .results
         .into_iter()
-        .take(5)
+        .take(3)
         .map(|result| {
             let title = result.title.as_deref().unwrap_or("null");
             let url = result.url.as_deref().unwrap_or("null");
             let description = result.description.as_deref().unwrap_or("null");
-            // Truncate description to MAX_SEARCH_DESCRIPTION_LENGTH characters max (at character boundary)
-            let truncated: String = if description.chars().count() > MAX_SEARCH_DESCRIPTION_LENGTH {
-                description
-                    .chars()
-                    .take(MAX_SEARCH_DESCRIPTION_LENGTH)
-                    .collect()
-            } else {
-                description.to_string()
-            };
-            let truncated_description =
-                if description.chars().count() > MAX_SEARCH_DESCRIPTION_LENGTH {
-                    format!("{}...", truncated)
-                } else {
-                    description.to_string()
-                };
-            format!(
-                "Title: {}\nURL: {}\nDescription: {}",
-                title, url, truncated_description
-            )
+
+            let safe_len = description.floor_char_boundary(MAX_SEARCH_DESCRIPTION_LENGTH);
+            let description = &description[..safe_len];
+            format!("Title: {title}\nURL to visit: {url}\nDescription: {description}\n\n",)
         })
         .collect();
 
-    let (primary, secondary) = match formatted_results.len() > 2 {
-        true => formatted_results.split_at(2),
+    let simplified_partition = 1;
+    let (primary, secondary) = match formatted_results.len() > simplified_partition {
+        true => formatted_results.split_at(simplified_partition),
         false => (formatted_results.as_slice(), &[][..]),
     };
 
