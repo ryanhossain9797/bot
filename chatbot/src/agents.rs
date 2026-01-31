@@ -17,7 +17,10 @@ use llama_cpp_2::{
 };
 pub use thinking_agent::*;
 
-use crate::services::llama_cpp::LlamaCppService;
+use crate::{
+    configuration::debug::{DEBUG_FINAL_LLM_OUTPUT, DEBUG_LIVE_LLM_OUTPUT, DEBUG_LLM_STATS},
+    services::llama_cpp::LlamaCppService,
+};
 
 struct GenerationState {
     tokens: Vec<LlamaToken>,
@@ -211,8 +214,10 @@ impl Agent {
         batch_chunk_size: usize,
         dynamic_prompt: &str,
     ) -> anyhow::Result<String> {
-        print!("[DEBUG] ");
-        let _ = io::stdout().flush();
+        if DEBUG_LLM_STATS {
+            print!("[DEBUG] ");
+            let _ = io::stdout().flush();
+        }
 
         let mut ctx = model.new_context(backend, ctx_params)?;
         let base_token_count = self.load(&mut ctx, model, ctx_size, batch_chunk_size)?;
@@ -225,8 +230,10 @@ impl Agent {
             batch_chunk_size,
         )?;
 
-        print!("Total tokens: {total_tokens} ");
-        let _ = io::stdout().flush();
+        if DEBUG_LLM_STATS {
+            print!("Total tokens: {total_tokens} ");
+            let _ = io::stdout().flush();
+        }
 
         let sampler = LlamaSampler::chain_simple([
             LlamaSampler::temp(temperature),
@@ -257,12 +264,15 @@ impl Agent {
              nth| {
                 let token = sampler.sample(&ctx, last_idx);
 
-                if let Ok(output) = model.token_to_str(token, Special::Tokenize) {
-                    print!("{output}");
+                match (
+                    model.token_to_str(token, Special::Tokenize),
+                    DEBUG_LIVE_LLM_OUTPUT,
+                ) {
+                    (Ok(output), true) => print!("{output}"),
+                    _ => (),
                 }
 
                 if model.is_eog_token(token) {
-                    println!("EOG");
                     return ControlFlow::Break(Ok(tokens));
                 }
 
@@ -302,8 +312,11 @@ impl Agent {
             ControlFlow::Continue(GenerationState { tokens, .. }) => Ok(tokens),
             ControlFlow::Break(res) => res,
         }?;
-        print!("Generated tokens: {} ", generated_tokens.len());
-        let _ = io::stdout().flush();
+
+        if DEBUG_LLM_STATS {
+            print!("Generated tokens: {} ", generated_tokens.len());
+            let _ = io::stdout().flush();
+        }
 
         let mut response_bytes = Vec::new();
         for token in &generated_tokens {
@@ -313,8 +326,10 @@ impl Agent {
         }
         let response = String::from_utf8_lossy(&response_bytes).to_string();
 
-        println!("\n{}\n", response);
-        let _ = std::io::stdout().flush();
+        if DEBUG_FINAL_LLM_OUTPUT {
+            println!("\n{}\n", response);
+            let _ = std::io::stdout().flush();
+        }
 
         Ok(response)
     }

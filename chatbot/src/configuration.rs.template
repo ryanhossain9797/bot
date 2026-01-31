@@ -5,3 +5,8 @@ pub mod client_tokens {
     pub const DISCORD_TOKEN: &str = "FOO";
     pub const BRAVE_SEARCH_TOKEN: &str = "FOO";
 }
+pub mod debug {
+    pub const DEBUG_LIVE_LLM_OUTPUT: bool = false;
+    pub const DEBUG_FINAL_LLM_OUTPUT: bool = false;
+    pub const DEBUG_LLM_STATS: bool = false;
+}

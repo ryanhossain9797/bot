@@ -10,15 +10,18 @@ use anyhow::anyhow;
 use serde::Deserialize;
 use serde_json;
 
-use std::sync::Arc;
+use std::{
+    iter::{self},
+    sync::Arc,
+};
 
 fn format_input(input: &LLMInput) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
-            format!("<USER>\n{msg}\n\n")
+            format!("<USER>\n{msg}")
         }
         LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. })
-        | LLMInput::ToolResult(ToolResultData { actual, .. }) => format!("<SYSTEM>\n{actual}\n\n"),
+        | LLMInput::ToolResult(ToolResultData { actual, .. }) => format!("<SYSTEM>\n{actual}"),
     }
 }
 
@@ -30,16 +33,14 @@ fn build_dynamic_prompt(
         .map(|rc| (rc.thoughts, rc.history))
         .unwrap_or_else(|| ("NULL".to_string(), Vec::new()));
 
-    let history: String = match history.len() > 0 {
-        true => history
-            .iter()
-            .map(|h| h.format_simplified())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        false => "".to_string(),
-    };
-
     let new_input = format_input(new_input);
+
+    let conversation = history
+        .iter()
+        .map(|h| h.format_simplified())
+        .chain(iter::once(new_input))
+        .collect::<Vec<_>>()
+        .join("\n\n");
 
     format!(
         r#"
@@ -48,8 +49,8 @@ Previous thoughts:
 {prev_thoughts}
 
 Conversation:
-{history}
-{new_input}
+{conversation}
+
 <AGENT>
     "#
     )
@@ -72,6 +73,8 @@ async fn get_response_from_llm(
 ) -> anyhow::Result<LLMResponse> {
     let dynamic_prompt = build_dynamic_prompt(current_input, maybe_recent_conversation);
 
+    println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
+
     println!("[DEBUG DYNAMIC]: {dynamic_prompt}");
 
     let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
@@ -92,6 +95,8 @@ async fn get_response_from_llm(
 
     let simple_output = after.trim().to_string();
 
+    println!("\n\n-- THINKER OUTPUT --\n\n");
+
     println!("T: {thoughts}\nO: {simple_output}");
 
     let executor_prompt = format!(
@@ -105,6 +110,8 @@ async fn get_response_from_llm(
     "#
     );
     let executor_response = llama_cpp.get_executor_response(&executor_prompt)?;
+
+    println!("\n\n-- EXECUTOR OUTPUT --\n\n");
 
     println!("Executor agent: {executor_response}");
 

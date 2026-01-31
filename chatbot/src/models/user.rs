@@ -158,16 +158,16 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::UserMessage(m) => format!("<USER>\n{m}\n\n"),
+                LLMInput::UserMessage(m) => format!("<USER>\n{m}"),
                 LLMInput::InternalFunctionResult(InternalFunctionResultData {
                     simplified, ..
                 })
                 | LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
-                    format!("<SYSTEM>\n{simplified}\n\n")
+                    format!("<SYSTEM>\n{simplified}")
                 }
             },
             HistoryEntry::Output(LLMResponse { simple_output, .. }) => {
-                format!("<AGENT>\n{simple_output}\n\n")
+                format!("<AGENT>\n{simple_output}")
             }
         }
     }
