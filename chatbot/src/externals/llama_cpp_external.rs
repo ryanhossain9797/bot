@@ -50,7 +50,7 @@ Previous thoughts:
 Conversation:
 {history}
 {new_input}
-AGENT:
+<AGENT>
     "#
     )
 }
