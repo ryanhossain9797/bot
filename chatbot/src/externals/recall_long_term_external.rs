@@ -67,9 +67,7 @@ pub async fn execute_long_recall(
 ) -> UserAction {
     let result = recall(env, user_id, search_term)
         .await
-        .map(|recalled| {
-            format!("RecallLongTerm Results:\n{recalled}\nEnd of RecallLongTerm Results\nNote: if the recall results seem irrelevant try other functions or tools")
-        })
+        .map(|recalled| format!("LONG TERM RECALL:\n{recalled}\n"))
         .map(|recalled| InternalFunctionResultData {
             actual: recalled.clone(),
             simplified: recalled,

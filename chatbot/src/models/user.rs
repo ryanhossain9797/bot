@@ -2,11 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
-pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
-pub const MAX_SEARCH_RESULTS_LENGTH: usize = 10000;
-pub const MAX_TOOL_OUTPUT_LENGTH: usize = 5000;
-pub const MAX_INTERNAL_FUNCTION_OUTPUT_LENGTH: usize = 5000;
-pub const MAX_HISTORY_TEXT_LENGTH: usize = 50;
+pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 20;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
@@ -44,6 +40,11 @@ impl Display for UserId {
 pub struct RecentConversation {
     pub thoughts: String,
     pub history: Vec<HistoryEntry>,
+}
+impl RecentConversation {
+    pub fn history(&self) -> Vec<HistoryEntry> {
+        self.history.clone()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -139,21 +140,7 @@ pub enum LLMDecisionType {
     InternalFunctionCall { function_call: FunctionCall },
     MessageUser { response: String },
 }
-impl LLMDecisionType {
-    pub fn format_output(&self) -> String {
-        match self {
-            LLMDecisionType::MessageUser { response } => format!("assistant: {response}"),
-            LLMDecisionType::InternalFunctionCall { function_call } => {
-                format!("assistant\nfunction_call: {function_call:?}")
-            }
-            LLMDecisionType::IntermediateToolCall { tool_call } => {
-                let mut lines = Vec::new();
-                lines.push(format!("tool_call: {tool_call:?}"));
-                format!("assistant\n{}", lines.join("\n"))
-            }
-        }
-    }
-}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub thoughts: String,
@@ -168,10 +155,20 @@ pub enum HistoryEntry {
 }
 
 impl HistoryEntry {
-    pub fn format(&self) -> String {
+    pub fn format_simplified(&self) -> String {
         match self {
-            HistoryEntry::Input(input) => input.format(),
-            HistoryEntry::Output(output) => output.output.format_output(),
+            HistoryEntry::Input(llm_input) => match llm_input {
+                LLMInput::UserMessage(m) => format!("<USER>\n{m}"),
+                LLMInput::InternalFunctionResult(InternalFunctionResultData {
+                    simplified, ..
+                })
+                | LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
+                    format!("<SYSTEM>\n{simplified}")
+                }
+            },
+            HistoryEntry::Output(LLMResponse { simple_output, .. }) => {
+                format!("<AGENT>\n{simple_output}")
+            }
         }
     }
 }

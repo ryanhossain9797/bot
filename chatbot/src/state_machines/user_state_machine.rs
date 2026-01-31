@@ -243,65 +243,62 @@ pub fn user_transition(
                     is_timeout,
                 },
                 UserAction::InternalFunctionResult(res),
-            ) => {
-                match res {
-                    Ok(internal_function_result) => {
-                        let current_input =
-                            LLMInput::InternalFunctionResult(internal_function_result.clone());
+            ) => match res {
+                Ok(internal_function_result) => {
+                    let current_input =
+                        LLMInput::InternalFunctionResult(internal_function_result.clone());
 
-                        // Function execution complete - get next LLM decision with function results
-                        let mut external = Vec::<UserExternalOperation>::new();
-                        external.push(Box::pin(get_llm_decision(
-                            env.clone(),
-                            current_input.clone(),
-                            Some(recent_conversation.thoughts),
-                        )));
+                    let history = recent_conversation.history();
+                    let mut external = Vec::<UserExternalOperation>::new();
+                    external.push(Box::pin(get_llm_decision(
+                        env.clone(),
+                        current_input.clone(),
+                        Some(recent_conversation),
+                    )));
 
-                        Ok((
-                            User {
-                                state: UserState::AwaitingLLMDecision {
-                                    is_timeout,
-                                    history: recent_conversation.history,
-                                    current_input,
-                                },
-                                last_transition: Utc::now(),
-                                ..user
+                    Ok((
+                        User {
+                            state: UserState::AwaitingLLMDecision {
+                                is_timeout,
+                                history,
+                                current_input,
                             },
-                            external,
-                        ))
-                    }
-                    Err(error_msg) => {
-                        let error_result =
-                            format!("Internal function execution failed: {}", error_msg);
-                        let current_input =
-                            LLMInput::InternalFunctionResult(InternalFunctionResultData {
-                                actual: error_result.clone(),
-                                simplified: error_result,
-                            });
-
-                        // Let LLM handle the error and inform the user
-                        let mut external = Vec::<UserExternalOperation>::new();
-                        external.push(Box::pin(get_llm_decision(
-                            env.clone(),
-                            current_input.clone(),
-                            Some(recent_conversation.thoughts),
-                        )));
-
-                        Ok((
-                            User {
-                                state: UserState::AwaitingLLMDecision {
-                                    is_timeout,
-                                    history: recent_conversation.history,
-                                    current_input,
-                                },
-                                last_transition: Utc::now(),
-                                ..user
-                            },
-                            external,
-                        ))
-                    }
+                            last_transition: Utc::now(),
+                            ..user
+                        },
+                        external,
+                    ))
                 }
-            }
+                Err(error_msg) => {
+                    let error_result = format!("Internal function execution failed: {}", error_msg);
+                    let current_input =
+                        LLMInput::InternalFunctionResult(InternalFunctionResultData {
+                            actual: error_result.clone(),
+                            simplified: error_result,
+                        });
+
+                    let history = recent_conversation.history();
+                    let mut external = Vec::<UserExternalOperation>::new();
+                    external.push(Box::pin(get_llm_decision(
+                        env.clone(),
+                        current_input.clone(),
+                        Some(recent_conversation),
+                    )));
+
+                    Ok((
+                        User {
+                            state: UserState::AwaitingLLMDecision {
+                                is_timeout,
+                                history,
+                                current_input,
+                            },
+                            last_transition: Utc::now(),
+                            ..user
+                        },
+                        external,
+                    ))
+                }
+            },
             (
                 UserState::RunningTool {
                     recent_conversation,
@@ -313,19 +310,19 @@ pub fn user_transition(
                     Ok(tool_result) => {
                         let current_input = LLMInput::ToolResult(tool_result.clone());
 
-                        // Tool execution complete - get next LLM decision with tool results
+                        let history = recent_conversation.history();
                         let mut external = Vec::<UserExternalOperation>::new();
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             current_input.clone(),
-                            Some(recent_conversation.thoughts.clone()),
+                            Some(recent_conversation),
                         )));
 
                         Ok((
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    history: recent_conversation.history,
+                                    history,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -341,19 +338,21 @@ pub fn user_transition(
                             simplified: error_result,
                         });
 
+                        let history = recent_conversation.history();
+
                         // Let LLM handle the error and inform the user
                         let mut external = Vec::<UserExternalOperation>::new();
                         external.push(Box::pin(get_llm_decision(
                             env.clone(),
                             current_input.clone(),
-                            Some(recent_conversation.thoughts),
+                            Some(recent_conversation),
                         )));
 
                         Ok((
                             User {
                                 state: UserState::AwaitingLLMDecision {
                                     is_timeout,
-                                    history: recent_conversation.history,
+                                    history,
                                     current_input,
                                 },
                                 last_transition: Utc::now(),
@@ -407,7 +406,7 @@ pub fn user_transition(
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
                     current_input.clone(),
-                    Some(recent_conversation.thoughts),
+                    Some(recent_conversation.clone()),
                 )));
 
                 Ok((
@@ -440,7 +439,7 @@ fn post_transition(
     match (&user.state, user.pending.len() > 0) {
         (
             UserState::Idle {
-                recent_conversation: last_conversation,
+                recent_conversation,
             },
             true,
         ) => {
@@ -448,15 +447,15 @@ fn post_transition(
 
             let current_input = LLMInput::UserMessage(msg.clone());
 
-            let (maybe_thoughts, history) = match last_conversation {
-                Some((r, _)) => (Some(r.thoughts.clone()), r.history.clone()),
-                None => (None, Vec::new()),
-            };
+            let history = recent_conversation
+                .as_ref()
+                .map(|(rc, _)| rc.history())
+                .unwrap_or_else(|| Vec::new());
 
             external.push(Box::pin(get_llm_decision(
                 env.clone(),
                 current_input.clone(),
-                maybe_thoughts,
+                recent_conversation.as_ref().map(|(rc, _)| rc.clone()),
             )));
 
             let user = User {

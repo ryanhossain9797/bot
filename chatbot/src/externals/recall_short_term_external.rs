@@ -14,20 +14,34 @@ pub async fn execute_short_recall(env: Arc<Env>, history: Vec<HistoryEntry>) -> 
     };
     let recent_history = &history[start_index..];
 
-    let formatted_history = recent_history
+    let actual = recent_history
         .iter()
-        .map(|entry| entry.format())
+        .map(|entry| entry.format_simplified())
         .collect::<Vec<_>>()
-        .join("\n\n");
+        .join("\n");
+
+    let simplified = {
+        let start_index = if recent_history.len() > 3 {
+            recent_history.len() - 3
+        } else {
+            0
+        };
+
+        recent_history[start_index..]
+            .iter()
+            .map(|entry| entry.format_simplified())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
 
     UserAction::InternalFunctionResult(Ok(InternalFunctionResultData {
         actual: format!(
-            "Recent conversation history (last 20 entries):\n\n{}",
-            formatted_history
+            "SHORT TERM RECALL: Recent conversation history:\n{}",
+            actual
         ),
         simplified: format!(
-            "Recent conversation history (last 20 entries):\n\n{}",
-            formatted_history
+            "SHORT TERM RECALL: Recent conversation history:\n{}",
+            simplified
         ),
     }))
 }
