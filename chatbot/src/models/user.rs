@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 200;
-pub const MAX_WEB_CONTENT_LENGTH: usize = 10000;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
@@ -136,21 +135,7 @@ pub enum LLMDecisionType {
     InternalFunctionCall { function_call: FunctionCall },
     MessageUser { response: String },
 }
-impl LLMDecisionType {
-    pub fn format_output(&self) -> String {
-        match self {
-            LLMDecisionType::MessageUser { response } => format!("assistant: {response}"),
-            LLMDecisionType::InternalFunctionCall { function_call } => {
-                format!("assistant\nfunction_call: {function_call:?}")
-            }
-            LLMDecisionType::IntermediateToolCall { tool_call } => {
-                let mut lines = Vec::new();
-                lines.push(format!("tool_call: {tool_call:?}"));
-                format!("assistant\n{}", lines.join("\n"))
-            }
-        }
-    }
-}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     pub thoughts: String,
@@ -165,10 +150,14 @@ pub enum HistoryEntry {
 }
 
 impl HistoryEntry {
-    pub fn format(&self) -> String {
+    pub fn format_simplified(&self) -> String {
         match self {
-            HistoryEntry::Input(input) => input.format(),
-            HistoryEntry::Output(output) => output.output.format_output(),
+            HistoryEntry::Input(llm_input) => match llm_input {
+                LLMInput::UserMessage(m) => m.clone(),
+                LLMInput::InternalFunctionResult(data) => data.simplified.clone(),
+                LLMInput::ToolResult(data) => data.simplified.clone(),
+            },
+            HistoryEntry::Output(llm_response) => llm_response.simple_output.clone(),
         }
     }
 }

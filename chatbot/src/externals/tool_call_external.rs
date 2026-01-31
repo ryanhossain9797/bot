@@ -2,7 +2,7 @@ use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     models::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
-        MAX_SEARCH_DESCRIPTION_LENGTH, MAX_WEB_CONTENT_LENGTH,
+        MAX_SEARCH_DESCRIPTION_LENGTH,
     },
     Env,
 };
