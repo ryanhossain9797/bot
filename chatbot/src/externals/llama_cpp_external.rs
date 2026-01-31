@@ -77,7 +77,7 @@ async fn get_response_from_llm(
 
     println!("{dynamic_prompt}");
 
-    let response = llama_cpp.get_thinking_response(&dynamic_prompt)?;
+    let response = llama_cpp.get_thinking_response(&dynamic_prompt).await?;
 
     println!("[DEBUG MAIN RESPONSE]: {response}");
 
@@ -109,7 +109,7 @@ async fn get_response_from_llm(
     input: {simple_output}
     "#
     );
-    let executor_response = llama_cpp.get_executor_response(&executor_prompt)?;
+    let executor_response = llama_cpp.get_executor_response(&executor_prompt).await?;
 
     println!("\n\n-- EXECUTOR OUTPUT --\n\n");
 
