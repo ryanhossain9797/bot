@@ -5,16 +5,16 @@ use llama_cpp_2::{
     model::{params::LlamaModelParams, LlamaModel},
 };
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
-use std::num::NonZero;
+use std::{num::NonZero, sync::Arc};
 
 use crate::agents::{Agent, EXECUTOR_AGENT_IMPL, THINKING_AGENT_IMPL};
 
 pub struct LlamaCppService {
-    thinking_model: LlamaModel,
-    executor_model: LlamaModel,
-    backend: LlamaBackend,
-    thinking_agent: Agent,
-    executor_agent: Agent,
+    thinking_model: Arc<LlamaModel>,
+    executor_model: Arc<LlamaModel>,
+    backend: Arc<LlamaBackend>,
+    thinking_agent: &'static Agent,
+    executor_agent: &'static Agent,
 }
 
 impl LlamaCppService {
@@ -65,8 +65,8 @@ impl LlamaCppService {
         let thinking_model = Self::thinking_model(&backend, &model_params)?;
         let executor_model = Self::executor_model(&backend, &model_params)?;
 
-        let thinking_agent = THINKING_AGENT_IMPL;
-        let executor_agent = EXECUTOR_AGENT_IMPL;
+        let thinking_agent = &THINKING_AGENT_IMPL;
+        let executor_agent = &EXECUTOR_AGENT_IMPL;
 
         println!("Creating session files");
         if let Err(e) = thinking_agent.create_session_file(
@@ -98,11 +98,11 @@ impl LlamaCppService {
         }
 
         Ok(Self {
-            thinking_model,
-            executor_model,
-            backend,
-            thinking_agent,
-            executor_agent,
+            thinking_model: Arc::new(thinking_model),
+            executor_model: Arc::new(executor_model),
+            backend: Arc::new(backend),
+            thinking_agent: &thinking_agent,
+            executor_agent: &executor_agent,
         })
     }
 
@@ -132,27 +132,34 @@ impl LlamaCppService {
         )
     }
 
-    pub fn get_thinking_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
-        self.thinking_agent.get_response(
-            Self::context_params(),
-            &self.thinking_model,
-            &self.backend,
-            Self::CONTEXT_SIZE.get(),
-            Self::TEMPERATURE,
-            Self::BATCH_CHUNK_SIZE,
-            dynamic_prompt,
-        )
+    pub async fn get_thinking_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
+        let model = Arc::clone(&self.thinking_model);
+        let backend = Arc::clone(&self.backend);
+
+        self.thinking_agent
+            .get_response(
+                Self::context_params(),
+                model,
+                backend,
+                Self::CONTEXT_SIZE.get(),
+                Self::TEMPERATURE,
+                Self::BATCH_CHUNK_SIZE,
+                dynamic_prompt,
+            )
+            .await
     }
 
-    pub fn get_executor_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
-        self.executor_agent.get_response(
-            Self::context_params(),
-            &self.executor_model,
-            &self.backend,
-            Self::CONTEXT_SIZE.get(),
-            Self::TEMPERATURE,
-            Self::BATCH_CHUNK_SIZE,
-            dynamic_prompt,
-        )
+    pub async fn get_executor_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
+        self.executor_agent
+            .get_response(
+                Self::context_params(),
+                Arc::clone(&self.thinking_model),
+                Arc::clone(&self.backend),
+                Self::CONTEXT_SIZE.get(),
+                Self::TEMPERATURE,
+                Self::BATCH_CHUNK_SIZE,
+                dynamic_prompt,
+            )
+            .await
     }
 }
