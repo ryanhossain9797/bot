@@ -5,7 +5,10 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use serenity::futures::TryStreamExt;
 
-use crate::{models::user::UserAction, Env};
+use crate::{
+    models::user::{InternalFunctionResultData, UserAction},
+    Env,
+};
 
 async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::Result<String> {
     let mut options = InitOptions::default();
@@ -66,6 +69,10 @@ pub async fn execute_long_recall(
         .await
         .map(|recalled| {
             format!("RecallLongTerm Results:\n{recalled}\nEnd of RecallLongTerm Results\nNote: if the recall results seem irrelevant try other functions or tools")
+        })
+        .map(|recalled| InternalFunctionResultData {
+            actual: recalled.clone(),
+            simplified: recalled,
         })
         .map_err(|e| e.to_string());
     UserAction::InternalFunctionResult(result)
