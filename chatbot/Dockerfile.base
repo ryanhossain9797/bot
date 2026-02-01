@@ -29,14 +29,3 @@ RUN apt-get update && apt-get install -y \
     vulkan-tools \
     && (getent group render || groupadd -r render) \
     && rm -rf /var/lib/apt/lists/*
-
-# Install golang, build reader, then remove golang
-RUN apt-get update && apt-get install -y \
-    golang-go \
-    git \
-    && go install github.com/mrusme/reader@latest \
-    && mkdir -p /app/resources \
-    && cp /root/go/bin/reader /app/resources/reader \
-    && apt-get remove -y golang-go git \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /root/go /usr/local/go

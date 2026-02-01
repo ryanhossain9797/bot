@@ -4,6 +4,7 @@ use crate::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
+    services::html_to_markdown::HtmlToMarkdownService,
     Env,
 };
 use serde::Deserialize;
@@ -229,37 +230,64 @@ struct ExtractedPage {
     links: Vec<(String, String)>,
 }
 
-async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
-    // Use reader CLI to convert webpage to markdown
-    // The reader binary is located at /app/resources/reader in the Docker container
-    let output = tokio::process::Command::new("/app/resources/reader")
-        .arg("-o")
-        .arg(url)
-        .output()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to execute reader command: {}", e))?;
+async fn fetch_page(
+    url: &str,
+    markdown_service: &HtmlToMarkdownService,
+) -> anyhow::Result<ExtractedPage> {
+    // Fetch HTML content from URL
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!("reader command failed: {}", stderr));
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to fetch URL: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!("HTTP error {}", status));
     }
 
-    let markdown = String::from_utf8(output.stdout)
-        .map_err(|e| anyhow::anyhow!("Failed to parse reader output: {}", e))?;
+    let final_url = response.url().to_string();
 
-    // reader outputs clean markdown, no links to extract
+    // Check content type
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if !content_type.to_lowercase().contains("text/html") {
+        return Err(anyhow::anyhow!("URL is not HTML"));
+    }
+
+    let html_body = response
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
+
+    // Convert HTML to Markdown using the service
+    let markdown = markdown_service.convert(&html_body);
+
     Ok(ExtractedPage {
-        final_url: url.to_string(),
+        final_url,
         content: markdown,
         links: Vec::new(),
     })
 }
 
-async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
+async fn fetch_url_content(
+    url: &str,
+    markdown_service: &HtmlToMarkdownService,
+) -> anyhow::Result<ToolResultData> {
     pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 10000;
     pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 300;
 
-    let extracted = fetch_page(url).await?;
+    let extracted = fetch_page(url, markdown_service).await?;
 
     let actual_content = if extracted.content.len() > MAX_ACTUAL_WEB_CONTENT_LENGTH {
         &extracted.content[..MAX_ACTUAL_WEB_CONTENT_LENGTH]
@@ -305,10 +333,12 @@ pub async fn execute_tool(
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
-            Ok(content) => UserAction::ToolResult(Ok(content)),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
+        ToolCall::VisitUrl { url } => {
+            match fetch_url_content(&url, &env.html_to_markdown_service).await {
+                Ok(content) => UserAction::ToolResult(Ok(content)),
+                Err(e) => UserAction::ToolResult(Err(e.to_string())),
+            }
+        }
     }
 }
 
@@ -373,7 +403,10 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_url_content_real() {
         // Test with example.com
-        let content = fetch_url_content("https://example.com").await.unwrap();
+        let markdown_service = HtmlToMarkdownService::new();
+        let content = fetch_url_content("https://example.com", &markdown_service)
+            .await
+            .unwrap();
         // println!("{}", content); // Keep it clean
         assert!(content.actual.contains("Example Domain"));
         // The text on example.com seems to vary or has changed.
