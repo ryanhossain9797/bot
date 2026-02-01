@@ -38,7 +38,6 @@ fn get_response_blocking(
     model: Arc<LlamaModel>,
     backend: Arc<LlamaBackend>,
     ctx_size: u32,
-    temperature: f32,
     batch_chunk_size: usize,
     dynamic_prompt: String,
 ) -> anyhow::Result<String> {
@@ -64,7 +63,7 @@ fn get_response_blocking(
     }
 
     let sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(temperature),
+        LlamaSampler::temp(agent.temperature()),
         LlamaSampler::grammar(model.as_ref(), agent.associated_grammar(), "root")
             .expect("Failed to load grammar - check GBNF syntax"),
         LlamaSampler::dist(0),
@@ -168,18 +167,25 @@ pub struct Agent {
     prompt: &'static str,
     session_path: &'static str,
     associated_grammar: &'static str,
+    temperature: f32,
 }
 impl Agent {
     pub const fn new(
         prompt: &'static str,
         session_path: &'static str,
         associated_grammar: &'static str,
+        temperature: f32,
     ) -> Self {
         Self {
             prompt,
             session_path,
             associated_grammar,
+            temperature,
         }
+    }
+
+    pub fn temperature(&self) -> f32 {
+        self.temperature
     }
 
     pub fn as_str(&self) -> &str {
@@ -342,7 +348,6 @@ impl Agent {
         model: Arc<LlamaModel>,
         backend: Arc<LlamaBackend>,
         ctx_size: u32,
-        temperature: f32,
         batch_chunk_size: usize,
         dynamic_prompt: &str,
     ) -> anyhow::Result<String> {
@@ -355,7 +360,6 @@ impl Agent {
                 Arc::clone(&model),
                 Arc::clone(&backend),
                 ctx_size,
-                temperature,
                 batch_chunk_size,
                 dynamic_prompt,
             )

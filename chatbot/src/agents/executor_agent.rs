@@ -57,4 +57,7 @@ const SESSION_PATH: &'static str = "./resources/executor_agent.session";
 
 const ASSOCIATED_GRAMMAR: &'static str = include_str!("../../grammars/execution_response.gbnf");
 
-pub const EXECUTOR_AGENT_IMPL: Agent = Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR);
+const TEMPERATURE: f32 = 0.1;
+
+pub const EXECUTOR_AGENT_IMPL: Agent =
+    Agent::new(BASE_PROMPT, SESSION_PATH, ASSOCIATED_GRAMMAR, TEMPERATURE);
