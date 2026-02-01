@@ -373,10 +373,10 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
         }
 
         let no_more_urls =
-            "\nDon't visit any further urls if you have sufficient info for an answer";
+            format!("\nI should not visit {url} again as I have already seen its content");
 
-        actual.push_str(no_more_urls);
-        simplified.push_str(no_more_urls);
+        actual.push_str(&no_more_urls);
+        simplified.push_str(&no_more_urls);
     }
 
     Ok(ToolResultData { actual, simplified })
@@ -393,14 +393,14 @@ pub async fn execute_tool(
             Ok(weather_info) => UserAction::ToolResult(Ok(weather_info)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
-            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
         ToolCall::MathCalculation { operations } => {
             let result = execute_math(operations).await;
             UserAction::ToolResult(Ok(result))
         }
+        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
+            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
         ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),

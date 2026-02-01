@@ -125,8 +125,8 @@ pub enum MathOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCall {
     GetWeather { location: String },
-    WebSearch { query: String },
     MathCalculation { operations: Vec<MathOperation> },
+    WebSearch { query: String },
     VisitUrl { url: String },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,16 +158,16 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::UserMessage(m) => format!("<USER>\n{m}"),
+                LLMInput::UserMessage(m) => format!("User:\n{m}"),
                 LLMInput::InternalFunctionResult(InternalFunctionResultData {
                     simplified, ..
                 })
                 | LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
-                    format!("<SYSTEM>\n{simplified}")
+                    format!("Assistant:\n{simplified}")
                 }
             },
             HistoryEntry::Output(LLMResponse { simple_output, .. }) => {
-                format!("<AGENT>\n{simple_output}")
+                format!("Assistant:\n{simple_output}")
             }
         }
     }

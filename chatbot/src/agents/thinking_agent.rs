@@ -1,7 +1,8 @@
 use super::Agent;
 
 const BASE_PROMPT: &'static str = r#"
-system\nYour name is Terminal Alpha Beta
+System:
+Your name is Terminal Alpha Beta
 You are an agent that can be a general helpful assistant
 
 Your response is meant to be in a simple structured format
