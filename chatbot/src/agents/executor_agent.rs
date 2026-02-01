@@ -1,7 +1,8 @@
 use super::Agent;
 
 const BASE_PROMPT: &'static str = r#"
-system\nYou are an agent dedicated to mapping the high level unstructured instructions from a thinking agent to  a provided structured output
+System:
+You are an agent dedicated to mapping the high level unstructured instructions from a thinking agent to  a provided structured output
 
 The structure is JSON, The below are the rust types for that you need to make the json for.
 

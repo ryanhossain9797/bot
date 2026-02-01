@@ -18,10 +18,10 @@ use std::{
 fn format_input(input: &LLMInput) -> String {
     match input {
         LLMInput::UserMessage(msg) => {
-            format!("<USER>\n{msg}")
+            format!("User:\n{msg}")
         }
         LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. })
-        | LLMInput::ToolResult(ToolResultData { actual, .. }) => format!("<SYSTEM>\n{actual}"),
+        | LLMInput::ToolResult(ToolResultData { actual, .. }) => format!("Assistant:\n{actual}"),
     }
 }
 
@@ -45,13 +45,14 @@ fn build_dynamic_prompt(
     format!(
         r#"
 
-Previous thoughts:
+Your previous thoughts were
 {prev_thoughts}
 
-Conversation:
+Conversation
+
 {conversation}
 
-<AGENT>
+Assistant:
     "#
     )
 }
