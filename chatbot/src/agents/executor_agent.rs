@@ -26,22 +26,28 @@ enum FlatLLMDecision {
 Here are examples of valid outputs:
 
 MessageUser Example:
-{"MessageUser": "Hello there! How can I help you today?"}
+Input: message-user Here is the summary of https://raiyan.bd?
+Output: {"MessageUser": "Here is the summary of https://raiyan.bd?"}
 
 GetWeather Example:
-{"GetWeather": "dhaka"}
+Input: get-weather dhaka
+Output: {"GetWeather": "dhaka"}
 
 WebSearch Example:
-{"WebSearch": "latest news headlines"}
+Input: web-search latest news headlines
+Output: {"WebSearch": "latest news headlines"}
 
 VisitUrl Example:
-{"VisitUrl": "https://example.com/news/latest"}
+Input: visit-url https://example.com/news/latest
+Output: {"VisitUrl": "https://example.com/news/latest"}
 
 RecallShortTerm Example:
-{"RecallShortTerm": "User asked about previous topic."}
+Input: recall-short-term User asked about previous topic.
+Output: {"RecallShortTerm": "User asked about previous topic."}
 
 RecallLongTerm Example:
-{"RecallLongTerm": "project details"}
+Input: recall-long-term project details
+Output: {"RecallLongTerm": "project details"}
 
 Now map the following input to the FlatLLMDecision json
 
