@@ -6,9 +6,7 @@ use crate::{
     },
     Env,
 };
-use scraper::{Html, Selector};
 use serde::Deserialize;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Execute a list of math operations and return the results
@@ -232,110 +230,28 @@ struct ExtractedPage {
 }
 
 async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-        .timeout(std::time::Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()?;
-
-    let response = client
-        .get(url)
-        .send()
+    // Use reader CLI to convert webpage to markdown
+    // The reader binary is located at /app/resources/reader in the Docker container
+    let output = tokio::process::Command::new("/app/resources/reader")
+        .arg("-o")
+        .arg(url)
+        .output()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to fetch URL: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to execute reader command: {}", e))?;
 
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!("HTTP error {}", status));
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("reader command failed: {}", stderr));
     }
 
-    let final_url = response.url().to_string();
+    let markdown = String::from_utf8(output.stdout)
+        .map_err(|e| anyhow::anyhow!("Failed to parse reader output: {}", e))?;
 
-    // Check content type
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !content_type.to_lowercase().contains("text/html") {
-        return Err(anyhow::anyhow!("URL is not HTML"));
-    }
-
-    let html_body = response
-        .text()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
-
-    // println!("DEBUG: Raw HTML fetched: {}", html_body);
-
-    // Readability extraction
-    let mut cursor = std::io::Cursor::new(html_body.as_bytes());
-    let url_obj = reqwest::Url::parse(&final_url)
-        .map_err(|e| anyhow::anyhow!("Failed to parse final URL: {}", e))?;
-
-    let product = readability::extractor::extract(&mut cursor, &url_obj)
-        .map_err(|e| anyhow::anyhow!("Readability extraction failed: {}", e))?;
-
-    let content_html = product.content;
-    let page_title = product.title;
-
-    // Scraper for text and link extraction
-    let fragment = Html::parse_fragment(&content_html);
-
-    // Extract text
-    let mut text_parts = Vec::new();
-
-    // Add title first if present
-    if !page_title.is_empty() {
-        text_parts.push(page_title);
-    }
-
-    // Select block elements to preserve some structure
-    let block_selector = Selector::parse("p, h1, h2, h3, h4, h5, h6, li, div").unwrap();
-
-    for element in fragment.select(&block_selector) {
-        let text = element.text().collect::<Vec<_>>().join(" ");
-        let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !cleaned.is_empty() {
-            text_parts.push(cleaned);
-        }
-    }
-
-    // Fallback if no blocks found (unlikely with readability)
-    if text_parts.is_empty() {
-        let text = fragment.root_element().text().collect::<Vec<_>>().join(" ");
-        let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        if !cleaned.is_empty() {
-            text_parts.push(cleaned);
-        }
-    }
-
-    let clean_text = text_parts.join("\n\n");
-
-    // Link extraction
-    let link_selector = Selector::parse("a").unwrap();
-    let mut links = Vec::new();
-    let mut seen_links = HashSet::new();
-
-    for element in fragment.select(&link_selector) {
-        if let Some(href) = element.value().attr("href") {
-            let text = element.text().collect::<Vec<_>>().join(" ");
-            let text_trimmed = text.trim();
-
-            if !text_trimmed.is_empty() && !href.is_empty() {
-                // Deduplicate by href
-                if seen_links.insert(href.to_string()) {
-                    links.push((text_trimmed.to_string(), href.to_string()));
-                }
-            }
-        }
-    }
-
+    // reader outputs clean markdown, no links to extract
     Ok(ExtractedPage {
-        final_url,
-        content: clean_text,
-        links,
+        final_url: url.to_string(),
+        content: markdown,
+        links: Vec::new(),
     })
 }
 
@@ -362,22 +278,10 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     actual.push_str(actual_content);
     simplified.push_str(simplified_content);
 
-    if !extracted.links.is_empty() {
-        actual.push_str("\nLinks:\n");
-        simplified.push_str("\nLinks:\n");
-        for (index, (text, href)) in extracted.links.iter().enumerate().take(10) {
-            actual.push_str(&format!("- {} {}\n", text, href));
-            if index < 3 {
-                simplified.push_str(&format!("- {} {}\n", text, href));
-            }
-        }
-
-        let no_more_urls =
-            format!("\nI should not visit {url} again as I have already seen its content");
-
-        actual.push_str(&no_more_urls);
-        simplified.push_str(&no_more_urls);
-    }
+    let no_more_urls =
+        format!("\nI should not visit {url} again as I have already seen its content");
+    actual.push_str(&no_more_urls);
+    simplified.push_str(&no_more_urls);
 
     Ok(ToolResultData { actual, simplified })
 }
