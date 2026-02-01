@@ -35,7 +35,8 @@ RUN apt-get update && apt-get install -y \
     golang-go \
     git \
     && go install github.com/mrusme/reader@latest \
-    && cp /root/go/bin/reader /usr/local/bin/reader \
+    && mkdir -p /app/resources \
+    && cp /root/go/bin/reader /app/resources/reader \
     && apt-get remove -y golang-go git \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* /root/go /usr/local/go
