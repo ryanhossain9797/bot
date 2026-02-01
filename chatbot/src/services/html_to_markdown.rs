@@ -1,11 +1,16 @@
 //! HTML to Markdown conversion service
-//! Based on https://github.com/0yik/url2md/blob/main/src/converter/markdown_converter.rs
+//!
+//! This implementation is based on the url2md project by 0yik:
+//! <https://github.com/0yik/url2md/blob/main/src/converter/markdown_converter.rs>
+//!
+//! Licensed under the MIT License - Copyright (c) 2024 0yik
+//! See the original repository for full license details.
 
 use scraper::{Html, Selector};
 
-pub struct MarkdownService;
+pub struct HtmlToMarkdownService;
 
-impl MarkdownService {
+impl HtmlToMarkdownService {
     pub fn new() -> Self {
         Self
     }
@@ -254,7 +259,7 @@ impl MarkdownService {
     }
 }
 
-impl Default for MarkdownService {
+impl Default for HtmlToMarkdownService {
     fn default() -> Self {
         Self::new()
     }
@@ -266,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_basic_conversion() {
-        let service = MarkdownService::new();
+        let service = HtmlToMarkdownService::new();
         let html = "<h1>Title</h1><p>This is a paragraph.</p>";
         let markdown = service.convert(html);
         assert!(markdown.contains("# Title"));
@@ -275,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_heading_conversion() {
-        let service = MarkdownService::new();
+        let service = HtmlToMarkdownService::new();
         let html = "<h1>H1</h1><h2>H2</h2><h3>H3</h3>";
         let markdown = service.convert(html);
         assert!(markdown.contains("# H1"));
@@ -285,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_list_conversion() {
-        let service = MarkdownService::new();
+        let service = HtmlToMarkdownService::new();
         let html = "<ul><li>Item 1</li><li>Item 2</li></ul>";
         let markdown = service.convert(html);
         assert!(markdown.contains("- Item 1"));
@@ -294,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_link_conversion() {
-        let service = MarkdownService::new();
+        let service = HtmlToMarkdownService::new();
         let html = r#"<a href="https://example.com">Link text</a>"#;
         let markdown = service.convert(html);
         assert!(markdown.contains("[Link text](https://example.com)"));
@@ -302,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_bold_and_italic() {
-        let service = MarkdownService::new();
+        let service = HtmlToMarkdownService::new();
         let html = "<strong>Bold</strong> and <em>italic</em>";
         let markdown = service.convert(html);
         assert!(markdown.contains("**Bold**"));

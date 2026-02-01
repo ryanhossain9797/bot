@@ -4,7 +4,7 @@ use crate::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
-    services::markdown_service::MarkdownService,
+    services::html_to_markdown::HtmlToMarkdownService,
     Env,
 };
 use serde::Deserialize;
@@ -232,7 +232,7 @@ struct ExtractedPage {
 
 async fn fetch_page(
     url: &str,
-    markdown_service: &MarkdownService,
+    markdown_service: &HtmlToMarkdownService,
 ) -> anyhow::Result<ExtractedPage> {
     // Fetch HTML content from URL
     let client = reqwest::Client::builder()
@@ -282,7 +282,7 @@ async fn fetch_page(
 
 async fn fetch_url_content(
     url: &str,
-    markdown_service: &MarkdownService,
+    markdown_service: &HtmlToMarkdownService,
 ) -> anyhow::Result<ToolResultData> {
     pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 10000;
     pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 300;
@@ -333,10 +333,12 @@ pub async fn execute_tool(
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::VisitUrl { url } => match fetch_url_content(&url, &env.markdown_service).await {
-            Ok(content) => UserAction::ToolResult(Ok(content)),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
+        ToolCall::VisitUrl { url } => {
+            match fetch_url_content(&url, &env.html_to_markdown_service).await {
+                Ok(content) => UserAction::ToolResult(Ok(content)),
+                Err(e) => UserAction::ToolResult(Err(e.to_string())),
+            }
+        }
     }
 }
 
@@ -401,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_url_content_real() {
         // Test with example.com
-        let markdown_service = MarkdownService::new();
+        let markdown_service = HtmlToMarkdownService::new();
         let content = fetch_url_content("https://example.com", &markdown_service)
             .await
             .unwrap();
