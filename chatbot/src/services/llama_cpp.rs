@@ -21,7 +21,7 @@ impl LlamaCppService {
     const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(32768).unwrap();
     const BATCH_CHUNK_SIZE: usize = 2048;
     const MAX_GENERATION_TOKENS: usize = 8192;
-    const TEMPERATURE: f32 = 0.25;
+    const TEMPERATURE: f32 = 0.5;
 
     pub const fn get_max_generation_tokens() -> usize {
         Self::MAX_GENERATION_TOKENS

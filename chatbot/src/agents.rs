@@ -68,6 +68,7 @@ fn get_response_blocking(
         LlamaSampler::grammar(model.as_ref(), agent.associated_grammar(), "root")
             .expect("Failed to load grammar - check GBNF syntax"),
         LlamaSampler::dist(0),
+        LlamaSampler::penalties(64, 1.1, 0.0, 0.0),
     ]);
 
     let initial_prompt_state = GenerationState {
