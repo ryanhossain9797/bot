@@ -12,6 +12,7 @@ use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use services::llama_cpp::LlamaCppService;
+use services::markdown_service::MarkdownService;
 // use services::ollama::OllamaService;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -24,7 +25,8 @@ struct Env {
     bot_singleton_handle: BotHandle,
     lance_service: Arc<LanceService>,
     llama_cpp: Arc<LlamaCppService>, // Disconnected - base image doesn't have GGUF
-                                     // ollama: Arc<OllamaService>,
+    markdown_service: Arc<MarkdownService>,
+    // ollama: Arc<OllamaService>,
 }
 
 // ENV needs to be initialized asynchronously, so we use OnceCell
@@ -43,6 +45,7 @@ async fn init_env() -> anyhow::Result<Arc<Env>> {
         bot_singleton_handle: BotHandle::new(),
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),
+        markdown_service: Arc::new(MarkdownService::new()),
         // ollama: Arc::new(ollama_service),
     }))
 }
