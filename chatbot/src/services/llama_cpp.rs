@@ -21,7 +21,6 @@ impl LlamaCppService {
     const CONTEXT_SIZE: NonZero<u32> = NonZero::<u32>::new(32768).unwrap();
     const BATCH_CHUNK_SIZE: usize = 2048;
     const MAX_GENERATION_TOKENS: usize = 8192;
-    const TEMPERATURE: f32 = 0.5;
 
     pub const fn get_max_generation_tokens() -> usize {
         Self::MAX_GENERATION_TOKENS
@@ -139,7 +138,6 @@ impl LlamaCppService {
                 Arc::clone(&self.thinking_model),
                 Arc::clone(&self.backend),
                 Self::CONTEXT_SIZE.get(),
-                Self::TEMPERATURE,
                 Self::BATCH_CHUNK_SIZE,
                 dynamic_prompt,
             )
@@ -153,7 +151,6 @@ impl LlamaCppService {
                 Arc::clone(&self.executor_model),
                 Arc::clone(&self.backend),
                 Self::CONTEXT_SIZE.get(),
-                Self::TEMPERATURE,
                 Self::BATCH_CHUNK_SIZE,
                 dynamic_prompt,
             )
