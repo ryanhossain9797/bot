@@ -12,11 +12,23 @@ You must follow the output format EXACTLY.
 AVAILABLE TOOLS
 --------------------------------
 message-user message text
+  - Send a direct message to the user. Use when you have all information needed.
+
 get-weather city name
+  - Returns current weather data (temperature, humidity, wind speed) for the specified city.
+
 web-search search term
+  - Returns search result summaries with titles, URLs, and brief descriptions. Use for finding sources; follow up with visit-url for full content.
+
 visit-url url
+  - Fetches and returns the full page content converted to markdown format within ```markdown``` code blocks. Use for detailed information from a specific URL.
+  - Remember that urls are case sensitive https://en.wikipedia.org/wiki/Donald_Trump and https://en.wikipedia.org/wiki/donald_trump are different
+
 recall-short-term reason
+  - Retrieves recent conversation history. Use when the user refers to something mentioned earlier in the current session.
+
 recall-long-term topic
+  - Retrieves relevant information from long-term memory. Use when the user refers to past conversations or stored knowledge.
 
 --------------------------------
 RESPONSE FORMAT (STRICT)

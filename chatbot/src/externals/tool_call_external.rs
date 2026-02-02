@@ -212,13 +212,19 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
         false => (formatted_results.as_slice(), &[][..]),
     };
 
-    let simplified = format!(
+    let mut simplified = format!(
         "WEB SEARCH TOOL RESULT: Search Results for {}:\n{}",
         original_query,
         primary.join("\n")
     );
 
-    let actual = format!("{simplified}\n{}", secondary.join("\n"));
+    let mut actual = format!("{simplified}\n{}", secondary.join("\n"));
+
+    let subtext =
+        "\n\n- Visit one of these urls if relevant\n- Don't visit previously visited urls";
+
+    simplified.push_str(subtext);
+    actual.push_str(subtext);
 
     Ok(ToolResultData { actual, simplified })
 }
@@ -270,8 +276,8 @@ async fn fetch_page(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    // Convert HTML to Markdown using the service
-    let markdown = markdown_service.convert(&html_body);
+    // Convert HTML to Markdown using the service, passing the actual URL
+    let markdown = markdown_service.convert(&html_body, &final_url);
 
     Ok(ExtractedPage {
         final_url,
@@ -301,13 +307,16 @@ async fn fetch_url_content(
         &extracted.content
     };
 
-    let mut actual: String = format!("VISIT URL TOOL RESULT {url}: \n");
+    let mut actual: String = format!("VISIT URL TOOL RESULT {url}:\n\n```markdown\n");
     let mut simplified = actual.clone();
+
     actual.push_str(actual_content);
     simplified.push_str(simplified_content);
 
-    let no_more_urls =
-        format!("\nI should not visit {url} again as I have already seen its content");
+    actual.push_str("\n```\n\n");
+    simplified.push_str("\n```\n\n");
+
+    let no_more_urls = format!("I should not visit {url} again as I have already seen its content");
     actual.push_str(&no_more_urls);
     simplified.push_str(&no_more_urls);
 
