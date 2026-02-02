@@ -34,3 +34,7 @@ run_local tag="latest":
         --group-add render \
         --restart unless-stopped \
         zireael9797/bot:{{tag}}
+
+deploy_local:
+    just build_local
+    just run_local
