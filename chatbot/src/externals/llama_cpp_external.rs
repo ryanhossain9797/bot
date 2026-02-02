@@ -97,18 +97,9 @@ async fn get_response_from_llm(
 
     let simple_output = after.trim().to_string();
 
-    println!("\n\n-- THINKER OUTPUT --\n\n");
-
-    println!("T: {thoughts}\nO: {simple_output}");
-
     let executor_prompt = format!(
         r#"
-    system
-
-    if the input is message-user just generate MessageUser with the provided text
-    for all other input run the tool with the provided parameters
-
-    input: {simple_output}
+    {simple_output}
     "#
     );
     let executor_response = llama_cpp.get_executor_response(&executor_prompt).await?;

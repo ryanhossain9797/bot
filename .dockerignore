@@ -26,3 +26,6 @@ models/
 
 # Debug files
 flycheck0/
+
+# Session files (runtime artifacts, should be generated fresh)
+*.session
