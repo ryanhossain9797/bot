@@ -35,7 +35,7 @@ static ENV: OnceCell<Arc<Env>> = OnceCell::new();
 async fn init_env() -> anyhow::Result<Arc<Env>> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
-    let llama_cpp_service = LlamaCppService::new()?;
+    let llama_cpp_service = LlamaCppService::new().await?;
     let lance_service = LanceService::new().await;
 
     // let ollama_service = OllamaService::new().await?;

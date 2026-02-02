@@ -6,6 +6,7 @@ use llama_cpp_2::{
 };
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::{num::NonZero, sync::Arc};
+use tokio::task::spawn_blocking;
 
 use crate::agents::{Agent, EXECUTOR_AGENT_IMPL, THINKING_AGENT_IMPL};
 
@@ -55,26 +56,60 @@ impl LlamaCppService {
         )?)
     }
 
-    pub fn new() -> anyhow::Result<Self> {
+    pub async fn new() -> anyhow::Result<Self> {
         send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
 
         let backend = LlamaBackend::init()?;
         let model_params = LlamaModelParams::default();
 
-        let thinking_model = Self::thinking_model(&backend, &model_params)?;
-        let executor_model = Self::executor_model(&backend, &model_params)?;
-
         let thinking_agent = &THINKING_AGENT_IMPL;
         let executor_agent = &EXECUTOR_AGENT_IMPL;
 
-        println!("Creating session files");
-        if let Err(e) = thinking_agent.create_session_file(
-            &thinking_model,
-            &backend,
-            Self::context_params(),
-            Self::new_batch(),
-            Self::BATCH_CHUNK_SIZE,
-        ) {
+        let backend_arc = Arc::new(backend);
+
+        println!("Creating session files in parallel");
+
+        // Spawn both session file creation tasks in parallel using spawn_blocking
+        let thinking_task = {
+            let backend = Arc::clone(&backend_arc);
+            spawn_blocking(move || {
+                let model = Arc::new(Self::thinking_model(backend.as_ref(), &model_params)?);
+                (
+                    model,
+                    thinking_agent.create_session_file(
+                        &model,
+                        &backend,
+                        Self::context_params(),
+                        Self::new_batch(),
+                        Self::BATCH_CHUNK_SIZE,
+                    ),
+                )
+            })
+        };
+
+        let executor_task = {
+            let backend = Arc::clone(&backend_arc);
+            spawn_blocking(move || {
+                let model = Arc::new(Self::executor_model(&backend, &model_params)?);
+                (
+                    model,
+                    executor_agent.create_session_file(
+                        &model,
+                        &backend,
+                        Self::context_params(),
+                        Self::new_batch(),
+                        Self::BATCH_CHUNK_SIZE,
+                    ),
+                )
+            })
+        };
+
+        // Wait for both tasks to complete using try_join!
+        let ((thinking_model, thinking_result), (executor_model, executor_result)) =
+            tokio::try_join!(thinking_task, executor_task)?;
+
+        // Handle results
+        if let Err(e) = thinking_result {
             eprintln!(
                 "Warning: Failed to create session file for thinking agent: {}",
                 e
@@ -82,13 +117,7 @@ impl LlamaCppService {
             eprintln!("The bot will continue without session file caching.");
         }
 
-        if let Err(e) = executor_agent.create_session_file(
-            &executor_model,
-            &backend,
-            Self::context_params(),
-            Self::new_batch(),
-            Self::BATCH_CHUNK_SIZE,
-        ) {
+        if let Err(e) = executor_result {
             eprintln!(
                 "Warning: Failed to create session file for executor agent: {}",
                 e
@@ -97,9 +126,9 @@ impl LlamaCppService {
         }
 
         Ok(Self {
-            thinking_model: Arc::new(thinking_model),
-            executor_model: Arc::new(executor_model),
-            backend: Arc::new(backend),
+            thinking_model,
+            executor_model,
+            backend: backend_arc,
             thinking_agent: &thinking_agent,
             executor_agent: &executor_agent,
         })
