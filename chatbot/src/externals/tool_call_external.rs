@@ -270,8 +270,8 @@ async fn fetch_page(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    // Convert HTML to Markdown using the service
-    let markdown = markdown_service.convert(&html_body);
+    // Convert HTML to Markdown using the service, passing the actual URL
+    let markdown = markdown_service.convert(&html_body, &final_url);
 
     Ok(ExtractedPage {
         final_url,
