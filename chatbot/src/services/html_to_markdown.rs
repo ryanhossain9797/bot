@@ -6,7 +6,10 @@
 //! Licensed under the MIT License - Copyright (c) 2024 0yik
 //! See the original repository for full license details.
 
+use regex::Regex;
 use scraper::{Html, Selector};
+
+static MULTIPLE_NEWLINES: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
 
 pub struct HtmlToMarkdownService;
 
@@ -249,10 +252,9 @@ impl HtmlToMarkdownService {
     fn clean_markdown(&self, markdown: &str) -> String {
         let mut result = markdown.to_string();
 
-        // Remove excessive newlines
-        while result.contains("\n\n\n") {
-            result = result.replace("\n\n\n", "\n\n");
-        }
+        // Remove excessive newlines (normalize 3+ newlines to double newline)
+        let re = MULTIPLE_NEWLINES.get_or_init(|| Regex::new(r"\n{3,}").unwrap());
+        result = re.replace_all(&result, "\n\n").to_string();
 
         // Trim whitespace
         result.trim().to_string()

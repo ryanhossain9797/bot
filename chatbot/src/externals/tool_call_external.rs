@@ -301,13 +301,16 @@ async fn fetch_url_content(
         &extracted.content
     };
 
-    let mut actual: String = format!("VISIT URL TOOL RESULT {url}: \n");
+    let mut actual: String = format!("VISIT URL TOOL RESULT {url}:\n\n```markdown\n");
     let mut simplified = actual.clone();
+
     actual.push_str(actual_content);
     simplified.push_str(simplified_content);
 
-    let no_more_urls =
-        format!("\nI should not visit {url} again as I have already seen its content");
+    actual.push_str("\n```\n\n");
+    simplified.push_str("\n```\n\n");
+
+    let no_more_urls = format!("I should not visit {url} again as I have already seen its content");
     actual.push_str(&no_more_urls);
     simplified.push_str(&no_more_urls);
 
