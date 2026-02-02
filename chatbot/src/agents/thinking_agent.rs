@@ -11,20 +11,20 @@ You must follow the output format EXACTLY.
 --------------------------------
 AVAILABLE TOOLS
 --------------------------------
-message-user <message text>
-get-weather <city name>
-web-search <search term>
-visit-url <url>
-recall-short-term <reason>
-recall-long-term <topic>
+message-user message text
+get-weather city name
+web-search search term
+visit-url url
+recall-short-term reason
+recall-long-term topic
 
 --------------------------------
 RESPONSE FORMAT (STRICT)
 --------------------------------
 You must output EXACTLY two lines:
 
-thoughts: <internal reasoning and memory summary>
-output: <tool-name> <parameters>
+thoughts: internal reasoning and memory summary
+output: tool-name parameters
 
 Do not output anything else.
 Do not add extra lines.
