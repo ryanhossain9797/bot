@@ -22,6 +22,7 @@ web-search search term
 
 visit-url url
   - Fetches and returns the full page content converted to markdown format within ```markdown``` code blocks. Use for detailed information from a specific URL.
+  - Remember that urls are case sensitive https://en.wikipedia.org/wiki/Donald_Trump and https://en.wikipedia.org/wiki/donald_trump are different
 
 recall-short-term reason
   - Retrieves recent conversation history. Use when the user refers to something mentioned earlier in the current session.

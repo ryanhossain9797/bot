@@ -212,13 +212,19 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
         false => (formatted_results.as_slice(), &[][..]),
     };
 
-    let simplified = format!(
+    let mut simplified = format!(
         "WEB SEARCH TOOL RESULT: Search Results for {}:\n{}",
         original_query,
         primary.join("\n")
     );
 
-    let actual = format!("{simplified}\n{}", secondary.join("\n"));
+    let mut actual = format!("{simplified}\n{}", secondary.join("\n"));
+
+    let subtext =
+        "\n\n- Visit one of these urls if relevant\n- Don't visit previously visited urls";
+
+    simplified.push_str(subtext);
+    actual.push_str(subtext);
 
     Ok(ToolResultData { actual, simplified })
 }
