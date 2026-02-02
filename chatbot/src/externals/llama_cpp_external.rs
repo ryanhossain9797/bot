@@ -99,8 +99,8 @@ async fn get_response_from_llm(
 
     let executor_prompt = format!(
         r#"
-    {simple_output}
-    "#
+    Input: {simple_output}
+    Output:"#
     );
     let executor_response = llama_cpp.get_executor_response(&executor_prompt).await?;
 
