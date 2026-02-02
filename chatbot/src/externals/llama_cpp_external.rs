@@ -29,7 +29,7 @@ fn build_dynamic_prompt(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
 ) -> String {
-    let (prev_thoughts, history) = maybe_recent_conversation
+    let (_prev_thoughts, history) = maybe_recent_conversation
         .map(|rc| (rc.thoughts, rc.history))
         .unwrap_or_else(|| ("NULL".to_string(), Vec::new()));
 
@@ -42,11 +42,12 @@ fn build_dynamic_prompt(
         .collect::<Vec<_>>()
         .join("\n\n");
 
+    // Add the below bit back in if needed
+    // Your previous thoughts were
+    // {prev_thoughts}
+
     format!(
         r#"
-
-Your previous thoughts were
-{prev_thoughts}
 
 Conversation
 
