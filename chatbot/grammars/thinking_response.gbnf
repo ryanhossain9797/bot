@@ -1,4 +1,4 @@
-root ::= thoughts-line newline output-line newline
+root ::= thoughts-line newline output-line
 
 thoughts-line ::= "thoughts:" ws free-text
 output-line ::= "output:" ws output-kind ws free-text

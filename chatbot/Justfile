@@ -35,6 +35,9 @@ run_local tag="latest":
         --restart unless-stopped \
         zireael9797/bot:{{tag}}
 
-deploy_local:
-    just build_local
-    just run_local
+# Build and run the locally built image with GPU support
+deploy_local tag="latest":
+    #!/usr/bin/env bash
+    set -euxo pipefail
+    just build_local {{tag}}
+    just run_local {{tag}}

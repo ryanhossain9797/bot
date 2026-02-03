@@ -6,9 +6,9 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Copy model file (large, rarely changes)
-COPY models/GLM-4-32B-0414-Q8_0-matteov2.gguf /app/models/GLM-4-32B-0414-Q8_0-matteov2.gguf
+COPY models/helcyon_mercury_v3.0-Q6_K.gguf /app/models/helcyon_mercury_v3.0-Q6_K.gguf
 COPY models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf /app/models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
-ENV THINKING_MODEL_PATH=/app/models/GLM-4-32B-0414-Q8_0-matteov2.gguf
+ENV THINKING_MODEL_PATH=/app/models/helcyon_mercury_v3.0-Q6_K.gguf
 ENV EXECUTOR_MODEL_PATH=/app/models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
 
 # Copy FastEmbed cache
