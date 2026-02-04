@@ -5,7 +5,6 @@ use llama_cpp_2::{
     model::{params::LlamaModelParams, LlamaModel},
 };
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
-use serenity::futures::executor;
 use std::{num::NonZero, sync::Arc};
 use tokio::task::{spawn_blocking, JoinHandle};
 
@@ -125,20 +124,6 @@ impl LlamaCppService {
 
     pub fn new_batch() -> LlamaBatch<'static> {
         LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1)
-    }
-
-    fn create_thinking_agent_session_file(
-        model: &LlamaModel,
-        backend: &LlamaBackend,
-        agent: Agent,
-    ) -> anyhow::Result<()> {
-        agent.create_session_file(
-            model,
-            backend,
-            Self::context_params(),
-            Self::new_batch(),
-            Self::BATCH_CHUNK_SIZE,
-        )
     }
 
     pub async fn get_thinking_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {

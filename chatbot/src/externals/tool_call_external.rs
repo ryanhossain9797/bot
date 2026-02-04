@@ -229,11 +229,11 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct ExtractedPage {
     final_url: String,
     content: String,
-    links: Vec<(String, String)>,
 }
 
 async fn fetch_page(
@@ -282,7 +282,6 @@ async fn fetch_page(
     Ok(ExtractedPage {
         final_url,
         content: markdown,
-        links: Vec::new(),
     })
 }
 

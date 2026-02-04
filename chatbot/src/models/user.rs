@@ -100,20 +100,6 @@ pub enum LLMInput {
     ToolResult(ToolResultData),
 }
 
-impl LLMInput {
-    pub fn format(&self) -> String {
-        match self {
-            LLMInput::UserMessage(msg) => format!("user: {msg}"),
-            LLMInput::InternalFunctionResult(InternalFunctionResultData { simplified, .. }) => {
-                format!("internal_function_result: {simplified}")
-            }
-            LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
-                format!("tool_result: {simplified}")
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MathOperation {
     Add(f32, f32),

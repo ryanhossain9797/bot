@@ -1,7 +1,7 @@
 use crate::{
     models::user::{
-        FunctionCall, HistoryEntry, InternalFunctionResultData, LLMDecisionType, LLMInput,
-        LLMResponse, RecentConversation, ToolCall, ToolResultData, UserAction,
+        FunctionCall, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse,
+        RecentConversation, ToolCall, ToolResultData, UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
