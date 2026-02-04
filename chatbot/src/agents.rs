@@ -192,10 +192,6 @@ impl Agent {
         self.prompt
     }
 
-    pub fn session_path(&self) -> &str {
-        self.session_path
-    }
-
     pub fn associated_grammar(&self) -> &str {
         self.associated_grammar
     }

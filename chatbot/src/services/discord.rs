@@ -3,7 +3,7 @@ use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    models::user::{User, UserAction, UserChannel, UserId},
+    models::user::{UserAction, UserChannel, UserId},
     state_machines::user_state_machine::USER_STATE_MACHINE,
 };
 
@@ -79,6 +79,6 @@ async fn filter(message: &DMessage, ctx: &Context) -> Option<(String, bool)> {
     //-----------------------check if message is from a group chat.......
     Some((
         msg,
-        message.is_private() || message.content.contains(handle.as_str()),
+        message.guild_id.is_none() || message.content.contains(handle.as_str()),
     ))
 }

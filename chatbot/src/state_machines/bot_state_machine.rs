@@ -8,6 +8,7 @@ impl Bot {
     }
 }
 
+#[allow(dead_code)]
 impl BotHandle {
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::channel(8);
@@ -22,7 +23,7 @@ impl BotHandle {
     }
 }
 
-async fn bot_transition(bot: &mut Bot, action: BotAction) -> anyhow::Result<()> {
+async fn bot_transition(_bot: &mut Bot, action: BotAction) -> anyhow::Result<()> {
     match action {
         BotAction::Ping { message } => {
             let response = format!("Pong: {message}");

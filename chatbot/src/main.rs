@@ -19,6 +19,7 @@ use tokio::task::JoinSet;
 
 use crate::services::lance_db::LanceService;
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct Env {
     discord_http: Arc<Http>,
