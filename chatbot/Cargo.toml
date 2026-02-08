@@ -27,6 +27,7 @@ regex = "1.12"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2.1"
+rs-trafilatura = { version="0.1", git = "https://github.com/Murrough-Foley/rs-trafilatura" }
 scraper = "0.25"
 readability = "0.3.0"
 lancedb = { version = "=0.23.1", default-features = false }

@@ -4,9 +4,9 @@ use crate::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
-    services::html_to_markdown::HtmlToMarkdownService,
     Env,
 };
+use rs_trafilatura::extract;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -230,10 +230,7 @@ struct ExtractedPage {
     content: String,
 }
 
-async fn fetch_page(
-    url: &str,
-    markdown_service: &HtmlToMarkdownService,
-) -> anyhow::Result<ExtractedPage> {
+async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
     // Fetch HTML content from URL
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
@@ -270,23 +267,19 @@ async fn fetch_page(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    // Convert HTML to Markdown using the service
-    let markdown = markdown_service.convert(&html_body);
+    // // Convert HTML to Markdown using the service
+    // let markdown = markdown_service.convert(&html_body);
 
-    Ok(ExtractedPage {
-        final_url,
-        content: markdown,
-    })
+    let content = extract(&html_body)?.content_text;
+
+    Ok(ExtractedPage { final_url, content })
 }
 
-async fn fetch_url_content(
-    url: &str,
-    markdown_service: &HtmlToMarkdownService,
-) -> anyhow::Result<ToolResultData> {
+async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 10000;
     pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 300;
 
-    let extracted = fetch_page(url, markdown_service).await?;
+    let extracted = fetch_page(url).await?;
 
     let actual_content = if extracted.content.len() > MAX_ACTUAL_WEB_CONTENT_LENGTH {
         &extracted.content[..MAX_ACTUAL_WEB_CONTENT_LENGTH]
@@ -332,12 +325,10 @@ pub async fn execute_tool(
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::VisitUrl { url } => {
-            match fetch_url_content(&url, &env.html_to_markdown_service).await {
-                Ok(content) => UserAction::ToolResult(Ok(content)),
-                Err(e) => UserAction::ToolResult(Err(e.to_string())),
-            }
-        }
+        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
+            Ok(content) => UserAction::ToolResult(Ok(content)),
+            Err(e) => UserAction::ToolResult(Err(e.to_string())),
+        },
     }
 }
 
@@ -402,10 +393,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_url_content_real() {
         // Test with example.com
-        let markdown_service = HtmlToMarkdownService::new();
-        let content = fetch_url_content("https://example.com", &markdown_service)
-            .await
-            .unwrap();
+        let content = fetch_url_content("https://example.com").await.unwrap();
         // println!("{}", content); // Keep it clean
         assert!(content.actual.contains("Example Domain"));
         // The text on example.com seems to vary or has changed.

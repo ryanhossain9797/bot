@@ -5,7 +5,7 @@ This directory contains GGUF format language models for use with this llama.cpp-
 ## Current Models
 
 - `Llama-3.2-1B-Instruct-Q4_K_M.gguf` - Lightweight Llama 3.2 model (1B parameters)
-- `helcyon_mercury_v3.0-Q6_K.gguf` - Default model (14B parameters)
+- `Llama-3.3-70B-Instruct-Q4_K_M.gguf` - Default model (14B parameters)
 
 ## Supported Format
 
@@ -29,13 +29,13 @@ The easiest way to get GGUF models is from Hugging Face repositories that provid
 ```bash
 # Using huggingface-cli (install with: pip install huggingface-hub)
 huggingface-cli download Qwen/Qwen2.5-14B-Instruct-GGUF \
-  helcyon_mercury_v3.0-Q6_K.gguf \
+  Llama-3.3-70B-Instruct-Q4_K_M.gguf \
   --local-dir models/ \
   --local-dir-use-symlinks False
 
 # Or using wget/curl from a direct URL
-wget https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/helcyon_mercury_v3.0-Q6_K.gguf \
-  -O models/helcyon_mercury_v3.0-Q6_K.gguf
+wget https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/Llama-3.3-70B-Instruct-Q4_K_M.gguf \
+  -O models/Llama-3.3-70B-Instruct-Q4_K_M.gguf
 ```
 
 ### 2. Ollama
@@ -65,22 +65,6 @@ GGUF models come in different quantization levels. The format is typically: `Q[b
 
 **For this project, Q4_K_M is recommended** as it provides a good balance of quality and performance.
 
-## Recommended Models
-
-### Small Models (< 4GB RAM)
-- **Llama 3.2 1B**: `Llama-3.2-1B-Instruct-Q4_K_M.gguf` (~0.7GB)
-- **Qwen2.5 1.5B**: `Qwen2.5-1.5B-Instruct-Q4_K_M.gguf` (~1GB)
-- **Phi-3 Mini**: `Phi-3-mini-4k-instruct-Q4_K_M.gguf` (~2.4GB)
-
-### Medium Models (8-16GB RAM)
-- **Qwen2.5 7B**: `Qwen2.5-7B-Instruct-Q4_K_M.gguf` (~4.4GB)
-- **Llama 3.1 8B**: `Llama-3.1-8B-Instruct-Q4_K_M.gguf` (~4.9GB)
-- **Mistral 7B**: `Mistral-7B-Instruct-v0.3-Q4_K_M.gguf` (~4.4GB)
-
-### Large Models (16GB+ RAM)
-- **Qwen2.5 14B**: `helcyon_mercury_v3.0-Q6_K.gguf` (~8.7GB) **[Default]**
-- **Llama 3.1 70B**: `Llama-3.1-70B-Instruct-Q4_K_M.gguf` (~39GB)
-- **Qwen2.5 32B**: `Qwen2.5-32B-Instruct-Q4_K_M.gguf` (~19GB)
 
 ## Using Different Models
 
