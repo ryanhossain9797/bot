@@ -30,7 +30,7 @@ Do not output anything else.
 Do not add prefixes or suffixes.
 Only put tool params in output:
 To do multiple lines use \n in the thoughts:
-Only message-user can support long text with \n. Other tools only support single line
+Only message-user can support up to five lines with \n. Other tools only support single line
 Only use one tool at a time
 Avoid using multiple lines unless you have meaningful information to add
 Brevity is preferred
