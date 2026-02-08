@@ -71,7 +71,7 @@ async fn filter(message: &DMessage, ctx: &Context) -> Option<(String, bool)> {
         .trim()
         .trim_start_matches('/')
         .trim()
-        .to_string();
+        .to_lowercase();
 
     let space_trimmer = Regex::new(r"\s+").unwrap();
 
