@@ -70,7 +70,7 @@ docker run -d \
 ## Configuration
 
 ### Environment Variables
-- `MODEL_PATH`: Path to the LLM model file inside the container (default: `/app/models/helcyon_mercury_v3.0-Q6_K.gguf`).
+- `MODEL_PATH`: Path to the LLM model file inside the container (default: `/app/models/Llama-3.3-70B-Instruct-Q4_K_M.gguf`).
 - `RUST_LOG`: Log level (default: `info`).
 
 ### Session File Caching

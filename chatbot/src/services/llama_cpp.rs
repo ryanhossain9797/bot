@@ -32,7 +32,7 @@ impl LlamaCppService {
         model_params: &LlamaModelParams,
     ) -> anyhow::Result<LlamaModel> {
         let thinking_model_path = std::env::var("THINKING_MODEL_PATH")
-            .unwrap_or_else(|_| "./models/helcyon_mercury_v3.0-Q6_K.gguf".to_string());
+            .unwrap_or_else(|_| "./models/Llama-3.3-70B-Instruct-Q4_K_M.gguf".to_string());
         println!("Loading thinking model from: {}", thinking_model_path);
 
         Ok(LlamaModel::load_from_file(
