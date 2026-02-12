@@ -53,7 +53,7 @@ Conversation
 {conversation}
 
 Assistant:
-    "#
+"#
     )
 }
 
@@ -80,21 +80,18 @@ async fn get_response_from_llm(
 
     let response = llama_cpp.get_thinking_response(&dynamic_prompt).await?;
 
-    println!("[DEBUG MAIN RESPONSE]: {response}");
-
     let mut parts = response.splitn(2, "output:");
 
-    let before = parts.next().ok_or(anyhow!("Missing thoughts section"))?;
-    let after = parts.next().ok_or(anyhow!("Missing output section"))?;
+    let thoughts = parts
+        .next()
+        .and_then(|s| s.trim().strip_prefix("thoughts:"))
+        .map(|s| s.trim().to_string())
+        .ok_or(anyhow!("Missing thoughts section"))?;
 
-    let thoughts = before
-        .trim()
-        .strip_prefix("thoughts:")
-        .ok_or(anyhow!("Missing 'thoughts:' prefix"))?
-        .trim()
-        .to_string();
-
-    let simple_output = after.trim().to_string();
+    let simple_output = parts
+        .next()
+        .map(|s| s.trim().to_string())
+        .ok_or(anyhow!("Missing output section"))?;
 
     let executor_prompt = format!(
         r#"

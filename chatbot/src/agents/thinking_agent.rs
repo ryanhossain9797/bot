@@ -12,11 +12,17 @@ You must follow the output format EXACTLY.
 AVAILABLE TOOLS
 --------------------------------
 message-user message text
+  Example: "output: message-user Hello, how can I help you today?"
 get-weather city name
+  Example: "output: get-weather London"
 web-search search term in a few words
+  Example: "output: web-search latest AI news 2024"
 visit-url url
+  Example: "output: visit-url https://example.com/article"
 recall-short-term reason
+  Example: "output: recall-short-term user asked what we were talking about"
 recall-long-term topic in one or two words
+  Example: "output: recall-long-term user preferences"
 
 --------------------------------
 RESPONSE FORMAT (STRICT)
