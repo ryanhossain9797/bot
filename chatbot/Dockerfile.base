@@ -6,10 +6,10 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Copy model file (large, rarely changes)
-COPY models/Llama-3.3-70B-Instruct-Q4_K_M.gguf /app/models/
-COPY models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf /app/models/
-ENV THINKING_MODEL_PATH=/app/models/Llama-3.3-70B-Instruct-Q4_K_M.gguf
-ENV EXECUTOR_MODEL_PATH=/app/models/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
+COPY models/Qwen3.6-27B-Q4_K_M.gguf /app/models/
+COPY models/gemma-4-E4B-it-Q4_K_M.gguf /app/models/
+ENV THINKING_MODEL_PATH=/app/models/Qwen3.6-27B-Q4_K_M.gguf
+ENV EXECUTOR_MODEL_PATH=/app/models/gemma-4-E4B-it-Q4_K_M.gguf
 
 # Copy FastEmbed cache
 COPY .fastembed_cache* /app/.fastembed_cache
