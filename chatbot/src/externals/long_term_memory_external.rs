@@ -4,7 +4,8 @@ use crate::{
     Env,
 };
 use arrow_array::{
-    FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, StringArray,
+    FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
+    StringArray,
 };
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use lancedb::{
@@ -110,7 +111,7 @@ async fn commit(
     let reader = RecordBatchIterator::new(vec![Ok(batch)], Arc::clone(&schema));
 
     table
-        .add(reader)
+        .add(Box::new(reader) as Box<dyn RecordBatchReader + Send>)
         .execute()
         .await
         .map_err(|e| e.to_string())?;
