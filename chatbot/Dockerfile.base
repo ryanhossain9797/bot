@@ -7,9 +7,7 @@ WORKDIR /app
 
 # Copy model file (large, rarely changes)
 COPY models/Qwen3.6-27B-Q4_K_M.gguf /app/models/
-COPY models/gemma-4-E4B-it-Q4_K_M.gguf /app/models/
-ENV THINKING_MODEL_PATH=/app/models/Qwen3.6-27B-Q4_K_M.gguf
-ENV EXECUTOR_MODEL_PATH=/app/models/gemma-4-E4B-it-Q4_K_M.gguf
+ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-27B-Q4_K_M.gguf
 
 # Copy FastEmbed cache
 COPY .fastembed_cache* /app/.fastembed_cache
