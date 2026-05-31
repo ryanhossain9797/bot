@@ -88,9 +88,9 @@ Reminder:
   </tool_response><|im_end|>
   ```
 
-> **Parsing is the harness's job.** llama.cpp's *server* parses `<tool_call>` for you; the
-> embedded library (what `llama-cpp-2` wraps) does not — we parse the `<function=…><parameter=…>`
-> blocks ourselves in Rust.
+> **The binding parses for us.** `llama-cpp-2` 0.1.146 exposes `parse_response_oaicompat`, which
+> turns the raw `<tool_call>` output into structured `tool_calls` JSON — no hand-written XML parser
+> needed. (See the "Driving it via llama-cpp-2" section below.)
 
 ---
 
@@ -173,6 +173,58 @@ loop:
 
 ---
 
+## Driving it via `llama-cpp-2` (v0.1.146) — confirmed working
+
+The Rust binding wraps llama.cpp's `common_chat` machinery, so we do NOT hand-render ChatML or
+hand-parse tool calls. Verified end-to-end with the `probe/` crate.
+
+**Render** — get the embedded template, then render with tools:
+- `model.chat_template(None)` → `LlamaChatTemplate` (the model's own template).
+- `model.apply_chat_template_with_tools_oaicompat(tmpl, &[LlamaChatMessage], tools_json, json_schema, add_gen)`
+  — simple path; messages are role+content; **no** `reasoning_format`.
+- `model.apply_chat_template_oaicompat(tmpl, &OpenAIChatTemplateParams { messages_json, tools_json,
+  reasoning_format, enable_thinking, use_jinja, add_generation_prompt, parse_tool_calls, … })`
+  — params path; messages are an OpenAI-style **JSON array string**; supports `reasoning_format`
+  ("auto" | "deepseek" | "deepseek-legacy" | "none").
+
+Both return `ChatTemplateResult { prompt, grammar, grammar_lazy, grammar_triggers, parser,
+chat_format, generation_prompt, parse_tool_calls, … }`:
+- `prompt` — rendered ChatML to feed the model.
+- `grammar` (+ `grammar_lazy`, `grammar_triggers`) — auto-generated tool-call grammar, lazily
+  triggered by `<tool_call>`: free text flows + stops on EOS, grammar constrains only tool-call
+  args. Optional — Qwen emits valid calls without it; apply it to *enforce* well-formed calls.
+- `parser` / `chat_format` — consumed by the response parser.
+
+**Parse** — the binding does it: `rendered.parse_response_oaicompat(raw_output, is_partial)` →
+an OpenAI-style message JSON:
+```json
+{"role":"assistant","reasoning_content":"…","content":"","tool_calls":[
+  {"type":"function","id":"…","function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}
+```
+- `tool_calls[].function.arguments` is a JSON **string** (parse again for the object).
+- `reasoning_content` is populated ONLY when `reasoning_format` was set during render; otherwise the
+  `<think>` block leaks into `content`.
+- It is a method on the **`ChatTemplateResult`** (NOT `LlamaModel`) — it needs the `chat_format` /
+  `parser` produced during rendering.
+
+## Empirical behavior (probed against Qwen3.6-27B)
+
+- **No BOS** — tokenize with `AddBos::Never`; the prompt starts at `<|im_start|>` (id 248045);
+  `<|im_end|>` is id 248046. Special tokens are single ids, not literal characters.
+- **Tool-call turns carry NO user-facing message.** Even when explicitly told "tell me what tool you
+  called," the model emits *only* the tool call and defers the message to the turn AFTER the tool
+  result. With `reasoning_format` set, `content` is **empty** on a tool-call turn (just
+  `reasoning_content` + `tool_calls`). The schema allows content + tool_calls together; this model
+  doesn't do it in practice → **branch the loop on "are there tool_calls?", not on content.**
+- **Pronouns resolve from history** — asked weather "there" after answering "Paris" → it called
+  `get_weather(city="Paris")`.
+- **Thinking is verbose** and can be mildly degenerate (repeats "Done./Proceeds./✅") even for trivial
+  routing. Real latency/token cost per turn — consider `enable_thinking:false` for simple turns.
+- **Sampler / system prompt:** LM Studio preset = temp 0.6, top_k 20, top_p 0.95, min_p off,
+  **repeat_penalty OFF**, and **no default system prompt**.
+
+---
+
 ## How to re-extract the embedded template
 
 The Jinja chat template is stored in GGUF metadata under `tokenizer.chat_template`
@@ -200,7 +252,9 @@ print(buf[pos:pos+slen].decode("utf-8"))
 - **Tool results:** use the `tool` role (`<tool_response>`), fixing the current
   "labeled as Assistant:" problem.
 - **Thoughts:** the `<think>` channel replaces the hand-rolled `thoughts:` field, hidden from user.
-- **Tool calls:** parse XML `<function=…>`, not the current `{"GetWeather":"..."}` JSON.
-- **Open question:** does `llama-cpp-2` expose `llama_chat_apply_template`? If not, hand-render
-  the ChatML above (structure is simple). Tool-call parsing is ours either way.
+- **Tool calls:** the model emits XML `<function=…>`, but `parse_response_oaicompat` hands us
+  structured `tool_calls` — no XML parsing on our side.
+- **Rendering + parsing: RESOLVED** — `llama-cpp-2` 0.1.146 renders (with tools + reasoning_format)
+  and parses tool calls for us via `apply_chat_template_oaicompat` + `parse_response_oaicompat`.
+  No hand-rolled ChatML or XML parser. See "Driving it via llama-cpp-2" above.
 ```
