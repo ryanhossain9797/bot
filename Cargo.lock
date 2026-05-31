@@ -5176,6 +5176,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "probe"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "llama-cpp-2",
+ "serde_json",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -7,7 +7,7 @@ A Rust-based Discord chatbot powered by a local Large Language Model, featuring 
 This is a multi-component project that provides a sophisticated AI chatbot experience:
 
 - **Discord Integration**: Responds to direct messages and mentions
-- **Local LLM**: Uses Qwen2.5-14B-Instruct running locally via llama.cpp
+- **Local LLM**: Uses Qwen3.6-27B running locally via llama.cpp
 - **Tool Calling**: Supports multi-turn tool execution (weather, web search, etc.)
 - **Memory Systems**: Short-term and long-term memory via LanceDB with embeddings
 - **Type-Safe Architecture**: Built on a custom Rust state machine framework
@@ -18,23 +18,25 @@ This is a multi-component project that provides a sophisticated AI chatbot exper
 bot/
 ├── chatbot/                 # Main Discord chatbot application
 │   ├── src/
-│   │   ├── agents/         # Thinking and executor agents
+│   │   ├── agents/         # Primary agent (single model, structured output)
 │   │   ├── externals/       # External operations (LLM, tools, memory)
 │   │   ├── models/         # Data models
 │   │   ├── services/       # External service integrations
 │   │   ├── state_machines/ # User and bot state machines
-│   │   ├── agents.rs       # Agent traits and implementation
+│   │   ├── agents.rs       # Agent abstraction + inference
 │   │   ├── main.rs         # Entry point
 │   │   └── configuration.rs
 │   ├── grammars/           # GBNF grammars for structured output
 │   ├── models/             # GGUF model files
+│   ├── model_reference/    # Per-family prompt/tool-calling notes (e.g. qwen.md)
 │   ├── resources/          # Session caches and resources
 │   ├── Dockerfile          # Multi-stage build
 │   ├── Dockerfile.base     # Base image with Rust + llama.cpp
 │   ├── Cargo.toml          # Workspace member
 │   └── Justfile            # Build automation
 │
-└── framework/              # Reusable state machine library
+├── framework/              # Reusable state machine library
+└── probe/                  # Minimal local CLI to visualize raw model behavior (dev tool)
 ```
 
 ## Components
@@ -46,8 +48,8 @@ The main application that orchestrates:
 - **DiscordService**: Handles WebSocket events and HTTP via `serenity`
 - **LlamaCppService**: Manages local LLM inference with session caching
 - **LanceService**: Vector database for memory/embedding storage
-- **Thinking Agent**: Decision-making based on conversation context
-- **Executor Agent**: Tool execution and response formatting
+- **Primary Agent**: Single model that decides and emits the structured tool call directly
+  (the former separate "executor" translation agent has been removed)
 
 #### Available Tools
 
@@ -73,19 +75,19 @@ A reusable Rust library providing:
 ### Agent Flow
 
 ```
-User Message → DiscordService → UserStateMachine → ThinkingAgent
+User Message → DiscordService → UserStateMachine → PrimaryAgent
                                                     ↓
                               ┌─────────────────────┼─────────────────────┐
                               ↓                     ↓                     ↓
                       message-user            Tool Call            Recall Memory
                               ↓                     ↓                     ↓
-                      DiscordService         ExecutorAgent         LanceService
+                      DiscordService         (execute tool)        LanceService
                               ↓                     ↓                     ↓
                               └─────────────────────┼─────────────────────┘
                                                     ↓
-                                              Final Response
+                                            back to PrimaryAgent
                                                     ↓
-                                              DiscordService
+                                              Final Response → DiscordService
 ```
 
 ### State Machine Framework
@@ -121,7 +123,7 @@ just deploy_local
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MODEL_PATH` | Path to GGUF model | `models/Llama-3.3-70B-Instruct-Q4_K_M.gguf` |
+| `PRIMARY_MODEL_PATH` | Path to GGUF model | `models/Qwen3.6-27B-Q4_K_M.gguf` |
 | `RUST_LOG` | Log level | `info` |
 
 ## Dependencies
