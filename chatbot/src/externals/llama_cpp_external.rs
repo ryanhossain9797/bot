@@ -78,7 +78,7 @@ async fn get_response_from_llm(
 
     println!("{dynamic_prompt}");
 
-    let response = llama_cpp.get_thinking_response(&dynamic_prompt).await?;
+    let response = llama_cpp.get_primary_response(&dynamic_prompt).await?;
 
     let mut parts = response.splitn(2, "output:");
 
@@ -88,24 +88,15 @@ async fn get_response_from_llm(
         .map(|s| s.trim().to_string())
         .ok_or(anyhow!("Missing thoughts section"))?;
 
+    // The primary agent now emits the structured JSON directly on the `output:` line
+    // (grammar-constrained), so we parse it straight into FlatLLMDecision. No second model.
     let simple_output = parts
         .next()
         .map(|s| s.trim().to_string())
         .ok_or(anyhow!("Missing output section"))?;
 
-    let executor_prompt = format!(
-        r#"
-    Input: {simple_output}
-    Output:"#
-    );
-    let executor_response = llama_cpp.get_executor_response(&executor_prompt).await?;
-
-    println!("\n\n-- EXECUTOR OUTPUT --\n\n");
-
-    println!("Executor agent: {executor_response}");
-
-    let decision_dto: FlatLLMDecision =
-        serde_json::from_str(&executor_response).expect("should parse");
+    let decision_dto: FlatLLMDecision = serde_json::from_str(&simple_output)
+        .map_err(|e| anyhow!("Failed to parse primary output as JSON decision: {e} — got: {simple_output}"))?;
 
     let output: LLMDecisionType = match decision_dto {
         FlatLLMDecision::MessageUser(response) => LLMDecisionType::MessageUser { response },

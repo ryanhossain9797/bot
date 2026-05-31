@@ -1,5 +1,4 @@
-mod executor_agent;
-mod thinking_agent;
+mod primary_agent;
 
 use std::{
     io::{self, Write},
@@ -7,7 +6,6 @@ use std::{
     sync::Arc,
 };
 
-pub use executor_agent::*;
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
@@ -16,7 +14,7 @@ use llama_cpp_2::{
     sampling::LlamaSampler,
     token::LlamaToken,
 };
-pub use thinking_agent::*;
+pub use primary_agent::*;
 use tokio::task::spawn_blocking;
 
 use crate::{
