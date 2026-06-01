@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fmt::Display;
+use strum::{EnumDiscriminants, EnumIter};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 20;
 
@@ -60,10 +62,6 @@ pub enum UserState {
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
     },
-    RunningInternalFunction {
-        is_timeout: bool,
-        recent_conversation: RecentConversation,
-    },
     SendingMessage {
         is_timeout: bool,
         outcome: LLMResponse,
@@ -89,15 +87,22 @@ pub struct User {
     pub last_transition: DateTime<Utc>,
 }
 
-/// Represents the input to the LLM decision-making process
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
-    /// A message from the user
     UserMessage(String),
-    /// Continuation after an internal function execution with the function result
-    InternalFunctionResult(InternalFunctionResultData),
-    /// Continuation after a tool execution with the tool result
     ToolResult(ToolResultData),
+}
+
+impl LLMInput {
+    pub fn to_openai_message(&self, last_tool_call_id: Option<&str>) -> Value {
+        match self {
+            LLMInput::UserMessage(msg) => json!({ "role": "user", "content": msg }),
+            LLMInput::ToolResult(ToolResultData { actual, .. }) => {
+                let id = last_tool_call_id.unwrap_or("call_0");
+                json!({ "role": "tool", "tool_call_id": id, "content": actual })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,30 +113,57 @@ pub enum MathOperation {
     Div(f32, f32),
     Exp(f32, f32),
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+
+/// Every executable tool. `ToolKind` (via `EnumDiscriminants`) is the fieldless companion used to
+/// build the advertised registry and look tools up by wire name — see `crate::tools`.
+#[derive(Debug, Clone, Serialize, Deserialize, EnumDiscriminants)]
+#[strum_discriminants(name(ToolKind))]
+#[strum_discriminants(derive(EnumIter))]
+#[strum_discriminants(vis(pub))]
 pub enum ToolCall {
     GetWeather { location: String },
     MathCalculation { operations: Vec<MathOperation> },
     WebSearch { query: String },
     VisitUrl { url: String },
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum FunctionCall {
     RecallShortTerm { reason: String },
     RecallLongTerm { search_term: String },
 }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
-    IntermediateToolCall { tool_call: ToolCall },
-    InternalFunctionCall { function_call: FunctionCall },
+    IntermediateToolCall { tool_call: ToolCall, id: String },
     MessageUser { response: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
+    /// Reasoning (`<think>`); kept for logging but never replayed into the next prompt.
     pub thoughts: String,
     pub output: LLMDecisionType,
-    pub simple_output: String,
+}
+
+impl LLMResponse {
+    pub fn to_openai_message(&self) -> Value {
+        match &self.output {
+            LLMDecisionType::MessageUser { response } => {
+                json!({ "role": "assistant", "content": response })
+            }
+            // Tool-call turns carry empty content + a native tool_calls array. name/arguments are
+            // derived back from the bound ToolCall (the inverse of `ToolCall::bind`).
+            LLMDecisionType::IntermediateToolCall { tool_call, id } => json!({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.wire_name(),
+                        "arguments": tool_call.wire_arguments()
+                    }
+                }]
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,15 +177,18 @@ impl HistoryEntry {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
                 LLMInput::UserMessage(m) => format!("User:\n{m}"),
-                LLMInput::InternalFunctionResult(InternalFunctionResultData {
-                    simplified, ..
-                })
-                | LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
+                LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
                     format!("Assistant:\n{simplified}")
                 }
             },
-            HistoryEntry::Output(LLMResponse { simple_output, .. }) => {
-                format!("Assistant:\n{simple_output}")
+            HistoryEntry::Output(LLMResponse { output, .. }) => {
+                let text = match output {
+                    LLMDecisionType::MessageUser { response } => response.clone(),
+                    LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
+                        format!("{tool_call:?}")
+                    }
+                };
+                format!("Assistant:\n{text}")
             }
         }
     }
@@ -169,15 +204,8 @@ pub enum UserAction {
     Timeout,
     CommitResult(Result<(), String>),
     LLMDecisionResult(Result<LLMResponse, String>),
-    InternalFunctionResult(Result<InternalFunctionResultData, String>),
     MessageSent(Result<(), String>),
     ToolResult(Result<ToolResultData, String>),
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InternalFunctionResultData {
-    pub actual: String,
-    pub simplified: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -194,7 +222,6 @@ impl std::fmt::Debug for UserAction {
             UserAction::Timeout => write!(f, "Timeout"),
             UserAction::CommitResult(_) => write!(f, "CommitResult"),
             UserAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
-            UserAction::InternalFunctionResult(_) => write!(f, "InternalFunctionResult"),
             UserAction::MessageSent(_) => write!(f, "MessageSent"),
             UserAction::ToolResult(_) => write!(f, "ToolResult"),
         }

@@ -12,9 +12,6 @@ ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-27B-Q4_K_M.gguf
 # Copy FastEmbed cache
 COPY .fastembed_cache* /app/.fastembed_cache
 
-# Copy grammar file
-COPY grammars/ /app/grammars/
-
 ENV RUST_LOG=info
 
 # Update package list and install runtime dependencies

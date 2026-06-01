@@ -1,70 +1,80 @@
 use crate::{
     models::user::{
-        FunctionCall, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse,
-        RecentConversation, ToolCall, ToolResultData, UserAction,
+        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
 };
-use anyhow::anyhow;
-use serde::Deserialize;
-use serde_json;
+use serde_json::Value;
 
-use std::{
-    iter::{self},
-    sync::Arc,
-};
+use std::sync::Arc;
 
-fn format_input(input: &LLMInput) -> String {
-    match input {
-        LLMInput::UserMessage(msg) => {
-            format!("User:\n{msg}")
-        }
-        LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. })
-        | LLMInput::ToolResult(ToolResultData { actual, .. }) => format!("Assistant:\n{actual}"),
-    }
-}
-
-fn build_dynamic_prompt(
+/// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
+/// agent prepends that). The `tool_call_id` is threaded from each assistant call to the result
+/// that follows it. Prior reasoning is not replayed (Qwen3 guidance).
+fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
-) -> String {
-    let (prev_thoughts, history) = maybe_recent_conversation
-        .map(|rc| (rc.thoughts, rc.history))
-        .unwrap_or_else(|| ("NULL".to_string(), Vec::new()));
+) -> Value {
+    let history = maybe_recent_conversation
+        .map(|rc| rc.history)
+        .unwrap_or_default();
 
-    let new_input = format_input(new_input);
+    let mut messages: Vec<Value> = Vec::new();
+    let mut last_tool_call_id: Option<String> = None;
 
-    let conversation = history
-        .iter()
-        .map(|h| h.format_simplified())
-        .chain(iter::once(new_input))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    for entry in &history {
+        match entry {
+            HistoryEntry::Input(input) => {
+                messages.push(input.to_openai_message(last_tool_call_id.as_deref()))
+            }
+            HistoryEntry::Output(response) => {
+                messages.push(response.to_openai_message());
+                last_tool_call_id = match &response.output {
+                    LLMDecisionType::IntermediateToolCall { id, .. } => Some(id.clone()),
+                    _ => None,
+                };
+            }
+        }
+    }
+    messages.push(new_input.to_openai_message(last_tool_call_id.as_deref()));
 
-    format!(
-        r#"
-
-Your previous thoughts were
-{prev_thoughts}
-
-Conversation
-
-{conversation}
-
-Assistant:
-"#
-    )
+    Value::Array(messages)
 }
 
-#[derive(Debug, Clone, Deserialize)]
-enum FlatLLMDecision {
-    MessageUser(String),
-    GetWeather(String),
-    WebSearch(String),
-    VisitUrl(String),
-    RecallShortTerm(String),
-    RecallLongTerm(String),
+/// First tool call from a parsed assistant message, as `(id, name, arguments_json_string)`.
+///
+/// Single-call by design: the state machine runs one tool per turn (`parallel_tool_calls: false`).
+/// Multi-tool is deferred to the state machine — if the model batches calls we take the first and
+/// warn rather than drop the rest silently.
+fn first_tool_call(parsed: &Value) -> Option<(String, String, String)> {
+    let calls = parsed.get("tool_calls").and_then(|v| v.as_array())?;
+
+    if calls.len() > 1 {
+        println!(
+            "[warn] model emitted {} tool calls; running only the first (multi-tool not yet supported)",
+            calls.len()
+        );
+    }
+
+    let call = calls.first()?;
+    let id = call
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("call_0")
+        .to_string();
+    let name = call
+        .pointer("/function/name")
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let arguments = call
+        .pointer("/function/arguments")
+        .and_then(|v| v.as_str())
+        .unwrap_or("{}")
+        .to_string();
+
+    Some((id, name, arguments))
 }
 
 async fn get_response_from_llm(
@@ -72,55 +82,41 @@ async fn get_response_from_llm(
     current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
 ) -> anyhow::Result<LLMResponse> {
-    let dynamic_prompt = build_dynamic_prompt(current_input, maybe_recent_conversation);
+    let conversation = build_conversation(current_input, maybe_recent_conversation);
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&conversation).unwrap_or_default()
+    );
 
-    println!("{dynamic_prompt}");
+    let parsed = llama_cpp.get_primary_response(conversation).await?;
 
-    let response = llama_cpp.get_primary_response(&dynamic_prompt).await?;
+    let thoughts = parsed
+        .get("reasoning_content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
-    let mut parts = response.splitn(2, "output:");
+    // A tool call takes precedence over text; binding failures surface as a failed decision.
+    if let Some((id, name, arguments)) = first_tool_call(&parsed) {
+        let tool_call = ToolCall::bind(&name, &arguments)?;
+        return Ok(LLMResponse {
+            thoughts,
+            output: LLMDecisionType::IntermediateToolCall { tool_call, id },
+        });
+    }
 
-    let thoughts = parts
-        .next()
-        .and_then(|s| s.trim().strip_prefix("thoughts:"))
-        .map(|s| s.trim().to_string())
-        .ok_or(anyhow!("Missing thoughts section"))?;
-
-    // The primary agent now emits the structured JSON directly on the `output:` line
-    // (grammar-constrained), so we parse it straight into FlatLLMDecision. No second model.
-    let simple_output = parts
-        .next()
-        .map(|s| s.trim().to_string())
-        .ok_or(anyhow!("Missing output section"))?;
-
-    let decision_dto: FlatLLMDecision = serde_json::from_str(&simple_output)
-        .map_err(|e| anyhow!("Failed to parse primary output as JSON decision: {e} — got: {simple_output}"))?;
-
-    let output: LLMDecisionType = match decision_dto {
-        FlatLLMDecision::MessageUser(response) => LLMDecisionType::MessageUser { response },
-        FlatLLMDecision::GetWeather(location) => LLMDecisionType::IntermediateToolCall {
-            tool_call: ToolCall::GetWeather { location },
-        },
-        FlatLLMDecision::WebSearch(query) => LLMDecisionType::IntermediateToolCall {
-            tool_call: ToolCall::WebSearch { query },
-        },
-        FlatLLMDecision::VisitUrl(url) => LLMDecisionType::IntermediateToolCall {
-            tool_call: ToolCall::VisitUrl { url },
-        },
-        FlatLLMDecision::RecallShortTerm(reason) => LLMDecisionType::InternalFunctionCall {
-            function_call: FunctionCall::RecallShortTerm { reason },
-        },
-        FlatLLMDecision::RecallLongTerm(search_term) => LLMDecisionType::InternalFunctionCall {
-            function_call: FunctionCall::RecallLongTerm { search_term },
-        },
-    };
+    let content = parsed
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
 
     Ok(LLMResponse {
         thoughts,
-        output,
-        simple_output,
+        output: LLMDecisionType::MessageUser { response: content },
     })
 }
 

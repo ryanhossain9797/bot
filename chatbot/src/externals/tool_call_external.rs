@@ -1,5 +1,6 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
+    externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     models::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
@@ -44,7 +45,7 @@ async fn execute_math(operations: Vec<MathOperation>) -> ToolResultData {
         results.push(format!("Operation {}: {}", index + 1, result));
     }
 
-    let actual = format!("MATH TOOL RESULT:\n{}", results.join("\n"));
+    let actual = format!("Calculation results:\n{}", results.join("\n"));
 
     ToolResultData {
         simplified: actual.clone(),
@@ -116,7 +117,7 @@ async fn fetch_weather(location: &str) -> anyhow::Result<ToolResultData> {
     let weather = weather_response.current;
 
     let actual = format!(
-        "WEATHER TOOL RESULT: Temperature: {}°C, Humidity: {}%, Wind Speed: {} km/h",
+        "Temperature: {}°C, Humidity: {}%, Wind Speed: {} km/h",
         weather.temperature_2m, weather.relative_humidity_2m, weather.wind_speed_10m
     );
     Ok(ToolResultData {
@@ -213,7 +214,7 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     };
 
     let simplified = format!(
-        "WEB SEARCH TOOL RESULT: Search Results for {}:\n{}",
+        "Search results for \"{}\":\n{}",
         original_query,
         primary.join("\n")
     );
@@ -293,23 +294,16 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
         &extracted.content
     };
 
-    let mut actual: String = format!("VISIT URL TOOL RESULT {url}: \n");
-    let mut simplified = actual.clone();
-    actual.push_str(actual_content);
-    simplified.push_str(simplified_content);
-
-    let no_more_urls =
-        format!("\nI should not visit {url} again as I have already seen its content");
-    actual.push_str(&no_more_urls);
-    simplified.push_str(&no_more_urls);
+    let actual = format!("Content of {url}:\n{actual_content}");
+    let simplified = format!("Content of {url}:\n{simplified_content}");
 
     Ok(ToolResultData { actual, simplified })
 }
 
-#[allow(unused_variables)]
 pub async fn execute_tool(
     env: Arc<Env>,
     tool_call: ToolCall,
+    user_id: String,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
     match tool_call {
@@ -318,8 +312,7 @@ pub async fn execute_tool(
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
         ToolCall::MathCalculation { operations } => {
-            let result = execute_math(operations).await;
-            UserAction::ToolResult(Ok(result))
+            UserAction::ToolResult(Ok(execute_math(operations).await))
         }
         ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
@@ -329,6 +322,13 @@ pub async fn execute_tool(
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
+        ToolCall::RecallShortTerm { .. } => UserAction::ToolResult(Ok(recall_short(&history))),
+        ToolCall::RecallLongTerm { search_term } => {
+            match recall_long(env, user_id, search_term).await {
+                Ok(data) => UserAction::ToolResult(Ok(data)),
+                Err(e) => UserAction::ToolResult(Err(e.to_string())),
+            }
+        }
     }
 }
 

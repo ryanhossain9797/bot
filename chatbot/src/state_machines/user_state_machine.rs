@@ -1,15 +1,13 @@
 use crate::externals::long_term_memory_external::commit_to_memory;
-use crate::externals::recall_long_term_external::execute_long_recall;
 use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::{InternalFunctionResultData, LLMResponse, ToolResultData};
+use crate::models::user::{LLMResponse, ToolResultData};
 use crate::{
-    externals::recall_short_term_external::execute_short_recall,
     models::user::{
-        FunctionCall, HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User,
-        UserAction, UserId, UserState,
+        HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
+        UserState,
     },
     Env, ENV,
 };
@@ -53,43 +51,13 @@ fn handle_outcome(
             external.push(Box::pin(execute_tool(
                 env,
                 tool_call,
+                user_id.to_string(),
                 recent_conversation.history.clone(),
             )));
 
             Ok((
                 User {
                     state: UserState::RunningTool {
-                        is_timeout,
-                        recent_conversation,
-                    },
-                    last_transition: Utc::now(),
-                    pending,
-                },
-                external,
-            ))
-        }
-        LLMDecisionType::InternalFunctionCall { function_call, .. } => {
-            let mut external = Vec::<UserExternalOperation>::new();
-
-            match function_call {
-                FunctionCall::RecallShortTerm { .. } => {
-                    external.push(Box::pin(execute_short_recall(
-                        env.clone(),
-                        recent_conversation.history.clone(),
-                    )));
-                }
-                FunctionCall::RecallLongTerm { search_term } => {
-                    external.push(Box::pin(execute_long_recall(
-                        env.clone(),
-                        user_id.to_string(),
-                        search_term,
-                    )));
-                }
-            }
-
-            Ok((
-                User {
-                    state: UserState::RunningInternalFunction {
                         is_timeout,
                         recent_conversation,
                     },
@@ -174,8 +142,7 @@ pub fn user_transition(
                     // Extract message to send from outcome
                     let message_to_send = match &response.output {
                         LLMDecisionType::MessageUser { response } => Some(response.clone()),
-                        LLMDecisionType::InternalFunctionCall { .. }
-                        | LLMDecisionType::IntermediateToolCall { .. } => None,
+                        LLMDecisionType::IntermediateToolCall { .. } => None,
                     };
 
                     match message_to_send {
@@ -237,68 +204,6 @@ pub fn user_transition(
                 recent_conversation,
                 user.pending,
             ),
-            (
-                UserState::RunningInternalFunction {
-                    recent_conversation,
-                    is_timeout,
-                },
-                UserAction::InternalFunctionResult(res),
-            ) => match res {
-                Ok(internal_function_result) => {
-                    let current_input =
-                        LLMInput::InternalFunctionResult(internal_function_result.clone());
-
-                    let history = recent_conversation.history();
-                    let mut external = Vec::<UserExternalOperation>::new();
-                    external.push(Box::pin(get_llm_decision(
-                        env.clone(),
-                        current_input.clone(),
-                        Some(recent_conversation),
-                    )));
-
-                    Ok((
-                        User {
-                            state: UserState::AwaitingLLMDecision {
-                                is_timeout,
-                                history,
-                                current_input,
-                            },
-                            last_transition: Utc::now(),
-                            ..user
-                        },
-                        external,
-                    ))
-                }
-                Err(error_msg) => {
-                    let error_result = format!("Internal function execution failed: {}", error_msg);
-                    let current_input =
-                        LLMInput::InternalFunctionResult(InternalFunctionResultData {
-                            actual: error_result.clone(),
-                            simplified: error_result,
-                        });
-
-                    let history = recent_conversation.history();
-                    let mut external = Vec::<UserExternalOperation>::new();
-                    external.push(Box::pin(get_llm_decision(
-                        env.clone(),
-                        current_input.clone(),
-                        Some(recent_conversation),
-                    )));
-
-                    Ok((
-                        User {
-                            state: UserState::AwaitingLLMDecision {
-                                is_timeout,
-                                history,
-                                current_input,
-                            },
-                            last_transition: Utc::now(),
-                            ..user
-                        },
-                        external,
-                    ))
-                }
-            },
             (
                 UserState::RunningTool {
                     recent_conversation,
@@ -486,7 +391,6 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
         | UserState::CommitingToMemory { .. }
-        | UserState::RunningInternalFunction { .. }
         | UserState::RunningTool { .. } => schedules.push(Scheduled {
             at: user.last_transition + ChronoDuration::milliseconds(600_000),
             action: UserAction::ForceReset,
