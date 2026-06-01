@@ -124,6 +124,34 @@ fn push(history: &mut serde_json::Value, msg: serde_json::Value) {
     history.as_array_mut().expect("history is an array").push(msg);
 }
 
+/// Trim a parsed assistant reply down to what should live in history: keep `role` / `content` /
+/// `tool_calls`, drop `reasoning_content`, and scrub any `<think>…</think>` that leaked into
+/// `content`. Per Qwen3 guidance, prior turns' thinking must NOT be fed back — only the final
+/// output (+ any tool calls, which the tool result must follow).
+fn for_history(mut assistant: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = assistant.as_object_mut() {
+        obj.remove("reasoning_content");
+        if let Some(c) = obj.get("content").and_then(|v| v.as_str()) {
+            let cleaned = strip_think(c);
+            obj.insert("content".to_string(), serde_json::Value::String(cleaned));
+        }
+    }
+    assistant
+}
+
+/// Remove a `<think>…</think>` span from text. Also handles a stray closing `</think>` with no
+/// opening tag (the prompt opens `<think>`, so it may not appear in the generated content).
+fn strip_think(s: &str) -> String {
+    match (s.find("<think>"), s.find("</think>")) {
+        (Some(a), Some(b)) if b >= a => {
+            let end = b + "</think>".len();
+            format!("{}{}", &s[..a], &s[end..]).trim().to_string()
+        }
+        (None, Some(b)) => s[b + "</think>".len()..].trim().to_string(),
+        _ => s.trim().to_string(),
+    }
+}
+
 fn content_lower(msg: &serde_json::Value) -> String {
     msg.get("content").and_then(|v| v.as_str()).unwrap_or("").to_lowercase()
 }
@@ -143,7 +171,7 @@ fn main() -> anyhow::Result<()> {
     println!("\n--- parsed ---\n{r1}");
     assert!(content_lower(&r1).contains("paris"), "TURN 1: expected 'paris', got: {r1}");
     println!("\n✓ turn 1 response contains \"paris\"");
-    push(&mut history, r1);
+    push(&mut history, for_history(r1));
 
     // ---------------- TURN 2: temperature there -> expect a get_weather tool call ----------------
     println!("\n################ TURN 2 ################\n");
@@ -159,7 +187,7 @@ fn main() -> anyhow::Result<()> {
     assert!(called_weather, "TURN 2: expected a get_weather tool call, got: {r2}");
     println!("\n✓ turn 2 called the get_weather tool");
     let tool_id = calls[0].get("id").and_then(|v| v.as_str()).unwrap_or("call_0").to_string();
-    push(&mut history, r2);
+    push(&mut history, for_history(r2));
 
     // ---- pass in the tool result ----
     push(&mut history, serde_json::json!(
