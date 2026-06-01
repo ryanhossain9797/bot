@@ -9,6 +9,21 @@ struct GetWeatherArgs {
     city: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebSearchArgs {
+    query: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct VisitUrlArgs {
+    url: String,
+}
+
+fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
+    serde_json::from_str(arguments)
+        .map_err(|e| anyhow::anyhow!("{name} arguments failed to bind: {e} — raw: {arguments}"))
+}
+
 impl ToolKind {
     fn wire_name(&self) -> &'static str {
         match self {
@@ -38,11 +53,35 @@ impl ToolKind {
                     }
                 }
             })),
-            ToolKind::MathCalculation
-            | ToolKind::WebSearch
-            | ToolKind::VisitUrl
-            | ToolKind::RecallShortTerm
-            | ToolKind::RecallLongTerm => None,
+            ToolKind::WebSearch => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Search the web for current or factual information. Returns a short list of results (title, URL, and a snippet) — not full pages. Usually step one of a two-step pattern: search to discover relevant URLs, then call visit_url on the most promising result to read its full content before answering. If the snippets already answer the question, you can skip visit_url.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": { "type": "string", "description": "A few keywords describing what to look for, e.g. \"rust async runtime comparison\"" }
+                        },
+                        "required": ["query"]
+                    }
+                }
+            })),
+            ToolKind::VisitUrl => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Fetch a web page and extract its readable text. Use this after web_search to open a result and read it in full, since search only returns short snippets. Also works on a URL the user gives you directly.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": { "type": "string", "description": "The full URL to fetch, e.g. \"https://example.com/article\" (typically taken from a web_search result)" }
+                        },
+                        "required": ["url"]
+                    }
+                }
+            })),
+            ToolKind::MathCalculation | ToolKind::RecallShortTerm | ToolKind::RecallLongTerm => None,
         }
     }
 }
@@ -79,19 +118,16 @@ impl ToolCall {
             .ok_or_else(|| anyhow::anyhow!("model called an unknown tool: {name}"))?;
 
         match kind {
-            ToolKind::GetWeather => {
-                let args: GetWeatherArgs = serde_json::from_str(arguments).map_err(|e| {
-                    anyhow::anyhow!("get_weather arguments failed to bind: {e} — raw: {arguments}")
-                })?;
-                Ok(ToolCall::GetWeather {
-                    location: args.city,
-                })
-            }
-            ToolKind::MathCalculation
-            | ToolKind::WebSearch
-            | ToolKind::VisitUrl
-            | ToolKind::RecallShortTerm
-            | ToolKind::RecallLongTerm => {
+            ToolKind::GetWeather => Ok(ToolCall::GetWeather {
+                location: parse_args::<GetWeatherArgs>(name, arguments)?.city,
+            }),
+            ToolKind::WebSearch => Ok(ToolCall::WebSearch {
+                query: parse_args::<WebSearchArgs>(name, arguments)?.query,
+            }),
+            ToolKind::VisitUrl => Ok(ToolCall::VisitUrl {
+                url: parse_args::<VisitUrlArgs>(name, arguments)?.url,
+            }),
+            ToolKind::MathCalculation | ToolKind::RecallShortTerm | ToolKind::RecallLongTerm => {
                 Err(anyhow::anyhow!("tool '{name}' is not wired for binding yet"))
             }
         }
