@@ -1,42 +1,27 @@
-//! Tool registry, driven by `ToolCall`'s variants via the strum-generated `ToolKind`.
-//!
-//! Every match over `ToolKind` below is exhaustive with one arm per variant, so adding a
-//! `ToolCall` variant won't compile until it's handled here — no tool can be silently dropped
-//! (compile-time, which is stronger than a runtime check). A tool that is advertised but whose
-//! argument binding isn't implemented yet returns a runtime error from `bind`.
-//!
-//! strum gives us the *iteration*; the per-variant schema is still hand-written (Rust can't
-//! reflect a variant's payload into JSON Schema). At higher tool counts, switch to
-//! `GetWeather(GetWeatherArgs)` payloads + `schemars::JsonSchema` to derive it.
-
 use serde::Deserialize;
 use serde_json::{json, Value};
 use strum::IntoEnumIterator;
 
 use crate::models::user::{ToolCall, ToolKind};
 
-/// Typed view of `get_weather`'s arguments. The model emits these as a JSON string; we deserialize
-/// into this struct so a malformed/incomplete call is a recoverable error, not a panic.
 #[derive(Debug, Deserialize)]
 struct GetWeatherArgs {
     city: String,
 }
 
 impl ToolKind {
-    /// Stable wire name for this tool — the single source used by both the advertised schema and
-    /// the inverse (name → variant) lookup in `bind`.
     fn wire_name(&self) -> &'static str {
         match self {
             ToolKind::GetWeather => "get_weather",
             ToolKind::MathCalculation => "math_calculation",
             ToolKind::WebSearch => "web_search",
             ToolKind::VisitUrl => "visit_url",
+            ToolKind::RecallShortTerm => "recall_short_term",
+            ToolKind::RecallLongTerm => "recall_long_term",
         }
     }
 
-    /// The OpenAI-style tool entry advertised to the model, or `None` if this variant isn't
-    /// exposed yet (it stays wired for execution, just unadvertised). Exhaustive: every variant
-    /// must declare its status here.
+    /// OpenAI tool entry, or `None` if this variant isn't advertised yet (still executable).
     fn definition(&self) -> Option<Value> {
         match self {
             ToolKind::GetWeather => Some(json!({
@@ -53,26 +38,41 @@ impl ToolKind {
                     }
                 }
             })),
-            ToolKind::MathCalculation => None,
-            ToolKind::WebSearch => None,
-            ToolKind::VisitUrl => None,
+            ToolKind::MathCalculation
+            | ToolKind::WebSearch
+            | ToolKind::VisitUrl
+            | ToolKind::RecallShortTerm
+            | ToolKind::RecallLongTerm => None,
         }
     }
 }
 
 impl ToolCall {
-    /// OpenAI-style tool array advertised to the model, assembled from every advertised variant.
     pub fn tools_json() -> String {
         let entries: Vec<Value> = ToolKind::iter().filter_map(|k| k.definition()).collect();
         Value::Array(entries).to_string()
     }
 
-    /// Bind a model-emitted tool call to a `ToolCall`.
-    ///
-    /// `arguments` is the raw JSON string from `tool_calls[].function.arguments`. The name is
-    /// resolved against the variant list (unknown → runtime error), then bound per variant. The
-    /// per-variant match is exhaustive, so a new variant must be handled here; variants without a
-    /// binding yet return a runtime error rather than compiling to a silent gap.
+    pub fn wire_name(&self) -> &'static str {
+        ToolKind::from(self).wire_name()
+    }
+
+    /// JSON arguments to replay this call into history — the inverse of `bind`.
+    pub fn wire_arguments(&self) -> String {
+        match self {
+            ToolCall::GetWeather { location } => json!({ "city": location }),
+            ToolCall::MathCalculation { operations } => json!({ "operations": operations }),
+            ToolCall::WebSearch { query } => json!({ "query": query }),
+            ToolCall::VisitUrl { url } => json!({ "url": url }),
+            ToolCall::RecallShortTerm { reason } => json!({ "reason": reason }),
+            ToolCall::RecallLongTerm { search_term } => json!({ "search_term": search_term }),
+        }
+        .to_string()
+    }
+
+    /// Bind a model-emitted call (name + raw JSON arguments) to a `ToolCall`. Unknown name or
+    /// unbindable tool → runtime error; the per-variant match is exhaustive so new variants must
+    /// be handled here.
     pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolCall> {
         let kind = ToolKind::iter()
             .find(|k| k.wire_name() == name)
@@ -87,9 +87,13 @@ impl ToolCall {
                     location: args.city,
                 })
             }
-            ToolKind::MathCalculation | ToolKind::WebSearch | ToolKind::VisitUrl => Err(
-                anyhow::anyhow!("tool '{name}' is advertised but not wired for binding yet"),
-            ),
+            ToolKind::MathCalculation
+            | ToolKind::WebSearch
+            | ToolKind::VisitUrl
+            | ToolKind::RecallShortTerm
+            | ToolKind::RecallLongTerm => {
+                Err(anyhow::anyhow!("tool '{name}' is not wired for binding yet"))
+            }
         }
     }
 }

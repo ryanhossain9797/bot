@@ -1,5 +1,6 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
+    externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     models::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
@@ -306,10 +307,10 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
-#[allow(unused_variables)]
 pub async fn execute_tool(
     env: Arc<Env>,
     tool_call: ToolCall,
+    user_id: String,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
     match tool_call {
@@ -318,8 +319,7 @@ pub async fn execute_tool(
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
         ToolCall::MathCalculation { operations } => {
-            let result = execute_math(operations).await;
-            UserAction::ToolResult(Ok(result))
+            UserAction::ToolResult(Ok(execute_math(operations).await))
         }
         ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
@@ -329,6 +329,13 @@ pub async fn execute_tool(
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
+        ToolCall::RecallShortTerm { .. } => UserAction::ToolResult(Ok(recall_short(&history))),
+        ToolCall::RecallLongTerm { search_term } => {
+            match recall_long(env, user_id, search_term).await {
+                Ok(data) => UserAction::ToolResult(Ok(data)),
+                Err(e) => UserAction::ToolResult(Err(e.to_string())),
+            }
+        }
     }
 }
 

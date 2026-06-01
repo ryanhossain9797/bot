@@ -18,9 +18,6 @@ use tokio::task::spawn_blocking;
 
 use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, services::llama_cpp::LlamaCppService};
 
-/// Tokenize `prompt`, feed it to a fresh context in batch-sized chunks, then sample greedily until
-/// the end-of-generation token (the template's real EOS) or the generation cap. Returns the raw
-/// generated text. Multibyte UTF-8 that spans two tokens is handled by the stateful decoder.
 fn run_generation(
     model: &LlamaModel,
     backend: &LlamaBackend,
@@ -51,7 +48,7 @@ fn run_generation(
     }
     let mut n_cur = tokens.len() as i32;
 
-    // Qwen3 recommended sampler: temp / top_k 20 / top_p 0.95 / no repeat penalty.
+    // Qwen3 sampler: temp / top_k 20 / top_p 0.95, no repeat penalty.
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::temp(temperature),
         LlamaSampler::top_k(20),
@@ -93,8 +90,7 @@ fn respond_blocking(
     batch_chunk_size: usize,
     conversation: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
-    // Prepend the system turn (persona + current time), then render the whole thing with the
-    // model's own chat template. No tools yet — the model can only reply with prose.
+    // Prepend the system turn (persona + current time), then render with the model's template.
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": agent.system_content(),
@@ -138,14 +134,11 @@ fn respond_blocking(
         agent.temperature(),
     )?;
 
-    // The binding splits `<think>` into reasoning_content and parses any tool calls for us.
     let parsed = rendered.parse_response_oaicompat(&raw, false)?;
     Ok(serde_json::from_str(&parsed)?)
 }
 
-/// A single conversational agent: a persona (system prompt) plus its sampling temperature.
-/// Generation is driven by the model's native chat template — no grammar, no session cache.
-/// Tools are global (see `crate::tools`), not per-agent.
+/// A conversational agent: a persona (system prompt) plus its sampling temperature.
 #[derive(Clone, Copy)]
 pub struct Agent {
     system_prompt: &'static str,
@@ -163,7 +156,6 @@ impl Agent {
         self.temperature
     }
 
-    /// The system turn content: the static persona plus the current date/time.
     pub fn system_content(&self) -> String {
         format!(
             "{}\n\nCurrent date and time (UTC): {}",
@@ -172,9 +164,6 @@ impl Agent {
         )
     }
 
-    /// Render `conversation` (an OpenAI-style messages JSON array, WITHOUT the system turn),
-    /// generate a reply, and return the parsed OpenAI assistant message
-    /// (`{role, content, reasoning_content, tool_calls?}`).
     pub async fn respond(
         &'static self,
         ctx_params: LlamaContextParams,

@@ -49,9 +49,7 @@ impl LlamaCppService {
 
         let backend_arc = Arc::new(backend);
 
-        // Load the primary model off the runtime thread. Kept as a spawn_blocking task so
-        // additional agents/models can be loaded in parallel here in the future (e.g. dedicated
-        // subagents). No session-file cache — the native chat template re-renders each turn.
+        // Load off the runtime thread; spawn_blocking so more models can load in parallel later.
         let primary_task: JoinHandle<anyhow::Result<Arc<LlamaModel>>> = {
             let backend = Arc::clone(&backend_arc);
             spawn_blocking(move || {
@@ -82,8 +80,6 @@ impl LlamaCppService {
         LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1)
     }
 
-    /// `conversation` is an OpenAI-style messages JSON array (user/assistant/tool turns, WITHOUT
-    /// the system turn). Returns the parsed assistant message JSON.
     pub async fn get_primary_response(
         &self,
         conversation: serde_json::Value,

@@ -1,7 +1,7 @@
 use crate::{
     models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, NativeToolCall, RecentConversation,
-        ToolCall, UserAction,
+        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -10,10 +10,9 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
-/// Build the conversation as an OpenAI-style messages JSON array (WITHOUT the system turn — the
-/// agent prepends that). Assistant tool-call turns and their `tool` results are reconstructed in
-/// native form; the `tool_call_id` is threaded from each assistant call to the result that follows
-/// it. Prior reasoning is intentionally NOT replayed (Qwen3 guidance).
+/// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
+/// agent prepends that). The `tool_call_id` is threaded from each assistant call to the result
+/// that follows it. Prior reasoning is not replayed (Qwen3 guidance).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
@@ -32,7 +31,10 @@ fn build_conversation(
             }
             HistoryEntry::Output(response) => {
                 messages.push(response.to_openai_message());
-                last_tool_call_id = response.tool_call.as_ref().map(|tc| tc.id.clone());
+                last_tool_call_id = match &response.output {
+                    LLMDecisionType::IntermediateToolCall { id, .. } => Some(id.clone()),
+                    _ => None,
+                };
             }
         }
     }
@@ -41,14 +43,22 @@ fn build_conversation(
     Value::Array(messages)
 }
 
-/// Pull the first tool call out of a parsed assistant message, if any. Returns
-/// `(id, name, arguments_json_string)`.
+/// First tool call from a parsed assistant message, as `(id, name, arguments_json_string)`.
+///
+/// Single-call by design: the state machine runs one tool per turn (`parallel_tool_calls: false`).
+/// Multi-tool is deferred to the state machine — if the model batches calls we take the first and
+/// warn rather than drop the rest silently.
 fn first_tool_call(parsed: &Value) -> Option<(String, String, String)> {
-    let call = parsed
-        .get("tool_calls")
-        .and_then(|v| v.as_array())
-        .and_then(|calls| calls.first())?;
+    let calls = parsed.get("tool_calls").and_then(|v| v.as_array())?;
 
+    if calls.len() > 1 {
+        println!(
+            "[warn] model emitted {} tool calls; running only the first (multi-tool not yet supported)",
+            calls.len()
+        );
+    }
+
+    let call = calls.first()?;
     let id = call
         .get("id")
         .and_then(|v| v.as_str())
@@ -58,7 +68,6 @@ fn first_tool_call(parsed: &Value) -> Option<(String, String, String)> {
         .pointer("/function/name")
         .and_then(|v| v.as_str())?
         .to_string();
-    // `arguments` is a JSON string, e.g. "{\"city\":\"Paris\"}".
     let arguments = call
         .pointer("/function/arguments")
         .and_then(|v| v.as_str())
@@ -89,22 +98,15 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    // A tool call takes precedence over any text. Bind the raw JSON arguments to a typed model and
-    // map to our `ToolCall`; a binding failure surfaces as a failed decision (never a panic).
+    // A tool call takes precedence over text; binding failures surface as a failed decision.
     if let Some((id, name, arguments)) = first_tool_call(&parsed) {
         let tool_call = ToolCall::bind(&name, &arguments)?;
         return Ok(LLMResponse {
             thoughts,
-            output: LLMDecisionType::IntermediateToolCall { tool_call },
-            tool_call: Some(NativeToolCall {
-                id,
-                name,
-                arguments,
-            }),
+            output: LLMDecisionType::IntermediateToolCall { tool_call, id },
         });
     }
 
-    // Otherwise it's a plain reply to the user.
     let content = parsed
         .get("content")
         .and_then(|v| v.as_str())
@@ -115,7 +117,6 @@ async fn get_response_from_llm(
     Ok(LLMResponse {
         thoughts,
         output: LLMDecisionType::MessageUser { response: content },
-        tool_call: None,
     })
 }
 
