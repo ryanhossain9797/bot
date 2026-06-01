@@ -49,34 +49,24 @@ impl LlamaCppService {
 
         let backend_arc = Arc::new(backend);
 
-        println!("Creating session file");
-
-        // Load the primary model and build its session cache off the runtime thread.
-        // Kept as a spawn_blocking task so additional agents/models can be loaded in
-        // parallel here in the future (e.g. dedicated subagents).
+        // Load the primary model off the runtime thread. Kept as a spawn_blocking task so
+        // additional agents/models can be loaded in parallel here in the future (e.g. dedicated
+        // subagents). No session-file cache — the native chat template re-renders each turn.
         let primary_task: JoinHandle<anyhow::Result<Arc<LlamaModel>>> = {
             let backend = Arc::clone(&backend_arc);
             spawn_blocking(move || {
                 let model_params = LlamaModelParams::default();
                 let model = Arc::new(Self::primary_model(backend.as_ref(), &model_params)?);
-
-                primary_agent.create_session_file(
-                    &model,
-                    &backend,
-                    Self::context_params(),
-                    Self::new_batch(),
-                    Self::BATCH_CHUNK_SIZE,
-                )?;
                 Ok(model)
             })
         };
 
-        let primary_model = primary_task.await?;
+        let primary_model = primary_task.await??;
 
         Ok(Self {
-            primary_model: primary_model?,
+            primary_model,
             backend: backend_arc,
-            primary_agent: &primary_agent,
+            primary_agent,
         })
     }
 
@@ -92,15 +82,19 @@ impl LlamaCppService {
         LlamaBatch::new(Self::CONTEXT_SIZE.get() as usize, 1)
     }
 
-    pub async fn get_primary_response(&self, dynamic_prompt: &str) -> anyhow::Result<String> {
+    /// `conversation` is an OpenAI-style messages JSON array (user/assistant/tool turns, WITHOUT
+    /// the system turn). Returns the parsed assistant message JSON.
+    pub async fn get_primary_response(
+        &self,
+        conversation: serde_json::Value,
+    ) -> anyhow::Result<serde_json::Value> {
         self.primary_agent
-            .get_response(
+            .respond(
                 Self::context_params(),
                 Arc::clone(&self.primary_model),
                 Arc::clone(&self.backend),
-                Self::CONTEXT_SIZE.get(),
                 Self::BATCH_CHUNK_SIZE,
-                dynamic_prompt,
+                conversation,
             )
             .await
     }

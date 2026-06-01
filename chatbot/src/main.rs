@@ -6,6 +6,7 @@ mod externals;
 mod models;
 mod services;
 mod state_machines;
+mod tools;
 
 use models::bot::BotHandle;
 use once_cell::sync::OnceCell;

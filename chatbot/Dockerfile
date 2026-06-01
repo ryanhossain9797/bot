@@ -23,7 +23,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY framework ./framework
 COPY chatbot/src ./chatbot/src
 COPY chatbot/Cargo.toml ./chatbot/
-COPY chatbot/grammars ./chatbot/grammars
+# probe is a dev-only workspace member; cargo needs its manifest to load the workspace,
+# but it is not compiled (we build --package chatbot).
+COPY probe ./probe
 COPY .git ./.git
 
 RUN cargo build --release --package chatbot
