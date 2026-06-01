@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fmt::Display;
 use strum::{EnumDiscriminants, EnumIter};
 
@@ -101,6 +102,25 @@ pub enum LLMInput {
     ToolResult(ToolResultData),
 }
 
+impl LLMInput {
+    /// Render this input as an OpenAI-style chat message (the form the chat template renders into
+    /// ChatML). A tool result references the id of the preceding assistant tool call
+    /// (`last_tool_call_id`); internal-function results aren't native tools, so they're surfaced
+    /// as a user turn.
+    pub fn to_openai_message(&self, last_tool_call_id: Option<&str>) -> Value {
+        match self {
+            LLMInput::UserMessage(msg) => json!({ "role": "user", "content": msg }),
+            LLMInput::ToolResult(ToolResultData { actual, .. }) => {
+                let id = last_tool_call_id.unwrap_or("call_0");
+                json!({ "role": "tool", "tool_call_id": id, "content": actual })
+            }
+            LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. }) => {
+                json!({ "role": "user", "content": actual })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MathOperation {
     Add(f32, f32),
@@ -154,6 +174,41 @@ pub struct LLMResponse {
     /// Present iff `output` is a tool call — the native call to replay into history.
     #[serde(default)]
     pub tool_call: Option<NativeToolCall>,
+}
+
+impl LLMResponse {
+    /// Render this response as an OpenAI-style assistant message (the form the chat template
+    /// renders into ChatML). A tool-call turn carries a native `tool_calls` array with empty
+    /// content (matching how the model emits it); a plain reply is normal assistant content.
+    /// Internal-function calls aren't native tools and stay dormant in the current cut.
+    pub fn to_openai_message(&self) -> Value {
+        match &self.output {
+            LLMDecisionType::MessageUser { response } => {
+                json!({ "role": "assistant", "content": response })
+            }
+            LLMDecisionType::IntermediateToolCall { .. } => match &self.tool_call {
+                Some(NativeToolCall {
+                    id,
+                    name,
+                    arguments,
+                }) => json!({
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": arguments }
+                    }]
+                }),
+                // Shouldn't happen (a tool-call decision always carries its native call); render an
+                // empty assistant turn rather than fabricate one.
+                None => json!({ "role": "assistant", "content": "" }),
+            },
+            LLMDecisionType::InternalFunctionCall { function_call } => {
+                json!({ "role": "assistant", "content": format!("{function_call:?}") })
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,65 +1,14 @@
 use crate::{
     models::user::{
-        HistoryEntry, InternalFunctionResultData, LLMDecisionType, LLMInput, LLMResponse,
-        NativeToolCall, RecentConversation, ToolCall, ToolResultData, UserAction,
+        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, NativeToolCall, RecentConversation,
+        ToolCall, UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use std::sync::Arc;
-
-/// Append the OpenAI message(s) for one LLM input. A `tool` result references the id of the
-/// preceding assistant tool call (`last_tool_call_id`); internal-function results (dormant — not
-/// native tools) are surfaced as a user turn.
-fn append_input(messages: &mut Vec<Value>, input: &LLMInput, last_tool_call_id: &Option<String>) {
-    match input {
-        LLMInput::UserMessage(msg) => messages.push(json!({ "role": "user", "content": msg })),
-        LLMInput::ToolResult(ToolResultData { actual, .. }) => {
-            let id = last_tool_call_id
-                .clone()
-                .unwrap_or_else(|| "call_0".to_string());
-            messages.push(json!({ "role": "tool", "tool_call_id": id, "content": actual }));
-        }
-        LLMInput::InternalFunctionResult(InternalFunctionResultData { actual, .. }) => {
-            messages.push(json!({ "role": "user", "content": actual }))
-        }
-    }
-}
-
-/// Append the OpenAI assistant message for one LLM output. A tool-call turn is rendered with a
-/// native `tool_calls` array (content empty, matching how the model emits it); a plain reply is a
-/// normal assistant message.
-fn append_output(messages: &mut Vec<Value>, response: &LLMResponse) {
-    match &response.output {
-        LLMDecisionType::MessageUser { response: text } => {
-            messages.push(json!({ "role": "assistant", "content": text }))
-        }
-        LLMDecisionType::IntermediateToolCall { .. } => match &response.tool_call {
-            Some(NativeToolCall {
-                id,
-                name,
-                arguments,
-            }) => messages.push(json!({
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [{
-                    "id": id,
-                    "type": "function",
-                    "function": { "name": name, "arguments": arguments }
-                }]
-            })),
-            // Shouldn't happen (a tool-call decision always carries its native call); render an
-            // empty assistant turn rather than fabricate one.
-            None => messages.push(json!({ "role": "assistant", "content": "" })),
-        },
-        // Internal functions aren't native tools; dormant in the current cut.
-        LLMDecisionType::InternalFunctionCall { function_call } => {
-            messages.push(json!({ "role": "assistant", "content": format!("{function_call:?}") }))
-        }
-    }
-}
 
 /// Build the conversation as an OpenAI-style messages JSON array (WITHOUT the system turn — the
 /// agent prepends that). Assistant tool-call turns and their `tool` results are reconstructed in
@@ -78,14 +27,16 @@ fn build_conversation(
 
     for entry in &history {
         match entry {
-            HistoryEntry::Input(input) => append_input(&mut messages, input, &last_tool_call_id),
+            HistoryEntry::Input(input) => {
+                messages.push(input.to_openai_message(last_tool_call_id.as_deref()))
+            }
             HistoryEntry::Output(response) => {
-                append_output(&mut messages, response);
+                messages.push(response.to_openai_message());
                 last_tool_call_id = response.tool_call.as_ref().map(|tc| tc.id.clone());
             }
         }
     }
-    append_input(&mut messages, new_input, &last_tool_call_id);
+    messages.push(new_input.to_openai_message(last_tool_call_id.as_deref()));
 
     Value::Array(messages)
 }
