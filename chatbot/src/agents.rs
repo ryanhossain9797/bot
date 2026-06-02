@@ -89,8 +89,11 @@ fn respond_blocking(
     backend: Arc<LlamaBackend>,
     batch_chunk_size: usize,
     conversation: serde_json::Value,
+    allow_tools: bool,
 ) -> anyhow::Result<serde_json::Value> {
-    // Prepend the system turn (persona + current time), then render with the model's template.
+    // Prepend the system turn (persona + current time), then render with the model's template. At
+    // the budget cap, advertise no tools so the model physically cannot emit another tool call (the
+    // synthesis nudge itself rides the message stream, not this stable system turn).
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": agent.system_content(),
@@ -104,7 +107,11 @@ fn respond_blocking(
     let tools_json = crate::models::user::ToolCall::tools_json();
     let params = OpenAIChatTemplateParams {
         messages_json: &messages_json,
-        tools_json: Some(tools_json.as_str()),
+        tools_json: if allow_tools {
+            Some(tools_json.as_str())
+        } else {
+            None
+        },
         tool_choice: None,
         json_schema: None,
         grammar: None,
@@ -158,8 +165,9 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nCurrent date and time (UTC): {}",
+            "{}\n\nYou have up to {} tool calls per turn. Use them deliberately and prefer answering once you have gathered enough to respond.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
+            crate::models::user::MAX_TOOL_ROUNDS,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
     }
@@ -171,9 +179,18 @@ impl Agent {
         backend: Arc<LlamaBackend>,
         batch_chunk_size: usize,
         conversation: serde_json::Value,
+        allow_tools: bool,
     ) -> anyhow::Result<serde_json::Value> {
         let task = spawn_blocking(move || {
-            respond_blocking(self, ctx_params, model, backend, batch_chunk_size, conversation)
+            respond_blocking(
+                self,
+                ctx_params,
+                model,
+                backend,
+                batch_chunk_size,
+                conversation,
+                allow_tools,
+            )
         });
 
         task.await?

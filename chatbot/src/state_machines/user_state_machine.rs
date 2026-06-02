@@ -3,7 +3,7 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::{LLMResponse, ToolResultData};
+use crate::models::user::{LLMResponse, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
     models::user::{
         HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
@@ -30,6 +30,7 @@ fn handle_outcome(
     response: LLMResponse,
     recent_conversation: RecentConversation,
     pending: Vec<String>,
+    tool_rounds: usize,
 ) -> UserTransitionResult {
     match response.output {
         LLMDecisionType::MessageUser { .. } => Ok((
@@ -60,6 +61,7 @@ fn handle_outcome(
                     state: UserState::RunningTool {
                         is_timeout,
                         recent_conversation,
+                        tool_rounds: tool_rounds + 1,
                     },
                     last_transition: Utc::now(),
                     pending,
@@ -125,6 +127,7 @@ pub fn user_transition(
                     is_timeout,
                     history,
                     current_input,
+                    tool_rounds,
                 },
                 UserAction::LLMDecisionResult(res),
             ) => match res {
@@ -175,6 +178,7 @@ pub fn user_transition(
                             response.clone(),
                             updated_conversation,
                             user.pending,
+                            tool_rounds,
                         ),
                     }
                 }
@@ -203,11 +207,13 @@ pub fn user_transition(
                 outcome,
                 recent_conversation,
                 user.pending,
+                0,
             ),
             (
                 UserState::RunningTool {
                     recent_conversation,
                     is_timeout,
+                    tool_rounds,
                 },
                 UserAction::ToolResult(res),
             ) => {
@@ -221,6 +227,8 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             Some(recent_conversation),
+                            tool_rounds,
+                            MAX_TOOL_ROUNDS,
                         )));
 
                         Ok((
@@ -229,6 +237,7 @@ pub fn user_transition(
                                     is_timeout,
                                     history,
                                     current_input,
+                                    tool_rounds,
                                 },
                                 last_transition: Utc::now(),
                                 ..user
@@ -251,6 +260,8 @@ pub fn user_transition(
                             env.clone(),
                             current_input.clone(),
                             Some(recent_conversation),
+                            tool_rounds,
+                            MAX_TOOL_ROUNDS,
                         )));
 
                         Ok((
@@ -259,6 +270,7 @@ pub fn user_transition(
                                     is_timeout,
                                     history,
                                     current_input,
+                                    tool_rounds,
                                 },
                                 last_transition: Utc::now(),
                                 ..user
@@ -312,6 +324,8 @@ pub fn user_transition(
                     env.clone(),
                     current_input.clone(),
                     Some(recent_conversation.clone()),
+                    0,
+                    MAX_TOOL_ROUNDS,
                 )));
 
                 Ok((
@@ -320,6 +334,7 @@ pub fn user_transition(
                             is_timeout: true,
                             history: recent_conversation.history,
                             current_input,
+                            tool_rounds: 0,
                         },
                         last_transition: Utc::now(),
                         ..user
@@ -361,6 +376,8 @@ fn post_transition(
                 env.clone(),
                 current_input.clone(),
                 recent_conversation.as_ref().map(|(rc, _)| rc.clone()),
+                0,
+                MAX_TOOL_ROUNDS,
             )));
 
             let user = User {
@@ -368,6 +385,7 @@ fn post_transition(
                     is_timeout: false,
                     history,
                     current_input: LLMInput::UserMessage(msg.clone()),
+                    tool_rounds: 0,
                 },
                 last_transition: Utc::now(),
                 pending: Vec::new(),

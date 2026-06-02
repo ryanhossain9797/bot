@@ -10,12 +10,41 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
+/// A plain-text budget note for the most recent tool result, escalating with usage: a caution past
+/// the halfway mark, then a synthesis directive at the cap (where tools are turned off, so the model
+/// can't call another and this nudges it to answer from history rather than stall). `None` below the
+/// caution threshold. Relative thresholds track the cap if retuned. Not `<system-reminder>`: Qwen
+/// has no special handling for that tag, so a plain bracketed marker is used instead. Lives here in
+/// the message stream — never the system turn — to keep the cached system prefix stable.
+fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
+    if max_tool_rounds == 0 {
+        None
+    } else if tool_rounds >= max_tool_rounds {
+        Some(
+            "[Tool budget exhausted — no more tools are available this turn. Answer the user now \
+             using the information already gathered above, and clearly state anything you could \
+             not determine.]"
+                .to_string(),
+        )
+    } else if tool_rounds * 2 >= max_tool_rounds {
+        Some(format!(
+            "[Tool budget: {tool_rounds}/{max_tool_rounds} used — start wrapping up and answer soon.]"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
 /// agent prepends that). The `tool_call_id` is threaded from each assistant call to the result
-/// that follows it. Prior reasoning is not replayed (Qwen3 guidance).
+/// that follows it. Prior reasoning is not replayed (Qwen3 guidance). When the new input is a tool
+/// result, the running budget reminder is appended to it at render time (never persisted, so old
+/// turns don't accumulate stale counts).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
 ) -> Value {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
@@ -38,7 +67,16 @@ fn build_conversation(
             }
         }
     }
-    messages.push(new_input.to_openai_message(last_tool_call_id.as_deref()));
+
+    let mut new_message = new_input.to_openai_message(last_tool_call_id.as_deref());
+    if matches!(new_input, LLMInput::ToolResult(_)) {
+        if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
+            if let Some(content) = new_message.get("content").and_then(|c| c.as_str()) {
+                new_message["content"] = Value::String(format!("{content}\n\n{note}"));
+            }
+        }
+    }
+    messages.push(new_message);
 
     Value::Array(messages)
 }
@@ -81,8 +119,16 @@ async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
+    allow_tools: bool,
 ) -> anyhow::Result<LLMResponse> {
-    let conversation = build_conversation(current_input, maybe_recent_conversation);
+    let conversation = build_conversation(
+        current_input,
+        maybe_recent_conversation,
+        tool_rounds,
+        max_tool_rounds,
+    );
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
     println!(
@@ -90,7 +136,9 @@ async fn get_response_from_llm(
         serde_json::to_string_pretty(&conversation).unwrap_or_default()
     );
 
-    let parsed = llama_cpp.get_primary_response(conversation).await?;
+    let parsed = llama_cpp
+        .get_primary_response(conversation, allow_tools)
+        .await?;
 
     let thoughts = parsed
         .get("reasoning_content")
@@ -124,11 +172,25 @@ pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
 ) -> UserAction {
+    // Budget spent → final call with tools off, so the model can't emit another tool call; the
+    // matching synthesis directive on the last tool result (see `budget_note`) nudges it to answer
+    // from what it already gathered.
+    let allow_tools = tool_rounds < max_tool_rounds;
+    println!(
+        "[tool budget] {tool_rounds}/{max_tool_rounds} tool calls this turn (tools {})",
+        if allow_tools { "on" } else { "off — synthesizing" }
+    );
+
     let llama_cpp_result = get_response_from_llm(
         env.llama_cpp.as_ref(),
         &current_input,
         maybe_recent_conversation,
+        tool_rounds,
+        max_tool_rounds,
+        allow_tools,
     )
     .await;
 
