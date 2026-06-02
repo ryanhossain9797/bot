@@ -83,6 +83,7 @@ impl LlamaCppService {
     pub async fn get_primary_response(
         &self,
         conversation: serde_json::Value,
+        allow_tools: bool,
     ) -> anyhow::Result<serde_json::Value> {
         self.primary_agent
             .respond(
@@ -91,6 +92,7 @@ impl LlamaCppService {
                 Arc::clone(&self.backend),
                 Self::BATCH_CHUNK_SIZE,
                 conversation,
+                allow_tools,
             )
             .await
     }
