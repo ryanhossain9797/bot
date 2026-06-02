@@ -169,9 +169,8 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nOn each turn you either answer the user or make a SINGLE tool call (if you emit more than one tool call in a turn, only the first runs and the rest are dropped). You may take up to {} consecutive tool-call turns to gather what you need before you answer the user, so use them deliberately and answer as soon as you have enough.\n\nCurrent date and time (UTC): {}",
+            "{}\n\nOn each turn you either answer the user or make a SINGLE tool call (if you emit more than one tool call in a turn, only the first runs and the rest are dropped). Use tools deliberately and answer once you've gathered enough.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
-            crate::models::user::MAX_TOOL_ROUNDS,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
     }
