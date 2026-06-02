@@ -10,12 +10,14 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
-/// A plain-text budget note for the most recent tool result, escalating with usage: a caution past
-/// the halfway mark, then a synthesis directive at the cap (where tools are turned off, so the model
-/// can't call another and this nudges it to answer from history rather than stall). `None` below the
-/// caution threshold. Relative thresholds track the cap if retuned. Not `<system-reminder>`: Qwen
-/// has no special handling for that tag, so a plain bracketed marker is used instead. Lives here in
-/// the message stream — never the system turn — to keep the cached system prefix stable.
+/// A plain-text budget note for the most recent tool result, escalating in three tiers so the model
+/// isn't scared into quitting early: at ~50% nudge it to vary its approach (NOT to stop — an early
+/// "wrap up" makes it bail prematurely), at ~80% tell it to start wrapping up, and at the cap a
+/// synthesis directive (where tools are turned off, so it can't call another and this nudges it to
+/// answer from history rather than stall). `None` below the halfway mark. Relative thresholds track
+/// the cap if retuned. Not `<system-reminder>`: Qwen has no special handling for that tag, so a
+/// plain bracketed marker is used instead. Lives here in the message stream — never the system turn
+/// — to keep the cached system prefix stable.
 fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     if max_tool_rounds == 0 {
         None
@@ -26,9 +28,13 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
              not determine.]"
                 .to_string(),
         )
+    } else if tool_rounds * 5 >= max_tool_rounds * 4 {
+        Some(format!(
+            "[Tool budget: {tool_rounds}/{max_tool_rounds} used — you're running low. Either wrap up and answer with what you have, or make your remaining calls count: use them only if they'll meaningfully improve your answer.]"
+        ))
     } else if tool_rounds * 2 >= max_tool_rounds {
         Some(format!(
-            "[Tool budget: {tool_rounds}/{max_tool_rounds} used — start wrapping up and answer soon.]"
+            "[Tool budget: {tool_rounds}/{max_tool_rounds} used — if your current approach isn't working, try a different angle rather than repeating similar calls. You still have room to keep investigating.]"
         ))
     } else {
         None
