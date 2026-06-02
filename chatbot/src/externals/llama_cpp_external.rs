@@ -23,9 +23,9 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
         None
     } else if tool_rounds >= max_tool_rounds {
         Some(
-            "[Tool budget exhausted — no more tools are available this turn. Answer the user now \
-             using the information already gathered above, and clearly state anything you could \
-             not determine.]"
+            "[Tool budget exhausted — you've used all your tool-call turns and no more are \
+             available. Answer the user now using the information already gathered above, and \
+             clearly state anything you could not determine.]"
                 .to_string(),
         )
     } else if tool_rounds * 5 >= max_tool_rounds * 4 {
