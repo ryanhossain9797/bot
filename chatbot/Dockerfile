@@ -30,8 +30,8 @@ COPY .git ./.git
 
 RUN cargo build --release --package chatbot
 
-# Capture git commit message
-RUN git log -1 --pretty=%B > /app/commit.txt || echo "unknown" > /app/commit.txt
+# Capture the build's commit: short SHA on the first line, then the message.
+RUN (git rev-parse --short HEAD && echo && git log -1 --pretty=%B) > /app/commit.txt || echo "unknown" > /app/commit.txt
 
 FROM zireael9797/bot-base:latest
 
