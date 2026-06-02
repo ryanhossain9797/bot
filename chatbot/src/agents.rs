@@ -119,7 +119,11 @@ fn respond_blocking(
         chat_template_kwargs: None,
         add_generation_prompt: true,
         use_jinja: true,
-        parallel_tool_calls: false,
+        // The model may emit multiple <tool_call> blocks in one turn regardless; with this set to
+        // false, parse_response_oaicompat hard-fails (`ffi error -3`) on such output and the turn
+        // dies silently (see #89). Allow it so parsing succeeds; we still run only the first call
+        // (first_tool_call warns on extras) until multi-tool execution lands.
+        parallel_tool_calls: true,
         enable_thinking: true,
         add_bos: false,
         add_eos: false,
