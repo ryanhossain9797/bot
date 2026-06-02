@@ -18,6 +18,20 @@ use tokio::task::spawn_blocking;
 
 use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, services::llama_cpp::LlamaCppService};
 
+/// Safety cap on a single generation's reasoning: if the model hasn't closed its `<think>` block
+/// within this many generated tokens, we force it shut (see [`THINKING_FORCE_CLOSE`]) so it commits
+/// to an answer instead of looping. Generous on purpose — a net for runaway loops, not a routine
+/// limiter (the overall cap is `LlamaCppService::get_max_generation_tokens`).
+const MAX_THINKING_TOKENS: usize = 2048;
+
+/// Injected verbatim (tokenized, then fed through the decode loop) to force-close a runaway
+/// `<think>` block: a short first-person "stop and answer" stitch in the model's own voice, then the
+/// closing tag. Reading as the model's own decision to wrap up yields a cleaner answer than a bare
+/// `</think>`. It sits before `</think>`, so it lands in `reasoning_content` and the user never
+/// sees it.
+const THINKING_FORCE_CLOSE: &str =
+    "\n\nWait — I'm going in circles. I have enough to answer the user now, so I'll stop thinking and respond.\n</think>\n\n";
+
 fn run_generation(
     model: &LlamaModel,
     backend: &LlamaBackend,
@@ -60,7 +74,31 @@ fn run_generation(
     let mut out = String::new();
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
 
-    for _ in 0..max_generation_tokens {
+    // Generation starts inside the <think> block (the template ends the prompt with
+    // `<|im_start|>assistant\n<think>`), so track whether the model closes it. If it hasn't by
+    // MAX_THINKING_TOKENS, force it shut to break reasoning loops.
+    let mut thinking_closed = false;
+
+    for i in 0..max_generation_tokens {
+        if !thinking_closed && i >= MAX_THINKING_TOKENS {
+            // Inject the "stop and answer" stitch + </think> token-by-token through the same decode
+            // path as sampled tokens, then resume sampling — the model now produces the answer.
+            for forced in model.str_to_token(THINKING_FORCE_CLOSE, AddBos::Never)? {
+                let piece = model.token_to_piece(forced, &mut decoder, true, None)?;
+                if DEBUG_LIVE_LLM_OUTPUT {
+                    print!("{piece}");
+                    let _ = io::stdout().flush();
+                }
+                out.push_str(&piece);
+                batch.clear();
+                batch.add(forced, n_cur, &[0], true)?;
+                ctx.decode(&mut batch)?;
+                n_cur += 1;
+                last_idx = batch.n_tokens() - 1;
+            }
+            thinking_closed = true;
+        }
+
         let token = sampler.sample(&ctx, last_idx);
         if model.is_eog_token(token) {
             break;
@@ -71,6 +109,9 @@ fn run_generation(
             let _ = io::stdout().flush();
         }
         out.push_str(&piece);
+        if !thinking_closed && out.contains("</think>") {
+            thinking_closed = true;
+        }
 
         batch.clear();
         batch.add(token, n_cur, &[0], true)?;
