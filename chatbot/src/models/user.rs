@@ -61,6 +61,8 @@ pub enum UserState {
         is_timeout: bool,
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
+        /// Tool calls made so far in this turn (resets to 0 on a new user turn).
+        tool_rounds: usize,
     },
     SendingMessage {
         is_timeout: bool,
@@ -70,6 +72,7 @@ pub enum UserState {
     RunningTool {
         is_timeout: bool,
         recent_conversation: RecentConversation,
+        tool_rounds: usize,
     },
 }
 impl Default for UserState {

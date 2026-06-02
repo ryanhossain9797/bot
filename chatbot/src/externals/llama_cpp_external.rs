@@ -124,7 +124,11 @@ pub async fn get_llm_decision(
     env: Arc<Env>,
     current_input: LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
 ) -> UserAction {
+    println!("[tool budget] {tool_rounds}/{max_tool_rounds} tool calls this turn");
+
     let llama_cpp_result = get_response_from_llm(
         env.llama_cpp.as_ref(),
         &current_input,
