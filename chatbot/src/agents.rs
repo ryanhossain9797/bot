@@ -158,8 +158,9 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nCurrent date and time (UTC): {}",
+            "{}\n\nYou have up to {} tool calls per turn. Use them deliberately and prefer answering once you have gathered enough to respond.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
+            crate::models::user::MAX_TOOL_ROUNDS,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
     }

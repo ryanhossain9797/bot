@@ -3,7 +3,7 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::{LLMResponse, ToolResultData};
+use crate::models::user::{LLMResponse, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
     models::user::{
         HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
@@ -22,9 +22,6 @@ use std::sync::Arc;
 
 type UserTransitionResult = TransitionResult<User, UserAction>;
 type UserExternalOperation = ExternalOperation<UserAction>;
-
-/// Max tool calls the model may make in a single turn before the loop is cut short.
-const MAX_TOOL_ROUNDS: usize = 10;
 
 fn handle_outcome(
     env: Arc<Env>,

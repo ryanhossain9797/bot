@@ -6,6 +6,10 @@ use strum::{EnumDiscriminants, EnumIter};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 20;
 
+/// Max tool calls the model may make in a single user turn before the loop is cut short. Single
+/// source of truth: the state machine enforces it; the system prompt discloses it.
+pub const MAX_TOOL_ROUNDS: usize = 10;
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum UserChannel {
     Telegram,
