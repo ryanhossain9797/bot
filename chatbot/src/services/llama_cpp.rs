@@ -33,11 +33,9 @@ impl LlamaCppService {
             .unwrap_or_else(|_| "./models/Qwen3.6-27B-Q4_K_M.gguf".to_string());
         println!("Loading primary model from: {}", primary_model_path);
 
-        Ok(LlamaModel::load_from_file(
-            backend,
-            &primary_model_path,
-            model_params,
-        )?)
+        let model = LlamaModel::load_from_file(backend, &primary_model_path, model_params)?;
+        println!("Loaded primary model from: {}", primary_model_path);
+        Ok(model)
     }
 
     pub async fn new() -> anyhow::Result<Self> {
