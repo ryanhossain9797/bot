@@ -70,8 +70,11 @@ fn run_generation(
         LlamaSampler::dist(0),
     ]);
 
-    let mut decoder = encoding_rs::UTF_8.new_decoder();
-    let mut out = String::new();
+    // Accumulate RAW token bytes, not per-token `token_to_piece` strings: a multi-byte char (e.g.
+    // an emoji) can straddle token boundaries as byte-fallback tokens, and the per-token+decoder
+    // path drops the incomplete pieces (see #96). We decode the complete byte buffer at the end.
+    let mut out_bytes: Vec<u8> = Vec::new();
+    let mut printed = 0usize; // bytes of out_bytes already streamed to stdout under DEBUG
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
 
     // Generation starts inside the <think> block (the template ends the prompt with
@@ -79,22 +82,37 @@ fn run_generation(
     // MAX_THINKING_TOKENS, force it shut to break reasoning loops.
     let mut thinking_closed = false;
 
+    // Feed a token to the context, append its raw bytes, and stream any newly-completed UTF-8 to
+    // stdout (DEBUG). Inline (macro, not closure) to avoid holding a borrow of ctx across the loop.
+    macro_rules! emit_token {
+        ($tok:expr) => {{
+            let tok = $tok;
+            out_bytes.extend_from_slice(&model.token_to_piece_bytes(tok, 512, true, None)?);
+            if DEBUG_LIVE_LLM_OUTPUT {
+                let valid = match std::str::from_utf8(&out_bytes) {
+                    Ok(s) => s.len(),
+                    Err(e) => e.valid_up_to(),
+                };
+                if valid > printed {
+                    print!("{}", String::from_utf8_lossy(&out_bytes[printed..valid]));
+                    let _ = io::stdout().flush();
+                    printed = valid;
+                }
+            }
+            batch.clear();
+            batch.add(tok, n_cur, &[0], true)?;
+            ctx.decode(&mut batch)?;
+            n_cur += 1;
+            last_idx = batch.n_tokens() - 1;
+        }};
+    }
+
     for i in 0..max_generation_tokens {
         if !thinking_closed && i >= MAX_THINKING_TOKENS {
-            // Inject the "stop and answer" stitch + </think> token-by-token through the same decode
-            // path as sampled tokens, then resume sampling — the model now produces the answer.
+            // Inject the "stop and answer" stitch + </think>, then resume sampling so the model
+            // produces the answer instead of looping.
             for forced in model.str_to_token(THINKING_FORCE_CLOSE, AddBos::Never)? {
-                let piece = model.token_to_piece(forced, &mut decoder, true, None)?;
-                if DEBUG_LIVE_LLM_OUTPUT {
-                    print!("{piece}");
-                    let _ = io::stdout().flush();
-                }
-                out.push_str(&piece);
-                batch.clear();
-                batch.add(forced, n_cur, &[0], true)?;
-                ctx.decode(&mut batch)?;
-                n_cur += 1;
-                last_idx = batch.n_tokens() - 1;
+                emit_token!(forced);
             }
             thinking_closed = true;
         }
@@ -103,24 +121,14 @@ fn run_generation(
         if model.is_eog_token(token) {
             break;
         }
-        let piece = model.token_to_piece(token, &mut decoder, true, None)?;
-        if DEBUG_LIVE_LLM_OUTPUT {
-            print!("{piece}");
-            let _ = io::stdout().flush();
-        }
-        out.push_str(&piece);
-        if !thinking_closed && out.contains("</think>") {
+        emit_token!(token);
+
+        if !thinking_closed && out_bytes.windows(8).any(|w| w == b"</think>") {
             thinking_closed = true;
         }
-
-        batch.clear();
-        batch.add(token, n_cur, &[0], true)?;
-        ctx.decode(&mut batch)?;
-        n_cur += 1;
-        last_idx = batch.n_tokens() - 1;
     }
 
-    Ok(out)
+    Ok(String::from_utf8_lossy(&out_bytes).into_owned())
 }
 
 fn respond_blocking(
