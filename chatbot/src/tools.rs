@@ -43,7 +43,7 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Get the current weather for a city. Use when the user asks about weather, temperature, or conditions for a specific place. Don't re-request a city's weather you've already fetched this turn — reuse the result above.",
+                    "description": "Get the current weather for a city.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -57,7 +57,7 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Search the web for current or factual information. Returns a short list of results (title, URL, and a snippet) — not full pages. Usually step one of a two-step pattern: search to discover relevant URLs, then call visit_url on the most promising result to read its full content before answering. If the snippets already answer the question, you can skip visit_url. Don't issue near-identical or repeated queries: if a couple of searches don't surface the answer, stop searching and reply with what you found, noting what you couldn't determine.",
+                    "description": "Search the web. Returns short snippets — use visit_url to read a result in full.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -71,7 +71,7 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Fetch a web page and extract its readable text. Use this after web_search to open a result and read it in full, since search only returns short snippets. Also works on a URL the user gives you directly. Don't re-fetch a URL you've already visited this turn — its content is already in the conversation above.",
+                    "description": "Fetch a URL's readable text — usually a web_search result, or one the user gave you.",
                     "parameters": {
                         "type": "object",
                         "properties": {
