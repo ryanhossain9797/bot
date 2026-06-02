@@ -10,12 +10,30 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
+/// A plain-text budget reminder for the most recent tool result, or `None` below the caution
+/// threshold. Relative (halfway) so it tracks the cap if retuned; the hard cap itself needs no
+/// reminder — that's handled by the tools-off synthesis call. Not `<system-reminder>`: Qwen has no
+/// special handling for that tag, so a plain bracketed marker is used instead.
+fn budget_reminder(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
+    if max_tool_rounds > 0 && tool_rounds * 2 >= max_tool_rounds && tool_rounds < max_tool_rounds {
+        Some(format!(
+            "[Tool budget: {tool_rounds}/{max_tool_rounds} used — start wrapping up and answer soon.]"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
 /// agent prepends that). The `tool_call_id` is threaded from each assistant call to the result
-/// that follows it. Prior reasoning is not replayed (Qwen3 guidance).
+/// that follows it. Prior reasoning is not replayed (Qwen3 guidance). When the new input is a tool
+/// result, the running budget reminder is appended to it at render time (never persisted, so old
+/// turns don't accumulate stale counts).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
 ) -> Value {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
@@ -38,7 +56,16 @@ fn build_conversation(
             }
         }
     }
-    messages.push(new_input.to_openai_message(last_tool_call_id.as_deref()));
+
+    let mut new_message = new_input.to_openai_message(last_tool_call_id.as_deref());
+    if matches!(new_input, LLMInput::ToolResult(_)) {
+        if let Some(reminder) = budget_reminder(tool_rounds, max_tool_rounds) {
+            if let Some(content) = new_message.get("content").and_then(|c| c.as_str()) {
+                new_message["content"] = Value::String(format!("{content}\n\n{reminder}"));
+            }
+        }
+    }
+    messages.push(new_message);
 
     Value::Array(messages)
 }
@@ -81,8 +108,15 @@ async fn get_response_from_llm(
     llama_cpp: &LlamaCppService,
     current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
 ) -> anyhow::Result<LLMResponse> {
-    let conversation = build_conversation(current_input, maybe_recent_conversation);
+    let conversation = build_conversation(
+        current_input,
+        maybe_recent_conversation,
+        tool_rounds,
+        max_tool_rounds,
+    );
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
     println!(
@@ -133,6 +167,8 @@ pub async fn get_llm_decision(
         env.llama_cpp.as_ref(),
         &current_input,
         maybe_recent_conversation,
+        tool_rounds,
+        max_tool_rounds,
     )
     .await;
 
