@@ -47,11 +47,11 @@ fn handle_outcome(
             },
             Vec::new(),
         )),
-        LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
+        LLMDecisionType::IntermediateToolCall { tool_call } => {
             let mut external = Vec::<UserExternalOperation>::new();
             external.push(Box::pin(execute_tool(
                 env,
-                tool_call,
+                tool_call.tool_type.clone(),
                 user_id.to_string(),
                 recent_conversation.history.clone(),
             )));
@@ -62,6 +62,7 @@ fn handle_outcome(
                         is_timeout,
                         recent_conversation,
                         tool_rounds: tool_rounds + 1,
+                        tool_call,
                     },
                     last_transition: Utc::now(),
                     pending,
@@ -214,12 +215,16 @@ pub fn user_transition(
                     recent_conversation,
                     is_timeout,
                     tool_rounds,
+                    tool_call,
                 },
                 UserAction::ToolResult(res),
             ) => {
                 match res {
                     Ok(tool_result) => {
-                        let current_input = LLMInput::ToolResult(tool_result.clone());
+                        let current_input = LLMInput::ToolResult {
+                            id: tool_call.id.clone(),
+                            data: tool_result.clone(),
+                        };
 
                         let history = recent_conversation.history();
                         let mut external = Vec::<UserExternalOperation>::new();
@@ -247,10 +252,13 @@ pub fn user_transition(
                     }
                     Err(error_msg) => {
                         let error_result = format!("Tool execution failed: {}", error_msg);
-                        let current_input = LLMInput::ToolResult(ToolResultData {
-                            actual: error_result.clone(),
-                            simplified: error_result,
-                        });
+                        let current_input = LLMInput::ToolResult {
+                            id: tool_call.id.clone(),
+                            data: ToolResultData {
+                                actual: error_result.clone(),
+                                simplified: error_result,
+                            },
+                        };
 
                         let history = recent_conversation.history();
 

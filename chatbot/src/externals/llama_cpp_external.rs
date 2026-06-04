@@ -1,7 +1,7 @@
 use crate::{
     models::user::{
         HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, RecentConversation, ToolCall,
-        UserAction,
+        ToolType, UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -42,10 +42,10 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
 }
 
 /// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
-/// agent prepends that). The `tool_call_id` is threaded from each assistant call to the result
-/// that follows it. Prior reasoning is not replayed (Qwen3 guidance). When the new input is a tool
-/// result, the running budget reminder is appended to it at render time (never persisted, so old
-/// turns don't accumulate stale counts).
+/// agent prepends that). Each tool result carries its own `tool_call_id` (from the call it answers),
+/// so no positional threading is needed. Prior reasoning is not replayed (Qwen3 guidance). When the
+/// new input is a tool result, the running budget reminder is appended to it at render time (never
+/// persisted, so old turns don't accumulate stale counts).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
@@ -57,25 +57,16 @@ fn build_conversation(
         .unwrap_or_default();
 
     let mut messages: Vec<Value> = Vec::new();
-    let mut last_tool_call_id: Option<String> = None;
 
     for entry in &history {
         match entry {
-            HistoryEntry::Input(input) => {
-                messages.push(input.to_openai_message(last_tool_call_id.as_deref()))
-            }
-            HistoryEntry::Output(response) => {
-                messages.push(response.to_openai_message());
-                last_tool_call_id = match &response.output {
-                    LLMDecisionType::IntermediateToolCall { id, .. } => Some(id.clone()),
-                    _ => None,
-                };
-            }
+            HistoryEntry::Input(input) => messages.push(input.to_openai_message()),
+            HistoryEntry::Output(response) => messages.push(response.to_openai_message()),
         }
     }
 
-    let mut new_message = new_input.to_openai_message(last_tool_call_id.as_deref());
-    if matches!(new_input, LLMInput::ToolResult(_)) {
+    let mut new_message = new_input.to_openai_message();
+    if matches!(new_input, LLMInput::ToolResult { .. }) {
         if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
             if let Some(content) = new_message.get("content").and_then(|c| c.as_str()) {
                 new_message["content"] = Value::String(format!("{content}\n\n{note}"));
@@ -154,10 +145,12 @@ async fn get_response_from_llm(
 
     // A tool call takes precedence over text; binding failures surface as a failed decision.
     if let Some((id, name, arguments)) = first_tool_call(&parsed) {
-        let tool_call = ToolCall::bind(&name, &arguments)?;
+        let tool_type = ToolType::bind(&name, &arguments)?;
         return Ok(LLMResponse {
             thoughts,
-            output: LLMDecisionType::IntermediateToolCall { tool_call, id },
+            output: LLMDecisionType::IntermediateToolCall {
+                tool_call: ToolCall { id, tool_type },
+            },
         });
     }
 

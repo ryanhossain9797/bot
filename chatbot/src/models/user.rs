@@ -77,6 +77,8 @@ pub enum UserState {
         is_timeout: bool,
         recent_conversation: RecentConversation,
         tool_rounds: usize,
+        /// The in-flight call, kept so the returning result can be tagged with its id positionally.
+        tool_call: ToolCall,
     },
 }
 impl Default for UserState {
@@ -97,16 +99,16 @@ pub struct User {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     UserMessage(String),
-    ToolResult(ToolResultData),
+    /// A tool result tagged with the id of the call it answers (from the in-flight `ToolCall`).
+    ToolResult { id: String, data: ToolResultData },
 }
 
 impl LLMInput {
-    pub fn to_openai_message(&self, last_tool_call_id: Option<&str>) -> Value {
+    pub fn to_openai_message(&self) -> Value {
         match self {
             LLMInput::UserMessage(msg) => json!({ "role": "user", "content": msg }),
-            LLMInput::ToolResult(ToolResultData { actual, .. }) => {
-                let id = last_tool_call_id.unwrap_or("call_0");
-                json!({ "role": "tool", "tool_call_id": id, "content": actual })
+            LLMInput::ToolResult { id, data } => {
+                json!({ "role": "tool", "tool_call_id": id, "content": data.actual })
             }
         }
     }
@@ -121,13 +123,14 @@ pub enum MathOperation {
     Exp(f32, f32),
 }
 
-/// Every executable tool. `ToolKind` (via `EnumDiscriminants`) is the fieldless companion used to
-/// build the advertised registry and look tools up by wire name — see `crate::tools`.
+/// A tool and its arguments. `ToolKind` (via `EnumDiscriminants`) is the fieldless companion used
+/// to build the advertised registry and look tools up by wire name — see `crate::tools`. Pair it
+/// with the parser-assigned id via [`ToolCall`] for a concrete invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, EnumDiscriminants)]
 #[strum_discriminants(name(ToolKind))]
 #[strum_discriminants(derive(EnumIter))]
 #[strum_discriminants(vis(pub))]
-pub enum ToolCall {
+pub enum ToolType {
     GetWeather { location: String },
     MathCalculation { operations: Vec<MathOperation> },
     WebSearch { query: String },
@@ -136,9 +139,17 @@ pub enum ToolCall {
     RecallLongTerm { search_term: String },
 }
 
+/// A concrete tool invocation: a [`ToolType`] tagged with the id the parser assigned, so a result
+/// can be paired back to the call that produced it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub tool_type: ToolType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
-    IntermediateToolCall { tool_call: ToolCall, id: String },
+    IntermediateToolCall { tool_call: ToolCall },
     MessageUser { response: String },
 }
 
@@ -156,16 +167,16 @@ impl LLMResponse {
                 json!({ "role": "assistant", "content": response })
             }
             // Tool-call turns carry empty content + a native tool_calls array. name/arguments are
-            // derived back from the bound ToolCall (the inverse of `ToolCall::bind`).
-            LLMDecisionType::IntermediateToolCall { tool_call, id } => json!({
+            // derived back from the bound ToolType (the inverse of `ToolType::bind`).
+            LLMDecisionType::IntermediateToolCall { tool_call } => json!({
                 "role": "assistant",
                 "content": "",
                 "tool_calls": [{
-                    "id": id,
+                    "id": tool_call.id,
                     "type": "function",
                     "function": {
-                        "name": tool_call.wire_name(),
-                        "arguments": tool_call.wire_arguments()
+                        "name": tool_call.tool_type.wire_name(),
+                        "arguments": tool_call.tool_type.wire_arguments()
                     }
                 }]
             }),
@@ -184,14 +195,17 @@ impl HistoryEntry {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
                 LLMInput::UserMessage(m) => format!("User:\n{m}"),
-                LLMInput::ToolResult(ToolResultData { simplified, .. }) => {
+                LLMInput::ToolResult {
+                    data: ToolResultData { simplified, .. },
+                    ..
+                } => {
                     format!("Assistant:\n{simplified}")
                 }
             },
             HistoryEntry::Output(LLMResponse { output, .. }) => {
                 let text = match output {
                     LLMDecisionType::MessageUser { response } => response.clone(),
-                    LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
+                    LLMDecisionType::IntermediateToolCall { tool_call } => {
                         format!("{tool_call:?}")
                     }
                 };

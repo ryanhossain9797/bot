@@ -2,7 +2,7 @@ use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     models::user::{
-        HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
+        HistoryEntry, MathOperation, ToolResultData, ToolType, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
     Env,
@@ -302,28 +302,28 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
 
 pub async fn execute_tool(
     env: Arc<Env>,
-    tool_call: ToolCall,
+    tool_type: ToolType,
     user_id: String,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
-    match tool_call {
-        ToolCall::GetWeather { location } => match fetch_weather(&location).await {
+    match tool_type {
+        ToolType::GetWeather { location } => match fetch_weather(&location).await {
             Ok(weather_info) => UserAction::ToolResult(Ok(weather_info)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::MathCalculation { operations } => {
+        ToolType::MathCalculation { operations } => {
             UserAction::ToolResult(Ok(execute_math(operations).await))
         }
-        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
+        ToolType::WebSearch { query } => match fetch_web_search(&query).await {
             Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
+        ToolType::VisitUrl { url } => match fetch_url_content(&url).await {
             Ok(content) => UserAction::ToolResult(Ok(content)),
             Err(e) => UserAction::ToolResult(Err(e.to_string())),
         },
-        ToolCall::RecallShortTerm { .. } => UserAction::ToolResult(Ok(recall_short(&history))),
-        ToolCall::RecallLongTerm { search_term } => {
+        ToolType::RecallShortTerm { .. } => UserAction::ToolResult(Ok(recall_short(&history))),
+        ToolType::RecallLongTerm { search_term } => {
             match recall_long(env, user_id, search_term).await {
                 Ok(data) => UserAction::ToolResult(Ok(data)),
                 Err(e) => UserAction::ToolResult(Err(e.to_string())),
