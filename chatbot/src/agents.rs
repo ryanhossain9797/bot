@@ -168,10 +168,9 @@ fn respond_blocking(
         chat_template_kwargs: None,
         add_generation_prompt: true,
         use_jinja: true,
-        // The model may emit multiple <tool_call> blocks in one turn regardless; with this set to
-        // false, parse_response_oaicompat hard-fails (`ffi error -3`) on such output and the turn
-        // dies silently (see #89). Allow it so parsing succeeds; we still run only the first call
-        // (first_tool_call warns on extras) until multi-tool execution lands.
+        // The model may emit multiple <tool_call> blocks in one turn; with this set to false,
+        // parse_response_oaicompat hard-fails (`ffi error -3`) on such output (#89). We allow it and
+        // run every call (#98) — the state machine fans them out and collects the results.
         parallel_tool_calls: true,
         enable_thinking: true,
         add_bos: false,
@@ -218,7 +217,7 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nOn each turn you either answer the user or make a SINGLE tool call (if you emit more than one tool call in a turn, only the first runs and the rest are dropped). Use tools deliberately and answer once you've gathered enough.\n\nCurrent date and time (UTC): {}",
+            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
             Utc::now().format("%Y-%m-%d %H:%M")
         )

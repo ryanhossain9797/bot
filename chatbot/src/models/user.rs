@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fmt::Display;
 use strum::{EnumDiscriminants, EnumIter};
 
@@ -73,12 +74,14 @@ pub enum UserState {
         outcome: LLMResponse,
         recent_conversation: RecentConversation,
     },
-    RunningTool {
+    RunningTools {
         is_timeout: bool,
         recent_conversation: RecentConversation,
         tool_rounds: usize,
-        /// The in-flight call, kept so the returning result can be tagged with its id positionally.
-        tool_call: ToolCall,
+        /// Calls still in flight this batch, keyed by id (id duplicated as the key).
+        pending_tools: HashMap<String, ToolCall>,
+        /// Calls that have returned, paired with their (error-folded) result.
+        completed_tools: Vec<(ToolCall, ToolResultData)>,
     },
 }
 impl Default for UserState {
@@ -99,17 +102,20 @@ pub struct User {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     UserMessage(String),
-    /// A tool result tagged with the id of the call it answers (from the in-flight `ToolCall`).
-    ToolResult { id: String, data: ToolResultData },
+    /// One turn's batch of tool results (id order), each tagged with the call it answers.
+    ToolResults(Vec<ToolResult>),
 }
 
 impl LLMInput {
-    pub fn to_openai_message(&self) -> Value {
+    /// Render to OpenAI messages: a user message is one message; a tool-result batch is one `tool`
+    /// message per result (the template groups them into a single tool-response turn).
+    pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
-            LLMInput::UserMessage(msg) => json!({ "role": "user", "content": msg }),
-            LLMInput::ToolResult { id, data } => {
-                json!({ "role": "tool", "tool_call_id": id, "content": data.actual })
-            }
+            LLMInput::UserMessage(msg) => vec![json!({ "role": "user", "content": msg })],
+            LLMInput::ToolResults(results) => results
+                .iter()
+                .map(|r| json!({ "role": "tool", "tool_call_id": r.id, "content": r.data.actual }))
+                .collect(),
         }
     }
 }
@@ -147,9 +153,17 @@ pub struct ToolCall {
     pub tool_type: ToolType,
 }
 
+/// A concrete tool result: the data tagged with the id of the call it answers (symmetric to
+/// [`ToolCall`]). One per call in a batch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub id: String,
+    pub data: ToolResultData,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
-    IntermediateToolCall { tool_call: ToolCall },
+    IntermediateToolCall { tool_calls: Vec<ToolCall> },
     MessageUser { response: String },
 }
 
@@ -166,19 +180,22 @@ impl LLMResponse {
             LLMDecisionType::MessageUser { response } => {
                 json!({ "role": "assistant", "content": response })
             }
-            // Tool-call turns carry empty content + a native tool_calls array. name/arguments are
-            // derived back from the bound ToolType (the inverse of `ToolType::bind`).
-            LLMDecisionType::IntermediateToolCall { tool_call } => json!({
+            // Tool-call turns carry empty content + a native tool_calls array (one entry per call).
+            // name/arguments are derived back from each bound ToolType (the inverse of `bind`).
+            LLMDecisionType::IntermediateToolCall { tool_calls } => json!({
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{
-                    "id": tool_call.id,
-                    "type": "function",
-                    "function": {
-                        "name": tool_call.tool_type.wire_name(),
-                        "arguments": tool_call.tool_type.wire_arguments()
-                    }
-                }]
+                "tool_calls": tool_calls
+                    .iter()
+                    .map(|tc| json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.tool_type.wire_name(),
+                            "arguments": tc.tool_type.wire_arguments()
+                        }
+                    }))
+                    .collect::<Vec<_>>()
             }),
         }
     }
@@ -195,18 +212,20 @@ impl HistoryEntry {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
                 LLMInput::UserMessage(m) => format!("User:\n{m}"),
-                LLMInput::ToolResult {
-                    data: ToolResultData { simplified, .. },
-                    ..
-                } => {
-                    format!("Assistant:\n{simplified}")
+                LLMInput::ToolResults(results) => {
+                    let joined = results
+                        .iter()
+                        .map(|r| r.data.simplified.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("Assistant:\n{joined}")
                 }
             },
             HistoryEntry::Output(LLMResponse { output, .. }) => {
                 let text = match output {
                     LLMDecisionType::MessageUser { response } => response.clone(),
-                    LLMDecisionType::IntermediateToolCall { tool_call } => {
-                        format!("{tool_call:?}")
+                    LLMDecisionType::IntermediateToolCall { tool_calls } => {
+                        format!("{tool_calls:?}")
                     }
                 };
                 format!("Assistant:\n{text}")
@@ -226,7 +245,11 @@ pub enum UserAction {
     CommitResult(Result<(), String>),
     LLMDecisionResult(Result<LLMResponse, String>),
     MessageSent(Result<(), String>),
-    ToolResult(Result<ToolResultData, String>),
+    /// One tool's result, tagged with the id of the call it answers (one action per dispatched call).
+    ToolResult {
+        id: String,
+        result: Result<ToolResultData, String>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -244,7 +267,7 @@ impl std::fmt::Debug for UserAction {
             UserAction::CommitResult(_) => write!(f, "CommitResult"),
             UserAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             UserAction::MessageSent(_) => write!(f, "MessageSent"),
-            UserAction::ToolResult(_) => write!(f, "ToolResult"),
+            UserAction::ToolResult { .. } => write!(f, "ToolResult"),
         }
     }
 }
