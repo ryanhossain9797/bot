@@ -1,7 +1,7 @@
 use crate::{
     models::user::{
         HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, RecentConversation, ToolCall,
-        UserAction,
+        ToolType, UserAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -42,10 +42,10 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
 }
 
 /// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
-/// agent prepends that). The `tool_call_id` is threaded from each assistant call to the result
-/// that follows it. Prior reasoning is not replayed (Qwen3 guidance). When the new input is a tool
-/// result, the running budget reminder is appended to it at render time (never persisted, so old
-/// turns don't accumulate stale counts).
+/// agent prepends that). Each tool result carries its own `tool_call_id` (from the call it answers),
+/// so no positional threading is needed. Prior reasoning is not replayed (Qwen3 guidance). When the
+/// new input is a tool result, the running budget reminder is appended to it at render time (never
+/// persisted, so old turns don't accumulate stale counts).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
@@ -57,68 +57,54 @@ fn build_conversation(
         .unwrap_or_default();
 
     let mut messages: Vec<Value> = Vec::new();
-    let mut last_tool_call_id: Option<String> = None;
 
     for entry in &history {
         match entry {
-            HistoryEntry::Input(input) => {
-                messages.push(input.to_openai_message(last_tool_call_id.as_deref()))
-            }
-            HistoryEntry::Output(response) => {
-                messages.push(response.to_openai_message());
-                last_tool_call_id = match &response.output {
-                    LLMDecisionType::IntermediateToolCall { id, .. } => Some(id.clone()),
-                    _ => None,
-                };
-            }
+            HistoryEntry::Input(input) => messages.extend(input.to_openai_messages()),
+            HistoryEntry::Output(response) => messages.push(response.to_openai_message()),
         }
     }
 
-    let mut new_message = new_input.to_openai_message(last_tool_call_id.as_deref());
-    if matches!(new_input, LLMInput::ToolResult(_)) {
+    let mut new_messages = new_input.to_openai_messages();
+    // Append the budget note to the last tool-result message of the batch (nearest the generation).
+    if matches!(new_input, LLMInput::ToolResults(_)) {
         if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
-            if let Some(content) = new_message.get("content").and_then(|c| c.as_str()) {
-                new_message["content"] = Value::String(format!("{content}\n\n{note}"));
+            if let Some(last) = new_messages.last_mut() {
+                if let Some(content) = last.get("content").and_then(|c| c.as_str()) {
+                    last["content"] = Value::String(format!("{content}\n\n{note}"));
+                }
             }
         }
     }
-    messages.push(new_message);
+    messages.extend(new_messages);
 
     Value::Array(messages)
 }
 
-/// First tool call from a parsed assistant message, as `(id, name, arguments_json_string)`.
-///
-/// Single-call by design: the state machine runs one tool per turn (`parallel_tool_calls: false`).
-/// Multi-tool is deferred to the state machine — if the model batches calls we take the first and
-/// warn rather than drop the rest silently.
-fn first_tool_call(parsed: &Value) -> Option<(String, String, String)> {
-    let calls = parsed.get("tool_calls").and_then(|v| v.as_array())?;
+/// Every tool call from a parsed assistant message, as `(id, name, arguments_json_string)` each.
+/// The model may batch several calls in one turn; we run them all.
+fn all_tool_calls(parsed: &Value) -> Vec<(String, String, String)> {
+    let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
 
-    if calls.len() > 1 {
-        println!(
-            "[warn] model emitted {} tool calls; running only the first (multi-tool not yet supported)",
-            calls.len()
-        );
-    }
-
-    let call = calls.first()?;
-    let id = call
-        .get("id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("call_0")
-        .to_string();
-    let name = call
-        .pointer("/function/name")
-        .and_then(|v| v.as_str())?
-        .to_string();
-    let arguments = call
-        .pointer("/function/arguments")
-        .and_then(|v| v.as_str())
-        .unwrap_or("{}")
-        .to_string();
-
-    Some((id, name, arguments))
+    calls
+        .iter()
+        .filter_map(|call| {
+            let id = call
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("call_0")
+                .to_string();
+            let name = call.pointer("/function/name").and_then(|v| v.as_str())?.to_string();
+            let arguments = call
+                .pointer("/function/arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}")
+                .to_string();
+            Some((id, name, arguments))
+        })
+        .collect()
 }
 
 async fn get_response_from_llm(
@@ -152,12 +138,20 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    // A tool call takes precedence over text; binding failures surface as a failed decision.
-    if let Some((id, name, arguments)) = first_tool_call(&parsed) {
-        let tool_call = ToolCall::bind(&name, &arguments)?;
+    // Tool calls take precedence over text; binding failures surface as a failed decision. Sort by
+    // id so the assistant calls and (later) their results share one canonical order in history,
+    // keeping the positional render aligned.
+    let calls = all_tool_calls(&parsed);
+    if !calls.is_empty() {
+        let mut tool_calls = Vec::with_capacity(calls.len());
+        for (id, name, arguments) in calls {
+            let tool_type = ToolType::bind(&name, &arguments)?;
+            tool_calls.push(ToolCall { id, tool_type });
+        }
+        tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
         return Ok(LLMResponse {
             thoughts,
-            output: LLMDecisionType::IntermediateToolCall { tool_call, id },
+            output: LLMDecisionType::IntermediateToolCall { tool_calls },
         });
     }
 

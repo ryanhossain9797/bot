@@ -2,7 +2,7 @@ use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     models::user::{
-        HistoryEntry, MathOperation, ToolCall, ToolResultData, UserAction,
+        HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
     Env,
@@ -300,35 +300,38 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
+/// Run one tool to its result. Errors are returned as `Err(String)`; the state machine folds them
+/// into a `ToolResultData` when moving the call to `completed_tools`.
+async fn run_tool(
+    env: Arc<Env>,
+    tool_type: ToolType,
+    user_id: String,
+    history: Vec<HistoryEntry>,
+) -> Result<ToolResultData, String> {
+    match tool_type {
+        ToolType::GetWeather { location } => fetch_weather(&location).await.map_err(|e| e.to_string()),
+        ToolType::MathCalculation { operations } => Ok(execute_math(operations).await),
+        ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
+        ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
+        ToolType::RecallShortTerm { .. } => Ok(recall_short(&history)),
+        ToolType::RecallLongTerm { search_term } => {
+            recall_long(env, user_id, search_term).await.map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Execute a single tool call as its own external op, tagging the result action with the call's id
+/// so the state machine can move it from `pending_tools` to `completed_tools`.
 pub async fn execute_tool(
     env: Arc<Env>,
     tool_call: ToolCall,
     user_id: String,
     history: Vec<HistoryEntry>,
 ) -> UserAction {
-    match tool_call {
-        ToolCall::GetWeather { location } => match fetch_weather(&location).await {
-            Ok(weather_info) => UserAction::ToolResult(Ok(weather_info)),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
-        ToolCall::MathCalculation { operations } => {
-            UserAction::ToolResult(Ok(execute_math(operations).await))
-        }
-        ToolCall::WebSearch { query } => match fetch_web_search(&query).await {
-            Ok(search_results) => UserAction::ToolResult(Ok(search_results)),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
-        ToolCall::VisitUrl { url } => match fetch_url_content(&url).await {
-            Ok(content) => UserAction::ToolResult(Ok(content)),
-            Err(e) => UserAction::ToolResult(Err(e.to_string())),
-        },
-        ToolCall::RecallShortTerm { .. } => UserAction::ToolResult(Ok(recall_short(&history))),
-        ToolCall::RecallLongTerm { search_term } => {
-            match recall_long(env, user_id, search_term).await {
-                Ok(data) => UserAction::ToolResult(Ok(data)),
-                Err(e) => UserAction::ToolResult(Err(e.to_string())),
-            }
-        }
+    let result = run_tool(env, tool_call.tool_type, user_id, history).await;
+    UserAction::ToolResult {
+        id: tool_call.id,
+        result,
     }
 }
 

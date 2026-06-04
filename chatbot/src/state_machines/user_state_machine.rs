@@ -3,7 +3,7 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::{LLMResponse, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::models::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
     models::user::{
         HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
@@ -16,6 +16,7 @@ use framework::{
     new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
 };
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -47,21 +48,29 @@ fn handle_outcome(
             },
             Vec::new(),
         )),
-        LLMDecisionType::IntermediateToolCall { tool_call, .. } => {
+        LLMDecisionType::IntermediateToolCall { tool_calls } => {
+            // Dispatch every call as its own external op and seed pending_tools, so each returning
+            // result can be moved to completed_tools by id (one round per batch).
             let mut external = Vec::<UserExternalOperation>::new();
-            external.push(Box::pin(execute_tool(
-                env,
-                tool_call,
-                user_id.to_string(),
-                recent_conversation.history.clone(),
-            )));
+            let mut pending_tools = HashMap::new();
+            for tool_call in tool_calls {
+                external.push(Box::pin(execute_tool(
+                    env.clone(),
+                    tool_call.clone(),
+                    user_id.to_string(),
+                    recent_conversation.history.clone(),
+                )));
+                pending_tools.insert(tool_call.id.clone(), tool_call);
+            }
 
             Ok((
                 User {
-                    state: UserState::RunningTool {
+                    state: UserState::RunningTools {
                         is_timeout,
                         recent_conversation,
                         tool_rounds: tool_rounds + 1,
+                        pending_tools,
+                        completed_tools: Vec::new(),
                     },
                     last_transition: Utc::now(),
                     pending,
@@ -210,74 +219,84 @@ pub fn user_transition(
                 0,
             ),
             (
-                UserState::RunningTool {
+                UserState::RunningTools {
                     recent_conversation,
                     is_timeout,
                     tool_rounds,
+                    mut pending_tools,
+                    mut completed_tools,
                 },
-                UserAction::ToolResult(res),
+                UserAction::ToolResult { id, result },
             ) => {
-                match res {
-                    Ok(tool_result) => {
-                        let current_input = LLMInput::ToolResult(tool_result.clone());
+                // Move this tool from pending to completed, folding any error into the result data.
+                if let Some(tool_call) = pending_tools.remove(id) {
+                    let data = match result {
+                        Ok(data) => data.clone(),
+                        Err(error_msg) => {
+                            let msg = format!("Tool execution failed: {error_msg}");
+                            ToolResultData {
+                                actual: msg.clone(),
+                                simplified: msg,
+                            }
+                        }
+                    };
+                    completed_tools.push((tool_call, data));
+                } else {
+                    eprintln!("[warn] tool result for unknown id {id}; ignoring");
+                }
 
-                        let history = recent_conversation.history();
-                        let mut external = Vec::<UserExternalOperation>::new();
-                        external.push(Box::pin(get_llm_decision(
-                            env.clone(),
-                            current_input.clone(),
-                            Some(recent_conversation),
-                            tool_rounds,
-                            MAX_TOOL_ROUNDS,
-                        )));
+                if pending_tools.is_empty() {
+                    // Whole batch done: sort by id so calls and results align positionally, then
+                    // hand the results back to the model as one tool-result turn.
+                    completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
+                    let results = completed_tools
+                        .into_iter()
+                        .map(|(tool_call, data)| ToolResult {
+                            id: tool_call.id,
+                            data,
+                        })
+                        .collect();
+                    let current_input = LLMInput::ToolResults(results);
 
-                        Ok((
-                            User {
-                                state: UserState::AwaitingLLMDecision {
-                                    is_timeout,
-                                    history,
-                                    current_input,
-                                    tool_rounds,
-                                },
-                                last_transition: Utc::now(),
-                                ..user
+                    let history = recent_conversation.history();
+                    let mut external = Vec::<UserExternalOperation>::new();
+                    external.push(Box::pin(get_llm_decision(
+                        env.clone(),
+                        current_input.clone(),
+                        Some(recent_conversation),
+                        tool_rounds,
+                        MAX_TOOL_ROUNDS,
+                    )));
+
+                    Ok((
+                        User {
+                            state: UserState::AwaitingLLMDecision {
+                                is_timeout,
+                                history,
+                                current_input,
+                                tool_rounds,
                             },
-                            external,
-                        ))
-                    }
-                    Err(error_msg) => {
-                        let error_result = format!("Tool execution failed: {}", error_msg);
-                        let current_input = LLMInput::ToolResult(ToolResultData {
-                            actual: error_result.clone(),
-                            simplified: error_result,
-                        });
-
-                        let history = recent_conversation.history();
-
-                        // Let LLM handle the error and inform the user
-                        let mut external = Vec::<UserExternalOperation>::new();
-                        external.push(Box::pin(get_llm_decision(
-                            env.clone(),
-                            current_input.clone(),
-                            Some(recent_conversation),
-                            tool_rounds,
-                            MAX_TOOL_ROUNDS,
-                        )));
-
-                        Ok((
-                            User {
-                                state: UserState::AwaitingLLMDecision {
-                                    is_timeout,
-                                    history,
-                                    current_input,
-                                    tool_rounds,
-                                },
-                                last_transition: Utc::now(),
-                                ..user
+                            last_transition: Utc::now(),
+                            ..user
+                        },
+                        external,
+                    ))
+                } else {
+                    // Still waiting on other tools in the batch — stay put, dispatch nothing new.
+                    Ok((
+                        User {
+                            state: UserState::RunningTools {
+                                is_timeout,
+                                recent_conversation,
+                                tool_rounds,
+                                pending_tools,
+                                completed_tools,
                             },
-                            external,
-                        ))
-                    }
+                            last_transition: Utc::now(),
+                            ..user
+                        },
+                        Vec::new(),
+                    ))
                 }
             }
             (
@@ -409,7 +428,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::AwaitingLLMDecision { .. }
         | UserState::SendingMessage { .. }
         | UserState::CommitingToMemory { .. }
-        | UserState::RunningTool { .. } => schedules.push(Scheduled {
+        | UserState::RunningTools { .. } => schedules.push(Scheduled {
             at: user.last_transition + ChronoDuration::milliseconds(600_000),
             action: UserAction::ForceReset,
         }),

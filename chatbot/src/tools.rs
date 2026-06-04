@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use strum::IntoEnumIterator;
 
-use crate::models::user::{ToolCall, ToolKind};
+use crate::models::user::{ToolKind, ToolType};
 
 #[derive(Debug, Deserialize)]
 struct GetWeatherArgs {
@@ -86,7 +86,7 @@ impl ToolKind {
     }
 }
 
-impl ToolCall {
+impl ToolType {
     pub fn tools_json() -> String {
         let entries: Vec<Value> = ToolKind::iter().filter_map(|k| k.definition()).collect();
         Value::Array(entries).to_string()
@@ -99,32 +99,32 @@ impl ToolCall {
     /// JSON arguments to replay this call into history — the inverse of `bind`.
     pub fn wire_arguments(&self) -> String {
         match self {
-            ToolCall::GetWeather { location } => json!({ "city": location }),
-            ToolCall::MathCalculation { operations } => json!({ "operations": operations }),
-            ToolCall::WebSearch { query } => json!({ "query": query }),
-            ToolCall::VisitUrl { url } => json!({ "url": url }),
-            ToolCall::RecallShortTerm { reason } => json!({ "reason": reason }),
-            ToolCall::RecallLongTerm { search_term } => json!({ "search_term": search_term }),
+            ToolType::GetWeather { location } => json!({ "city": location }),
+            ToolType::MathCalculation { operations } => json!({ "operations": operations }),
+            ToolType::WebSearch { query } => json!({ "query": query }),
+            ToolType::VisitUrl { url } => json!({ "url": url }),
+            ToolType::RecallShortTerm { reason } => json!({ "reason": reason }),
+            ToolType::RecallLongTerm { search_term } => json!({ "search_term": search_term }),
         }
         .to_string()
     }
 
-    /// Bind a model-emitted call (name + raw JSON arguments) to a `ToolCall`. Unknown name or
+    /// Bind a model-emitted call (name + raw JSON arguments) to a `ToolType`. Unknown name or
     /// unbindable tool → runtime error; the per-variant match is exhaustive so new variants must
     /// be handled here.
-    pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolCall> {
+    pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolType> {
         let kind = ToolKind::iter()
             .find(|k| k.wire_name() == name)
             .ok_or_else(|| anyhow::anyhow!("model called an unknown tool: {name}"))?;
 
         match kind {
-            ToolKind::GetWeather => Ok(ToolCall::GetWeather {
+            ToolKind::GetWeather => Ok(ToolType::GetWeather {
                 location: parse_args::<GetWeatherArgs>(name, arguments)?.city,
             }),
-            ToolKind::WebSearch => Ok(ToolCall::WebSearch {
+            ToolKind::WebSearch => Ok(ToolType::WebSearch {
                 query: parse_args::<WebSearchArgs>(name, arguments)?.query,
             }),
-            ToolKind::VisitUrl => Ok(ToolCall::VisitUrl {
+            ToolKind::VisitUrl => Ok(ToolType::VisitUrl {
                 url: parse_args::<VisitUrlArgs>(name, arguments)?.url,
             }),
             ToolKind::MathCalculation | ToolKind::RecallShortTerm | ToolKind::RecallLongTerm => {
