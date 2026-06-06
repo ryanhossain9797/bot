@@ -144,9 +144,16 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    // Tool calls take precedence over text; binding failures surface as a failed decision. Sort by
-    // id so the assistant calls and (later) their results share one canonical order in history,
-    // keeping the positional render aligned.
+    let content = parsed
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    // Tool calls + any user-facing preamble the model emitted alongside them. Binding failures
+    // surface as a failed decision. Sort by id so the assistant calls and (later) their results
+    // share one canonical order in history, keeping the positional render aligned.
     let calls = all_tool_calls(&parsed);
     if !calls.is_empty() {
         let mut tool_calls = Vec::with_capacity(calls.len());
@@ -157,16 +164,12 @@ async fn get_response_from_llm(
         tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
         return Ok(LLMResponse {
             thoughts,
-            output: LLMDecisionType::IntermediateToolCall { tool_calls },
+            output: LLMDecisionType::IntermediateToolCall {
+                tool_calls,
+                message: (!content.is_empty()).then_some(content),
+            },
         });
     }
-
-    let content = parsed
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
 
     Ok(LLMResponse {
         thoughts,

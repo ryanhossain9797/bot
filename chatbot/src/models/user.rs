@@ -73,6 +73,10 @@ pub enum UserState {
         is_timeout: bool,
         outcome: LLMResponse,
         recent_conversation: RecentConversation,
+        /// Tool rounds so far this turn, carried through so that if `outcome` holds tool calls
+        /// (a preamble + tools), the subsequent `handle_outcome` dispatch keeps the real count
+        /// instead of resetting the `MAX_TOOL_ROUNDS` budget.
+        tool_rounds: usize,
     },
     RunningTools {
         is_timeout: bool,
@@ -173,7 +177,13 @@ pub struct ToolResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMDecisionType {
-    IntermediateToolCall { tool_calls: Vec<ToolCall> },
+    /// Tool calls to dispatch this turn, optionally preceded by a user-facing preamble the model
+    /// emitted alongside them (e.g. "Let me look that up…"). The preamble is sent before the tools
+    /// run; `None` means a silent tool turn.
+    IntermediateToolCall {
+        tool_calls: Vec<ToolCall>,
+        message: Option<String>,
+    },
     MessageUser { response: String },
 }
 
@@ -190,11 +200,12 @@ impl LLMResponse {
             LLMDecisionType::MessageUser { response } => {
                 json!({ "role": "assistant", "content": response })
             }
-            // Tool-call turns carry empty content + a native tool_calls array (one entry per call).
-            // name/arguments are derived back from each bound ToolType (the inverse of `bind`).
-            LLMDecisionType::IntermediateToolCall { tool_calls } => json!({
+            // Tool-call turns carry the model's preamble (if any) as content + a native tool_calls
+            // array (one entry per call). name/arguments are derived back from each bound ToolType
+            // (the inverse of `bind`).
+            LLMDecisionType::IntermediateToolCall { tool_calls, message } => json!({
                 "role": "assistant",
-                "content": "",
+                "content": message.as_deref().unwrap_or(""),
                 "tool_calls": tool_calls
                     .iter()
                     .map(|tc| json!({
@@ -239,8 +250,12 @@ impl HistoryEntry {
             HistoryEntry::Output(LLMResponse { output, .. }) => {
                 let text = match output {
                     LLMDecisionType::MessageUser { response } => response.clone(),
-                    LLMDecisionType::IntermediateToolCall { tool_calls } => {
-                        format!("{tool_calls:?}")
+                    LLMDecisionType::IntermediateToolCall { tool_calls, message } => {
+                        // Surface the preamble alongside the calls so recall/memory stays faithful.
+                        match message {
+                            Some(msg) => format!("{msg}\n{tool_calls:?}"),
+                            None => format!("{tool_calls:?}"),
+                        }
                     }
                 };
                 format!("Assistant:\n{text}")

@@ -48,8 +48,9 @@ fn handle_outcome(
             },
             Vec::new(),
         )),
-        LLMDecisionType::IntermediateToolCall { tool_calls } => {
-            // Dispatch every call as its own external op and seed pending_tools, so each returning
+        LLMDecisionType::IntermediateToolCall { tool_calls, .. } => {
+            // Any preamble `message` was already sent on the way into SendingMessage; here we only
+            // dispatch the calls. Dispatch every call as its own external op and seed pending_tools, so each returning
             // result can be moved to completed_tools by id (one round per batch).
             let mut external = Vec::<UserExternalOperation>::new();
             let mut pending_tools = HashMap::new();
@@ -151,10 +152,13 @@ pub fn user_transition(
                         history: updated_history,
                     };
 
-                    // Extract message to send from outcome
+                    // Extract message to send from outcome: a plain reply, or the preamble that
+                    // accompanies a tool call. Either way it goes through SendingMessage; for a
+                    // tool-call outcome, the held `outcome` still carries the calls to dispatch on
+                    // MessageSent.
                     let message_to_send = match &response.output {
                         LLMDecisionType::MessageUser { response } => Some(response.clone()),
-                        LLMDecisionType::IntermediateToolCall { .. } => None,
+                        LLMDecisionType::IntermediateToolCall { message, .. } => message.clone(),
                     };
 
                     match message_to_send {
@@ -173,6 +177,7 @@ pub fn user_transition(
                                         is_timeout,
                                         outcome: response.clone(),
                                         recent_conversation: updated_conversation,
+                                        tool_rounds,
                                     },
                                     last_transition: Utc::now(),
                                     ..user
@@ -207,6 +212,7 @@ pub fn user_transition(
                     is_timeout,
                     outcome,
                     recent_conversation,
+                    tool_rounds,
                 },
                 UserAction::MessageSent(_res),
             ) => handle_outcome(
@@ -216,7 +222,7 @@ pub fn user_transition(
                 outcome,
                 recent_conversation,
                 user.pending,
-                0,
+                tool_rounds,
             ),
             (
                 UserState::RunningTools {
