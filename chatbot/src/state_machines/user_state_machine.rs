@@ -163,11 +163,11 @@ pub fn user_transition(
                         LLMDecisionType::IntermediateToolCall { tool_calls, message } => {
                             message.clone().or_else(|| {
                                 env.announce_tool_use.then(|| {
-                                    // Discord subtext (`-# `) + italic + emoji so it reads as a
-                                    // small, greyed status line, not a real bot message.
+                                    // Discord subtext (`-# `) + italic so it reads as a small,
+                                    // greyed status line, not a real bot message.
                                     tool_calls
                                         .iter()
-                                        .map(|tc| format!("-# 🔧 *Using tool: {}*", tc.tool_type.wire_name()))
+                                        .map(|tc| format!("-# *Using tool: {}*", tc.tool_type.wire_name()))
                                         .collect::<Vec<_>>()
                                         .join("\n")
                                 })
