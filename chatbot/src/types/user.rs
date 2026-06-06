@@ -96,21 +96,42 @@ impl Default for UserState {
     }
 }
 
+/// A user message. `queued` is true when it was buffered into `pending` while the bot was busy
+/// (a non-Idle state), so it crossed an in-flight response. The flag is the persisted truth;
+/// the `[Followup]` tag is applied only at prompt-render time (see `to_content`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserMessage {
+    pub text: String,
+    pub queued: bool,
+}
+
+impl UserMessage {
+    /// Prompt content: the text, prefixed with `[Followup]` when it was queued mid-response so the
+    /// model knows it may already be addressed. Render-time only — the stored `text` stays clean.
+    pub fn to_content(&self) -> String {
+        if self.queued {
+            format!("[Followup] {}", self.text)
+        } else {
+            self.text.clone()
+        }
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct User {
-    pub pending: Vec<String>,
+    pub pending: Vec<UserMessage>,
     pub state: UserState,
     pub last_transition: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
-    UserMessage(String),
+    UserMessage(UserMessage),
     /// One turn's batch of tool results (id order), each tagged with the call it answers.
-    /// The optional trailing `String` is user message(s) that arrived mid-tool-run, folded into
-    /// this same turn *after* the results — OpenAI requires tool responses to immediately follow
-    /// the assistant's `tool_calls`, so the user message comes last.
-    ToolResults(Vec<ToolResult>, Option<String>),
+    /// The optional trailing `UserMessage` is input that arrived mid-tool-run, folded into this
+    /// same turn *after* the results — OpenAI requires tool responses to immediately follow the
+    /// assistant's `tool_calls`, so the user message comes last.
+    ToolResults(Vec<ToolResult>, Option<UserMessage>),
 }
 
 impl LLMInput {
@@ -118,7 +139,7 @@ impl LLMInput {
     /// message per result (the template groups them into a single tool-response turn).
     pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
-            LLMInput::UserMessage(msg) => vec![json!({ "role": "user", "content": msg })],
+            LLMInput::UserMessage(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<Value> = results
                     .iter()
@@ -126,7 +147,7 @@ impl LLMInput {
                     .collect();
                 // A user interjection that arrived mid-tool-run trails the results (protocol order).
                 if let Some(msg) = user_msg {
-                    messages.push(json!({ "role": "user", "content": msg }));
+                    messages.push(json!({ "role": "user", "content": msg.to_content() }));
                 }
                 messages
             }
@@ -231,7 +252,7 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::UserMessage(m) => format!("User:\n{m}"),
+                LLMInput::UserMessage(m) => format!("User:\n{}", m.text),
                 LLMInput::ToolResults(results, user_msg) => {
                     let joined = results
                         .iter()
@@ -241,7 +262,7 @@ impl HistoryEntry {
                     let assistant = format!("Assistant:\n{joined}");
                     // Surface the folded-in interjection so recall/memory text stays faithful.
                     match user_msg {
-                        Some(msg) => format!("{assistant}\nUser:\n{msg}"),
+                        Some(msg) => format!("{assistant}\nUser:\n{}", msg.text),
                         None => assistant,
                     }
                 }
