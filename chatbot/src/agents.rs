@@ -5,7 +5,6 @@ use std::{
     sync::Arc,
 };
 
-use chrono::Utc;
 use llama_cpp_2::{
     context::params::LlamaContextParams,
     llama_backend::LlamaBackend,
@@ -217,9 +216,8 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — handling [Followup] messages: A message prefixed with [Followup] was sent while you were still producing your previous response or while tools were running, so the user hadn't seen your reply yet when they sent it. Before replying, consider how much your last reply already covers. If it's already answered, or you're only slightly adding on, acknowledge that you're building on your previous response rather than repeating it. If the follow-up is a genuinely different track or needs new information, just treat it as a normal message and proceed.\n\nCurrent date and time (UTC): {}",
-            self.system_prompt,
-            Utc::now().format("%Y-%m-%d %H:%M")
+            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — A [Followup] message arrived while you were still replying or while tools were running, so the user hadn't seen the result yet (they never see tool calls or their outputs, only your replies). If it follows one of your replies: gauge what you already covered and build on it rather than repeat — or handle it normally if it's a different track. If it follows tool results: weigh it against those results and consider whether it needs new information before answering. Either way, the goal is the same: make sure the user ends up with everything they asked for across your replies.",
+            self.system_prompt
         )
     }
 
