@@ -188,8 +188,9 @@ pub struct LLMResponse {
 }
 
 impl LLMResponse {
-    /// A degenerate decision: no user-facing message and no tool calls. Nothing to send, dispatch,
-    /// or record — production models don't emit empty turns, so we don't persist them.
+    /// A degenerate decision: no user-facing message and no tool calls. Currently unused — we keep
+    /// empty decisions in history (they render as `content: ""`) — but kept as a ready predicate.
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
     }
