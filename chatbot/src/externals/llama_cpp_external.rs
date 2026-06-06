@@ -66,12 +66,18 @@ fn build_conversation(
     }
 
     let mut new_messages = new_input.to_openai_messages();
-    // Append the budget note to the last tool-result message of the batch (nearest the generation).
-    if matches!(new_input, LLMInput::ToolResults(_)) {
+    // Append the budget note to the last tool-result message of the batch. A user interjection
+    // folded into the turn trails the results, so target the last `tool` message specifically
+    // rather than the last message overall (which would land the note on the user's words).
+    if matches!(new_input, LLMInput::ToolResults(..)) {
         if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
-            if let Some(last) = new_messages.last_mut() {
-                if let Some(content) = last.get("content").and_then(|c| c.as_str()) {
-                    last["content"] = Value::String(format!("{content}\n\n{note}"));
+            if let Some(last_tool) = new_messages
+                .iter_mut()
+                .rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
+            {
+                if let Some(content) = last_tool.get("content").and_then(|c| c.as_str()) {
+                    last_tool["content"] = Value::String(format!("{content}\n\n{note}"));
                 }
             }
         }

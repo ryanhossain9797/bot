@@ -103,7 +103,10 @@ pub struct User {
 pub enum LLMInput {
     UserMessage(String),
     /// One turn's batch of tool results (id order), each tagged with the call it answers.
-    ToolResults(Vec<ToolResult>),
+    /// The optional trailing `String` is user message(s) that arrived mid-tool-run, folded into
+    /// this same turn *after* the results — OpenAI requires tool responses to immediately follow
+    /// the assistant's `tool_calls`, so the user message comes last.
+    ToolResults(Vec<ToolResult>, Option<String>),
 }
 
 impl LLMInput {
@@ -112,10 +115,17 @@ impl LLMInput {
     pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
             LLMInput::UserMessage(msg) => vec![json!({ "role": "user", "content": msg })],
-            LLMInput::ToolResults(results) => results
-                .iter()
-                .map(|r| json!({ "role": "tool", "tool_call_id": r.id, "content": r.data.actual }))
-                .collect(),
+            LLMInput::ToolResults(results, user_msg) => {
+                let mut messages: Vec<Value> = results
+                    .iter()
+                    .map(|r| json!({ "role": "tool", "tool_call_id": r.id, "content": r.data.actual }))
+                    .collect();
+                // A user interjection that arrived mid-tool-run trails the results (protocol order).
+                if let Some(msg) = user_msg {
+                    messages.push(json!({ "role": "user", "content": msg }));
+                }
+                messages
+            }
         }
     }
 }
@@ -212,13 +222,18 @@ impl HistoryEntry {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
                 LLMInput::UserMessage(m) => format!("User:\n{m}"),
-                LLMInput::ToolResults(results) => {
+                LLMInput::ToolResults(results, user_msg) => {
                     let joined = results
                         .iter()
                         .map(|r| r.data.simplified.clone())
                         .collect::<Vec<_>>()
                         .join("\n");
-                    format!("Assistant:\n{joined}")
+                    let assistant = format!("Assistant:\n{joined}");
+                    // Surface the folded-in interjection so recall/memory text stays faithful.
+                    match user_msg {
+                        Some(msg) => format!("{assistant}\nUser:\n{msg}"),
+                        None => assistant,
+                    }
                 }
             },
             HistoryEntry::Output(LLMResponse { output, .. }) => {
