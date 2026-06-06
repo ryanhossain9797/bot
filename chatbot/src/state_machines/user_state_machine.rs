@@ -455,7 +455,7 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
         UserState::Idle {
             recent_conversation: Some((_, last_activity)),
         } => schedules.push(Scheduled {
-            at: last_activity + ChronoDuration::milliseconds(300_000),
+            at: last_activity + ChronoDuration::milliseconds(900_000),
             action: UserAction::Timeout,
         }),
         UserState::AwaitingLLMDecision { .. }
