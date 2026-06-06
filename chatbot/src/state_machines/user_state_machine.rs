@@ -161,13 +161,17 @@ pub fn user_transition(
                     let message_to_send = response.message.clone().or_else(|| {
                         (!response.tool_calls.is_empty() && env.announce_tool_use).then(|| {
                             // Discord subtext (`-# `) + italic so it reads as a small, greyed
-                            // status line, not a real bot message.
-                            response
+                            // status line, not a real bot message. One tool → singular; several →
+                            // a single combined line.
+                            let names: Vec<&str> = response
                                 .tool_calls
                                 .iter()
-                                .map(|tc| format!("-# *Using tool: {}*", tc.tool_type.wire_name()))
-                                .collect::<Vec<_>>()
-                                .join("\n")
+                                .map(|tc| tc.tool_type.wire_name())
+                                .collect();
+                            match names.as_slice() {
+                                [one] => format!("-# *using tool: {one}*"),
+                                many => format!("-# *using multiple tools: {}*", many.join(", ")),
+                            }
                         })
                     });
 
