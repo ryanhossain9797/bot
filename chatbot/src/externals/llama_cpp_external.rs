@@ -144,12 +144,13 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    let content = parsed
+    // Straight from JSON to Option — absent / null / blank content is None, never a "" round-trip.
+    let message = parsed
         .get("content")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
 
     // message and tool calls are independent — a turn may carry either or both. Binding failures
     // surface as a failed decision. Sort calls by id so the assistant calls and (later) their
@@ -164,7 +165,7 @@ async fn get_response_from_llm(
 
     Ok(LLMResponse {
         thoughts,
-        message: (!content.is_empty()).then_some(content),
+        message,
         tool_calls,
     })
 }
