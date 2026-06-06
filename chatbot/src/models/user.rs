@@ -188,6 +188,12 @@ pub struct LLMResponse {
 }
 
 impl LLMResponse {
+    /// A degenerate decision: no user-facing message and no tool calls. Nothing to send, dispatch,
+    /// or record — production models don't emit empty turns, so we don't persist them.
+    pub fn is_empty(&self) -> bool {
+        self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
+    }
+
     pub fn to_openai_message(&self) -> Value {
         // Assistant turn: the message (if any) as content, plus a native tool_calls array when
         // present. name/arguments are derived back from each bound ToolType (the inverse of `bind`).

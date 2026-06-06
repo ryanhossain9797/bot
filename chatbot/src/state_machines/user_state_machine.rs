@@ -142,10 +142,14 @@ pub fn user_transition(
                 UserAction::LLMDecisionResult(res),
             ) => match res {
                 Ok(response) => {
-                    // Add the input and output to history
+                    // Add the input and output to history. Skip recording a degenerate empty
+                    // decision (no message, no tool calls) — it's not a shape production models
+                    // emit, and replaying an empty assistant turn is just noise.
                     let mut updated_history = history;
                     updated_history.push(HistoryEntry::Input(current_input));
-                    updated_history.push(HistoryEntry::Output(response.clone()));
+                    if !response.is_empty() {
+                        updated_history.push(HistoryEntry::Output(response.clone()));
+                    }
 
                     let updated_conversation = RecentConversation {
                         thoughts: response.thoughts.clone(),
