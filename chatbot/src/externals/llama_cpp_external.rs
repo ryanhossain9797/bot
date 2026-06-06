@@ -1,5 +1,5 @@
 use crate::{
-    models::user::{
+    types::user::{
         HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, UserAction,
     },

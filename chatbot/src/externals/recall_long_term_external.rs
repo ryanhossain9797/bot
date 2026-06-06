@@ -5,7 +5,7 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use serenity::futures::TryStreamExt;
 
-use crate::{models::user::ToolResultData, Env};
+use crate::{types::user::ToolResultData, Env};
 
 async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::Result<String> {
     let mut options = InitOptions::default();

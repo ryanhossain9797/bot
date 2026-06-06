@@ -1,4 +1,4 @@
-use crate::models::user::{HistoryEntry, ToolResultData};
+use crate::types::user::{HistoryEntry, ToolResultData};
 
 pub fn recall_short(history: &[HistoryEntry]) -> ToolResultData {
     let start_index = history.len().saturating_sub(20);

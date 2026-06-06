@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use crate::models::bot::{Bot, BotAction, BotHandle};
+use crate::types::bot::{Bot, BotAction, BotHandle};
 
 impl Bot {
     pub fn new(receiver: mpsc::Receiver<BotAction>) -> Self {

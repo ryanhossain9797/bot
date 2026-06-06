@@ -3,9 +3,9 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
-    models::user::{
+    types::user::{
         HistoryEntry, LLMInput, RecentConversation, User, UserAction, UserId,
         UserState,
     },

@@ -1,7 +1,7 @@
 use crate::{
     configuration::client_tokens::BRAVE_SEARCH_TOKEN,
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
-    models::user::{
+    types::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, UserAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },

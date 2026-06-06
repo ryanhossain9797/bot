@@ -153,7 +153,7 @@ fn respond_blocking(
     let messages_json = serde_json::Value::Array(messages).to_string();
 
     let template = model.chat_template(None)?;
-    let tools_json = crate::models::user::ToolType::tools_json();
+    let tools_json = crate::types::user::ToolType::tools_json();
     let params = OpenAIChatTemplateParams {
         messages_json: &messages_json,
         tools_json: if allow_tools {

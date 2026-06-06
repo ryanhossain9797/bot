@@ -1,5 +1,5 @@
 use crate::{
-    models::user::{HistoryEntry, LLMInput, LLMResponse, UserAction},
+    types::user::{HistoryEntry, LLMInput, LLMResponse, UserAction},
     services::lance_db::LanceService,
     Env,
 };

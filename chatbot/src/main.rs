@@ -3,12 +3,12 @@
 mod agents;
 mod configuration;
 mod externals;
-mod models;
+mod types;
 mod services;
 mod state_machines;
 mod tools;
 
-use models::bot::BotHandle;
+use types::bot::BotHandle;
 use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
