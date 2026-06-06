@@ -217,7 +217,7 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — handling [Followup] messages: A message prefixed with [Followup] was sent while you were still producing your previous response or while tools were running, so it crossed that reply and MAY ALREADY BE ANSWERED by it. Before replying, check what you just said: do NOT repeat anything you already covered. Respond ONLY to what is genuinely new in it, and reprioritize only if it clearly changes what the user wants.\n\nCurrent date and time (UTC): {}",
+            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — handling [Followup] messages: A message prefixed with [Followup] was sent while you were still producing your previous response or while tools were running, so the user hadn't seen your reply yet when they sent it. Before replying, consider how much your last reply already covers. If it's already answered, or you're only slightly adding on, acknowledge that you're building on your previous response rather than repeating it. If the follow-up is a genuinely different track or needs new information, just treat it as a normal message and proceed.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
