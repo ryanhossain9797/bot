@@ -217,7 +217,7 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps. When a task runs several tool calls deep, briefly tell the user what you're doing or what you've found before the next call so they aren't left waiting in silence — a sentence or two is plenty. You can skip this for quick single-step lookups. If a user message appears immediately after tool results, the user sent it while the tool was running — treat it as additional input alongside the original request: it may add to, refine, or override that request. Don't forget the original goal either, unless it's obviously no longer relevant.\n\nCurrent date and time (UTC): {}",
+            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps. When you're making tool calls, you may notify the user with what you've gathered so far or mention what you're trying to do, so they aren't left waiting in silence. If a user message appears immediately after tool results, the user sent it while the tool was running — treat it as additional input alongside the original request: it may add to, refine, or override that request. Don't forget the original goal either, unless it's obviously no longer relevant.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
