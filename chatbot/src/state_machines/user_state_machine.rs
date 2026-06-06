@@ -376,11 +376,7 @@ pub fn user_transition(
 /// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
 /// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
 fn take_pending(pending: &mut Vec<String>) -> Option<String> {
-    if pending.is_empty() {
-        None
-    } else {
-        Some(std::mem::take(pending).join("\n"))
-    }
+    (!pending.is_empty()).then(|| std::mem::take(pending).join("\n"))
 }
 
 fn post_transition(
