@@ -1,6 +1,6 @@
 use crate::{
     models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, UserAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -151,29 +151,21 @@ async fn get_response_from_llm(
         .trim()
         .to_string();
 
-    // Tool calls + any user-facing preamble the model emitted alongside them. Binding failures
-    // surface as a failed decision. Sort by id so the assistant calls and (later) their results
-    // share one canonical order in history, keeping the positional render aligned.
+    // message and tool calls are independent — a turn may carry either or both. Binding failures
+    // surface as a failed decision. Sort calls by id so the assistant calls and (later) their
+    // results share one canonical order in history, keeping the positional render aligned.
     let calls = all_tool_calls(&parsed);
-    if !calls.is_empty() {
-        let mut tool_calls = Vec::with_capacity(calls.len());
-        for (id, name, arguments) in calls {
-            let tool_type = ToolType::bind(&name, &arguments)?;
-            tool_calls.push(ToolCall { id, tool_type });
-        }
-        tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
-        return Ok(LLMResponse {
-            thoughts,
-            output: LLMDecisionType::IntermediateToolCall {
-                tool_calls,
-                message: (!content.is_empty()).then_some(content),
-            },
-        });
+    let mut tool_calls = Vec::with_capacity(calls.len());
+    for (id, name, arguments) in calls {
+        let tool_type = ToolType::bind(&name, &arguments)?;
+        tool_calls.push(ToolCall { id, tool_type });
     }
+    tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
 
     Ok(LLMResponse {
         thoughts,
-        output: LLMDecisionType::MessageUser { response: content },
+        message: (!content.is_empty()).then_some(content),
+        tool_calls,
     })
 }
 
