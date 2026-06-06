@@ -217,7 +217,7 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — A [Followup] message arrived while you were still replying or while tools were running, so the user hadn't seen the result yet (they never see tool calls or their outputs, only your replies). If it follows one of your replies: gauge what you already covered and build on it rather than repeat — or handle it normally if it's a different track. If it follows tool results: weigh it against those results and consider whether it needs new information before answering.\n\nCurrent date and time (UTC): {}",
+            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — A [Followup] message arrived while you were still replying or while tools were running, so the user hadn't seen the result yet (they never see tool calls or their outputs, only your replies). If it follows one of your replies: gauge what you already covered and build on it rather than repeat — or handle it normally if it's a different track. If it follows tool results: weigh it against those results and consider whether it needs new information before answering. Either way, the goal is the same: make sure the user ends up with everything they asked for across your replies.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
