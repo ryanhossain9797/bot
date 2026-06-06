@@ -3,10 +3,10 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::models::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
-    models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, RecentConversation, User, UserAction, UserId,
+    types::user::{
+        HistoryEntry, LLMInput, RecentConversation, User, UserAction, UserId,
         UserState,
     },
     Env, ENV,
@@ -33,8 +33,10 @@ fn handle_outcome(
     pending: Vec<String>,
     tool_rounds: usize,
 ) -> UserTransitionResult {
-    match response.output {
-        LLMDecisionType::MessageUser { .. } => Ok((
+    // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
+    if response.tool_calls.is_empty() {
+        // No tools to run — settle into Idle.
+        Ok((
             User {
                 state: UserState::Idle {
                     recent_conversation: if is_timeout {
@@ -47,37 +49,36 @@ fn handle_outcome(
                 pending,
             },
             Vec::new(),
-        )),
-        LLMDecisionType::IntermediateToolCall { tool_calls } => {
-            // Dispatch every call as its own external op and seed pending_tools, so each returning
-            // result can be moved to completed_tools by id (one round per batch).
-            let mut external = Vec::<UserExternalOperation>::new();
-            let mut pending_tools = HashMap::new();
-            for tool_call in tool_calls {
-                external.push(Box::pin(execute_tool(
-                    env.clone(),
-                    tool_call.clone(),
-                    user_id.to_string(),
-                    recent_conversation.history.clone(),
-                )));
-                pending_tools.insert(tool_call.id.clone(), tool_call);
-            }
-
-            Ok((
-                User {
-                    state: UserState::RunningTools {
-                        is_timeout,
-                        recent_conversation,
-                        tool_rounds: tool_rounds + 1,
-                        pending_tools,
-                        completed_tools: Vec::new(),
-                    },
-                    last_transition: Utc::now(),
-                    pending,
-                },
-                external,
-            ))
+        ))
+    } else {
+        // Dispatch every call as its own external op and seed pending_tools, so each returning
+        // result can be moved to completed_tools by id (one round per batch).
+        let mut external = Vec::<UserExternalOperation>::new();
+        let mut pending_tools = HashMap::new();
+        for tool_call in response.tool_calls {
+            external.push(Box::pin(execute_tool(
+                env.clone(),
+                tool_call.clone(),
+                user_id.to_string(),
+                recent_conversation.history.clone(),
+            )));
+            pending_tools.insert(tool_call.id.clone(), tool_call);
         }
+
+        Ok((
+            User {
+                state: UserState::RunningTools {
+                    is_timeout,
+                    recent_conversation,
+                    tool_rounds: tool_rounds + 1,
+                    pending_tools,
+                    completed_tools: Vec::new(),
+                },
+                last_transition: Utc::now(),
+                pending,
+            },
+            external,
+        ))
     }
 }
 
@@ -141,7 +142,8 @@ pub fn user_transition(
                 UserAction::LLMDecisionResult(res),
             ) => match res {
                 Ok(response) => {
-                    // Add the input and output to history
+                    // Add the input and output to history. An empty decision (no message, no tool
+                    // calls) is still recorded; it renders as `content: ""` via to_openai_message.
                     let mut updated_history = history;
                     updated_history.push(HistoryEntry::Input(current_input));
                     updated_history.push(HistoryEntry::Output(response.clone()));
@@ -151,11 +153,23 @@ pub fn user_transition(
                         history: updated_history,
                     };
 
-                    // Extract message to send from outcome
-                    let message_to_send = match &response.output {
-                        LLMDecisionType::MessageUser { response } => Some(response.clone()),
-                        LLMDecisionType::IntermediateToolCall { .. } => None,
-                    };
+                    // What to send this turn: the model's message if it produced one; otherwise,
+                    // when the turn dispatches tools and the feature is on, a fixed "Using tool:
+                    // <name>" notice so the user isn't left in silence. None → nothing to send
+                    // (silent tool turn, or a do-nothing turn). Either way, if the held `outcome`
+                    // carries tool calls they're dispatched after MessageSent via handle_outcome.
+                    let message_to_send = response.message.clone().or_else(|| {
+                        (!response.tool_calls.is_empty() && env.announce_tool_use).then(|| {
+                            // Discord subtext (`-# `) + italic so it reads as a small, greyed
+                            // status line, not a real bot message.
+                            response
+                                .tool_calls
+                                .iter()
+                                .map(|tc| format!("-# *Using tool: {}*", tc.tool_type.wire_name()))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                    });
 
                     match message_to_send {
                         Some(message) => {
@@ -173,6 +187,7 @@ pub fn user_transition(
                                         is_timeout,
                                         outcome: response.clone(),
                                         recent_conversation: updated_conversation,
+                                        tool_rounds,
                                     },
                                     last_transition: Utc::now(),
                                     ..user
@@ -207,6 +222,7 @@ pub fn user_transition(
                     is_timeout,
                     outcome,
                     recent_conversation,
+                    tool_rounds,
                 },
                 UserAction::MessageSent(_res),
             ) => handle_outcome(
@@ -216,7 +232,7 @@ pub fn user_transition(
                 outcome,
                 recent_conversation,
                 user.pending,
-                0,
+                tool_rounds,
             ),
             (
                 UserState::RunningTools {

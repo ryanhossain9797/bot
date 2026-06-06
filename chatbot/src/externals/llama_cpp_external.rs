@@ -1,6 +1,6 @@
 use crate::{
-    models::user::{
-        HistoryEntry, LLMDecisionType, LLMInput, LLMResponse, RecentConversation, ToolCall,
+    types::user::{
+        HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, UserAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -144,33 +144,29 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    // Tool calls take precedence over text; binding failures surface as a failed decision. Sort by
-    // id so the assistant calls and (later) their results share one canonical order in history,
-    // keeping the positional render aligned.
-    let calls = all_tool_calls(&parsed);
-    if !calls.is_empty() {
-        let mut tool_calls = Vec::with_capacity(calls.len());
-        for (id, name, arguments) in calls {
-            let tool_type = ToolType::bind(&name, &arguments)?;
-            tool_calls.push(ToolCall { id, tool_type });
-        }
-        tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
-        return Ok(LLMResponse {
-            thoughts,
-            output: LLMDecisionType::IntermediateToolCall { tool_calls },
-        });
-    }
-
-    let content = parsed
+    // Straight from JSON to Option — absent / null / blank content is None, never a "" round-trip.
+    let message = parsed
         .get("content")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    // message and tool calls are independent — a turn may carry either or both. Binding failures
+    // surface as a failed decision. Sort calls by id so the assistant calls and (later) their
+    // results share one canonical order in history, keeping the positional render aligned.
+    let calls = all_tool_calls(&parsed);
+    let mut tool_calls = Vec::with_capacity(calls.len());
+    for (id, name, arguments) in calls {
+        let tool_type = ToolType::bind(&name, &arguments)?;
+        tool_calls.push(ToolCall { id, tool_type });
+    }
+    tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
 
     Ok(LLMResponse {
         thoughts,
-        output: LLMDecisionType::MessageUser { response: content },
+        message,
+        tool_calls,
     })
 }
 

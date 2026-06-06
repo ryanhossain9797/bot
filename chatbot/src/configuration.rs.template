@@ -9,3 +9,9 @@ pub mod debug {
     pub const DEBUG_FINAL_LLM_OUTPUT: bool = false;
     pub const DEBUG_LLM_STATS: bool = false;
 }
+pub mod features {
+    /// When true, the bot sends a fixed "Using tool: <name>" notice (no params) before dispatching
+    /// a tool batch, so the user isn't left in silence. Off → tool turns stay silent. Loaded into
+    /// `Env` at startup; read from there, never inline.
+    pub const ANNOUNCE_TOOL_USE: bool = true;
+}

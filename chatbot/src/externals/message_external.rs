@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::models::user::UserAction;
-use crate::models::user::UserChannel;
-use crate::{models::user::UserId, Env};
+use crate::types::user::UserAction;
+use crate::types::user::UserChannel;
+use crate::{types::user::UserId, Env};
 use serenity::all::CreateMessage;
 
 /// Discord rejects message content longer than 2000 characters.

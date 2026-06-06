@@ -2,7 +2,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use strum::IntoEnumIterator;
 
-use crate::models::user::{ToolKind, ToolType};
+use crate::types::user::{ToolKind, ToolType};
 
 #[derive(Debug, Deserialize)]
 struct GetWeatherArgs {

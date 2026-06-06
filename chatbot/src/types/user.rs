@@ -73,6 +73,10 @@ pub enum UserState {
         is_timeout: bool,
         outcome: LLMResponse,
         recent_conversation: RecentConversation,
+        /// Tool rounds so far this turn, carried through so that if `outcome` holds tool calls
+        /// (a preamble + tools), the subsequent `handle_outcome` dispatch keeps the real count
+        /// instead of resetting the `MAX_TOOL_ROUNDS` budget.
+        tool_rounds: usize,
     },
     RunningTools {
         is_timeout: bool,
@@ -171,31 +175,36 @@ pub struct ToolResult {
     pub data: ToolResultData,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LLMDecisionType {
-    IntermediateToolCall { tool_calls: Vec<ToolCall> },
-    MessageUser { response: String },
-}
-
+/// One decision from the model. `message` and `tool_calls` are independent: a turn may carry a
+/// user-facing message, a batch of tool calls, or both (e.g. "Let me look that up…" + the calls).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
     /// Reasoning (`<think>`); kept for logging but never replayed into the next prompt.
     pub thoughts: String,
-    pub output: LLMDecisionType,
+    /// User-facing text, if the model produced any.
+    pub message: Option<String>,
+    /// Tool calls to dispatch this turn; empty if none.
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl LLMResponse {
+    /// A degenerate decision: no user-facing message and no tool calls. Currently unused — we keep
+    /// empty decisions in history (they render as `content: ""`) — but kept as a ready predicate.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
+    }
+
     pub fn to_openai_message(&self) -> Value {
-        match &self.output {
-            LLMDecisionType::MessageUser { response } => {
-                json!({ "role": "assistant", "content": response })
-            }
-            // Tool-call turns carry empty content + a native tool_calls array (one entry per call).
-            // name/arguments are derived back from each bound ToolType (the inverse of `bind`).
-            LLMDecisionType::IntermediateToolCall { tool_calls } => json!({
-                "role": "assistant",
-                "content": "",
-                "tool_calls": tool_calls
+        // Assistant turn: the message (if any) as content, plus a native tool_calls array when
+        // present. name/arguments are derived back from each bound ToolType (the inverse of `bind`).
+        let mut msg = json!({
+            "role": "assistant",
+            "content": self.message.as_deref().unwrap_or(""),
+        });
+        if !self.tool_calls.is_empty() {
+            msg["tool_calls"] = Value::Array(
+                self.tool_calls
                     .iter()
                     .map(|tc| json!({
                         "id": tc.id,
@@ -205,9 +214,10 @@ impl LLMResponse {
                             "arguments": tc.tool_type.wire_arguments()
                         }
                     }))
-                    .collect::<Vec<_>>()
-            }),
+                    .collect(),
+            );
         }
+        msg
     }
 }
 
@@ -236,14 +246,16 @@ impl HistoryEntry {
                     }
                 }
             },
-            HistoryEntry::Output(LLMResponse { output, .. }) => {
-                let text = match output {
-                    LLMDecisionType::MessageUser { response } => response.clone(),
-                    LLMDecisionType::IntermediateToolCall { tool_calls } => {
-                        format!("{tool_calls:?}")
-                    }
-                };
-                format!("Assistant:\n{text}")
+            HistoryEntry::Output(LLMResponse { message, tool_calls, .. }) => {
+                // Surface message and any calls so recall/memory stays faithful.
+                let mut parts = Vec::new();
+                if let Some(msg) = message {
+                    parts.push(msg.clone());
+                }
+                if !tool_calls.is_empty() {
+                    parts.push(format!("{tool_calls:?}"));
+                }
+                format!("Assistant:\n{}", parts.join("\n"))
             }
         }
     }
