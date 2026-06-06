@@ -6,7 +6,7 @@ use crate::externals::{
 use crate::types::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
     types::user::{
-        HistoryEntry, LLMInput, RecentConversation, User, UserAction, UserId,
+        HistoryEntry, LLMInput, RecentConversation, User, UserAction, UserId, UserMessage,
         UserState,
     },
     Env, ENV,
@@ -30,7 +30,7 @@ fn handle_outcome(
     is_timeout: bool,
     response: LLMResponse,
     recent_conversation: RecentConversation,
-    pending: Vec<String>,
+    pending: Vec<UserMessage>,
     tool_rounds: usize,
 ) -> UserTransitionResult {
     // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
@@ -117,7 +117,13 @@ pub fn user_transition(
 
                 let pending = if accept_message {
                     let mut pending = user.pending;
-                    pending.push(msg.clone());
+                    // Queued iff it arrived while the bot was busy (any non-Idle state) — i.e. it
+                    // crossed an in-flight response. An Idle arrival drains immediately and isn't.
+                    let queued = !matches!(&user_state, UserState::Idle { .. });
+                    pending.push(UserMessage {
+                        text: msg.clone(),
+                        queued,
+                    });
                     pending
                 } else {
                     user.pending
@@ -359,7 +365,10 @@ pub fn user_transition(
                 println!("Commited to Memory");
 
                 let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
-                let current_input = LLMInput::UserMessage(timeout_message);
+                let current_input = LLMInput::UserMessage(UserMessage {
+                    text: timeout_message,
+                    queued: false,
+                });
 
                 let mut external = Vec::<UserExternalOperation>::new();
 
@@ -395,8 +404,19 @@ pub fn user_transition(
 /// Drain buffered user messages into a single newline-joined string, clearing `pending`. Returns
 /// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
 /// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
-fn take_pending(pending: &mut Vec<String>) -> Option<String> {
-    (!pending.is_empty()).then(|| std::mem::take(pending).join("\n"))
+fn take_pending(pending: &mut Vec<UserMessage>) -> Option<UserMessage> {
+    (!pending.is_empty()).then(|| {
+        let drained = std::mem::take(pending);
+        // Messages drained together are homogeneous (all queued during a busy turn, or a single
+        // Idle arrival); mark the merged message queued if any were.
+        let queued = drained.iter().any(|m| m.queued);
+        let text = drained
+            .into_iter()
+            .map(|m| m.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        UserMessage { text, queued }
+    })
 }
 
 fn post_transition(

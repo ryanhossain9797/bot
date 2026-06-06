@@ -53,8 +53,8 @@ async fn commit(
     let filtered: Vec<String> = history
         .iter()
         .filter_map(|h| match h {
-            HistoryEntry::Input(LLMInput::UserMessage(text)) => {
-                Some(format!("USER MESSAGE: {text}"))
+            HistoryEntry::Input(LLMInput::UserMessage(msg)) => {
+                Some(format!("USER MESSAGE: {}", msg.text))
             }
             HistoryEntry::Output(LLMResponse {
                 message: Some(response),
