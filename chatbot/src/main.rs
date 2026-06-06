@@ -26,7 +26,10 @@ struct Env {
     bot_singleton_handle: BotHandle,
     lance_service: Arc<LanceService>,
     llama_cpp: Arc<LlamaCppService>, // Disconnected - base image doesn't have GGUF
-                                     // ollama: Arc<OllamaService>,
+    // ollama: Arc<OllamaService>,
+    /// Feature flag (from `configuration::features`): announce each tool batch to the user with a
+    /// fixed "Using tool: <name>" notice. Read via `env.announce_tool_use`, never the const inline.
+    announce_tool_use: bool,
 }
 
 // ENV needs to be initialized asynchronously, so we use OnceCell
@@ -46,6 +49,7 @@ async fn init_env() -> anyhow::Result<Arc<Env>> {
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),
         // ollama: Arc::new(ollama_service),
+        announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
     }))
 }
 

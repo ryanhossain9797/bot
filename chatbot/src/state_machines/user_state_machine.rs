@@ -152,13 +152,25 @@ pub fn user_transition(
                         history: updated_history,
                     };
 
-                    // Extract message to send from outcome: a plain reply, or the preamble that
-                    // accompanies a tool call. Either way it goes through SendingMessage; for a
-                    // tool-call outcome, the held `outcome` still carries the calls to dispatch on
-                    // MessageSent.
+                    // Extract message to send from outcome: a plain reply, or — for a tool-call
+                    // outcome — a model preamble if one was emitted (rare), else a fixed
+                    // "Using tool: <name>" notice when the feature is enabled, so the user isn't
+                    // left in silence. Disabled → None → silent tool turn. Either way it goes
+                    // through SendingMessage; the held `outcome` still carries the calls to
+                    // dispatch on MessageSent.
                     let message_to_send = match &response.output {
                         LLMDecisionType::MessageUser { response } => Some(response.clone()),
-                        LLMDecisionType::IntermediateToolCall { message, .. } => message.clone(),
+                        LLMDecisionType::IntermediateToolCall { tool_calls, message } => {
+                            message.clone().or_else(|| {
+                                env.announce_tool_use.then(|| {
+                                    tool_calls
+                                        .iter()
+                                        .map(|tc| format!("Using tool: {}", tc.tool_type.wire_name()))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                })
+                            })
+                        }
                     };
 
                     match message_to_send {
