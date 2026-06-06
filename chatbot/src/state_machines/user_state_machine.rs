@@ -256,7 +256,11 @@ pub fn user_transition(
                             data,
                         })
                         .collect();
-                    let current_input = LLMInput::ToolResults(results);
+                    // Fold any messages the user sent mid-tool-run into this same turn (after the
+                    // results, per the OpenAI protocol). Clearing pending here is required — else
+                    // post_transition drains it again at Idle and the message is sent twice.
+                    let mut pending = user.pending;
+                    let current_input = LLMInput::ToolResults(results, take_pending(&mut pending));
 
                     let history = recent_conversation.history();
                     let mut external = Vec::<UserExternalOperation>::new();
@@ -277,7 +281,7 @@ pub fn user_transition(
                                 tool_rounds,
                             },
                             last_transition: Utc::now(),
-                            ..user
+                            pending,
                         },
                         external,
                     ))
@@ -368,52 +372,61 @@ pub fn user_transition(
     })
 }
 
+/// Drain buffered user messages into a single newline-joined string, clearing `pending`. Returns
+/// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
+/// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
+fn take_pending(pending: &mut Vec<String>) -> Option<String> {
+    (!pending.is_empty()).then(|| std::mem::take(pending).join("\n"))
+}
+
 fn post_transition(
     env: Arc<Env>,
     _user_id: UserId,
     result: UserTransitionResult,
 ) -> UserTransitionResult {
-    let (user, mut external) = result?;
+    let (mut user, mut external) = result?;
 
-    match (&user.state, user.pending.len() > 0) {
-        (
-            UserState::Idle {
-                recent_conversation,
+    // Never rest in Idle with buffered input: drain it into a fresh user turn. (Mirrors the
+    // mid-tool-loop fold in the RunningTools branch, which folds into a tool-result turn instead.)
+    let recent_conversation = match &user.state {
+        UserState::Idle {
+            recent_conversation,
+        } => recent_conversation.clone(),
+        _ => return Ok((user, external)),
+    };
+
+    let Some(msg) = take_pending(&mut user.pending) else {
+        return Ok((user, external));
+    };
+
+    let history = recent_conversation
+        .as_ref()
+        .map(|(rc, _)| rc.history())
+        .unwrap_or_else(Vec::new);
+
+    let current_input = LLMInput::UserMessage(msg);
+
+    external.push(Box::pin(get_llm_decision(
+        env.clone(),
+        current_input.clone(),
+        recent_conversation.map(|(rc, _)| rc),
+        0,
+        MAX_TOOL_ROUNDS,
+    )));
+
+    Ok((
+        User {
+            state: UserState::AwaitingLLMDecision {
+                is_timeout: false,
+                history,
+                current_input,
+                tool_rounds: 0,
             },
-            true,
-        ) => {
-            let msg = user.pending.join("\n");
-
-            let current_input = LLMInput::UserMessage(msg.clone());
-
-            let history = recent_conversation
-                .as_ref()
-                .map(|(rc, _)| rc.history())
-                .unwrap_or_else(|| Vec::new());
-
-            external.push(Box::pin(get_llm_decision(
-                env.clone(),
-                current_input.clone(),
-                recent_conversation.as_ref().map(|(rc, _)| rc.clone()),
-                0,
-                MAX_TOOL_ROUNDS,
-            )));
-
-            let user = User {
-                state: UserState::AwaitingLLMDecision {
-                    is_timeout: false,
-                    history,
-                    current_input: LLMInput::UserMessage(msg.clone()),
-                    tool_rounds: 0,
-                },
-                last_transition: Utc::now(),
-                pending: Vec::new(),
-            };
-
-            Ok((user, external))
-        }
-        _ => Ok((user, external)),
-    }
+            last_transition: Utc::now(),
+            pending: Vec::new(),
+        },
+        external,
+    ))
 }
 
 pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
