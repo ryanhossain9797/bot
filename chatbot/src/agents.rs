@@ -217,7 +217,7 @@ impl Agent {
 
     pub fn system_content(&self) -> String {
         format!(
-            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nCurrent date and time (UTC): {}",
+            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps. If a user message appears immediately after tool results, this means the user sent something while the tool was running — incorporate the new instructions into your decision making for the next step.\n\nCurrent date and time (UTC): {}",
             self.system_prompt,
             Utc::now().format("%Y-%m-%d %H:%M")
         )
