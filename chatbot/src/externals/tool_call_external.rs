@@ -1,5 +1,5 @@
 use crate::{
-    configuration::client_tokens::BRAVE_SEARCH_TOKEN,
+    configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     types::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, UserAction,
@@ -126,22 +126,173 @@ async fn fetch_weather(location: &str) -> anyhow::Result<ToolResultData> {
     })
 }
 
+/// SearxNG `/search?format=json` response. Beyond the ranked `results`, SearxNG aggregates an
+/// instant `answers` summary and structured `infoboxes` (entity cards) — these are often a direct
+/// answer to the query, so we surface them ahead of the links. Other top-level fields
+/// (suggestions, corrections, …) are ignored.
+#[derive(Deserialize)]
+struct SearxngResponse {
+    query: String,
+    #[serde(default)]
+    answers: Vec<SearxngAnswer>,
+    #[serde(default)]
+    infoboxes: Vec<SearxngInfobox>,
+    results: Vec<SearxngResult>,
+}
+
+#[derive(Deserialize)]
+struct SearxngAnswer {
+    #[serde(default)]
+    answer: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SearxngInfobox {
+    /// The infobox heading (entity name), e.g. "Rust (programming language)".
+    #[serde(default)]
+    infobox: Option<String>,
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SearxngResult {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    /// SearxNG's result snippet (mapped to our "Description" line).
+    #[serde(default)]
+    content: Option<String>,
+    /// Publication date, when the engine reports one (news/articles); absent for most pages.
+    #[serde(default, rename = "publishedDate")]
+    published_date: Option<String>,
+}
+
+/// Search results formatted for the model. The 32k-token context affords plenty of room; the old
+/// cap of 3 was tuned for a much smaller, less capable setup.
+const MAX_SEARCH_RESULTS: usize = 8;
+/// Of those, how many also go into the `simplified` (recall/memory) text.
+const SIMPLIFIED_SEARCH_RESULTS: usize = 3;
+
+async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
+    let search_url = format!(
+        "{}/search?q={}&format=json",
+        SEARXNG_URL.trim_end_matches('/'),
+        urlencoding::encode(query)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let response = client
+        .get(&search_url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to SearxNG at {SEARXNG_URL}: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(anyhow::anyhow!(
+            "SearxNG returned error status {status}: {error_text}"
+        ));
+    }
+
+    let search_response = response
+        .json::<SearxngResponse>()
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to parse SearxNG response: {e}. Ensure SEARXNG_URL points at a SearxNG instance with JSON format enabled (search.formats includes json).")
+        })?;
+
+    let original_query = search_response.query;
+
+    // High-signal lead: instant answers and the first infobox, when present — often a direct
+    // answer to the query, placed ahead of the ranked links. Shared by both simplified and actual.
+    let mut lead = String::new();
+    for answer in search_response
+        .answers
+        .iter()
+        .filter_map(|a| a.answer.as_deref())
+        .filter(|s| !s.is_empty())
+    {
+        lead.push_str(&format!("Instant answer: {answer}\n\n"));
+    }
+    if let Some(infobox) = search_response.infoboxes.first() {
+        if let Some(content) = infobox.content.as_deref().filter(|s| !s.is_empty()) {
+            let title = infobox.infobox.as_deref().unwrap_or("Info");
+            lead.push_str(&format!("{title}: {content}\n\n"));
+        }
+    }
+
+    let formatted_results: Vec<String> = search_response
+        .results
+        .into_iter()
+        .take(MAX_SEARCH_RESULTS)
+        .map(|result| {
+            let title = result.title.as_deref().unwrap_or("null");
+            let url = result.url.as_deref().unwrap_or("null");
+            let description = result.content.as_deref().unwrap_or("null");
+
+            let safe_len = description.floor_char_boundary(MAX_SEARCH_DESCRIPTION_LENGTH);
+            let description = &description[..safe_len];
+            // Surface the publication date when the engine provides one (recency cue).
+            let published = result
+                .published_date
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|d| format!("Published: {d}\n"))
+                .unwrap_or_default();
+            format!("Title: {title}\nURL to visit: {url}\n{published}Description: {description}\n\n")
+        })
+        .collect();
+
+    // `simplified` (recall/memory) keeps the lead plus the top few results; `actual` (fed to the
+    // model live) keeps the lead plus every result.
+    let split = SIMPLIFIED_SEARCH_RESULTS.min(formatted_results.len());
+    let (primary, secondary) = formatted_results.split_at(split);
+
+    let simplified = format!(
+        "{lead}Search results for \"{original_query}\":\n{}",
+        primary.join("\n")
+    );
+
+    let actual = format!("{simplified}\n{}", secondary.join("\n"));
+
+    Ok(ToolResultData { actual, simplified })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dormant fallback: the legacy Brave Search path, kept intact but NOT wired into `web_search`
+// (the active tool uses `fetch_web_search` / SearxNG above). Left in place so we can fall back by
+// swapping the call in `run_tool`. Remove once SearxNG is proven out. See #113 / closed #112.
+// ---------------------------------------------------------------------------------------------
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct BraveSearchResponse {
     query: BraveSearchQuery,
     web: BraveWebResults,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct BraveSearchQuery {
     original: String,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct BraveWebResults {
     results: Vec<BraveSearchResult>,
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize)]
 struct BraveSearchResult {
     #[serde(default)]
@@ -152,7 +303,8 @@ struct BraveSearchResult {
     description: Option<String>,
 }
 
-async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
+#[allow(dead_code)]
+async fn fetch_web_search_brave(query: &str) -> anyhow::Result<ToolResultData> {
     let search_url = format!(
         "https://api.search.brave.com/res/v1/web/search?q={}",
         urlencoding::encode(query)
@@ -195,7 +347,7 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
         .web
         .results
         .into_iter()
-        .take(3)
+        .take(MAX_SEARCH_RESULTS)
         .map(|result| {
             let title = result.title.as_deref().unwrap_or("null");
             let url = result.url.as_deref().unwrap_or("null");
@@ -203,19 +355,15 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
 
             let safe_len = description.floor_char_boundary(MAX_SEARCH_DESCRIPTION_LENGTH);
             let description = &description[..safe_len];
-            format!("Title: {title}\nURL to visit: {url}\nDescription: {description}\n\n",)
+            format!("Title: {title}\nURL to visit: {url}\nDescription: {description}\n\n")
         })
         .collect();
 
-    let simplified_partition = 1;
-    let (primary, secondary) = match formatted_results.len() > simplified_partition {
-        true => formatted_results.split_at(simplified_partition),
-        false => (formatted_results.as_slice(), &[][..]),
-    };
+    let split = SIMPLIFIED_SEARCH_RESULTS.min(formatted_results.len());
+    let (primary, secondary) = formatted_results.split_at(split);
 
     let simplified = format!(
-        "Search results for \"{}\":\n{}",
-        original_query,
+        "Search results for \"{original_query}\":\n{}",
         primary.join("\n")
     );
 
@@ -277,22 +425,22 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
 }
 
 async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
-    pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 10000;
-    pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 300;
+    // Generous caps for the 32k-token context: `actual` is the full read fed to the model,
+    // `simplified` a longer preview for recall/memory (were 10000 / 300).
+    pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 50000;
+    pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 2000;
 
     let extracted = fetch_page(url).await?;
 
-    let actual_content = if extracted.content.len() > MAX_ACTUAL_WEB_CONTENT_LENGTH {
-        &extracted.content[..MAX_ACTUAL_WEB_CONTENT_LENGTH]
-    } else {
-        &extracted.content
-    };
+    // `floor_char_boundary` clamps to the string length and never splits a multi-byte char, so a
+    // raw byte-index slice here can't panic on a UTF-8 boundary (the old `[..N]` could).
+    let actual_end = extracted.content.floor_char_boundary(MAX_ACTUAL_WEB_CONTENT_LENGTH);
+    let actual_content = &extracted.content[..actual_end];
 
-    let simplified_content = if extracted.content.len() > MAX_SIMPLIFIED_WEB_CONTENT_LENGTH {
-        &extracted.content[..MAX_SIMPLIFIED_WEB_CONTENT_LENGTH]
-    } else {
-        &extracted.content
-    };
+    let simplified_end = extracted
+        .content
+        .floor_char_boundary(MAX_SIMPLIFIED_WEB_CONTENT_LENGTH);
+    let simplified_content = &extracted.content[..simplified_end];
 
     let actual = format!("Content of {url}:\n{actual_content}");
     let simplified = format!("Content of {url}:\n{simplified_content}");
@@ -347,10 +495,12 @@ mod tests {
         assert!(weather.actual.contains("Wind Speed"));
     }
 
+    // Integration test: hits the SearxNG instance at SEARXNG_URL (reachable as localhost:8080 from
+    // the host). Requires a running instance with JSON format enabled.
     #[tokio::test]
     async fn test_fetch_web_search() {
         let search_results = fetch_web_search("Rust programming").await.unwrap();
-        assert!(search_results.actual.contains("Search Results for"));
+        assert!(search_results.actual.contains("Search results for"));
         assert!(search_results.actual.contains("Rust programming"));
     }
 

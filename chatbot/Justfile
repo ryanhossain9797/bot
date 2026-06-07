@@ -26,8 +26,12 @@ run_local tag="latest":
     docker stop bot 2>/dev/null || true
     docker rm bot 2>/dev/null || true
     # Run with AMD GPU support (ROCm)
+    # Host networking: the bot shares the host's network stack (no bridge/NAT), so it reaches
+    # host-published services like the SearxNG instance at http://localhost:8080 directly — see
+    # SEARXNG_URL. The bot has no inbound listener (Discord gateway is outbound), so no port clash.
     docker run -d \
         --name bot \
+        --network host \
         --device=/dev/kfd \
         --device=/dev/dri \
         --group-add video \
