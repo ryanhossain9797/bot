@@ -83,20 +83,46 @@ To improve startup performance, the bot pre-evaluates the static base prompt (sy
 
 The `web_search` tool queries a [SearxNG](https://github.com/searxng/searxng) instance — a self-hosted metasearch engine — instead of a metered third-party API, so there's no external rate limit to trip.
 
-The bot only needs a reachable instance with **JSON output enabled**:
+The bot only needs **a reachable instance with JSON output enabled**:
 
 - Point `SEARXNG_URL` (in `src/configuration.rs`) at the instance's base URL. The bot runs with host networking (`--network host`), so `localhost` is the host machine — the default `http://localhost:8080` reaches a SearxNG published on the host's port 8080. A remote instance works too (e.g. `https://search.example.com`).
-- The instance **must** have JSON format enabled, off by default. In its `settings.yml`:
-  ```yaml
-  search:
-    formats:
-      - html
-      - json
-  ```
-- Verify with: `curl "$SEARXNG_URL/search?q=test&format=json"` — it should return JSON with a `results` array.
+- The instance **must** have JSON format enabled (it's off by default — see the `settings.yml` below).
 
 > [!NOTE]
-> How you run SearxNG (Docker, bare metal, hosted) is out of scope here — see the [upstream SearxNG docs](https://docs.searxng.org/). A quick local container is `docker run -d --name searxng -p 8080:8080 -v <config-dir>:/etc/searxng searxng/searxng`, with the JSON format and a `server.secret_key` set in the mounted `settings.yml`.
+> **Running** SearxNG (Docker, bare metal, hosted) is out of scope here — see the [upstream docs](https://docs.searxng.org/). The steps below are just a convenience for a quick local instance.
+
+A minimal local container:
+
+1. **Create a config dir and `settings.yml`** that overrides only what we need on top of the image defaults:
+   ```yaml
+   # <config-dir>/settings.yml
+   use_default_settings: true
+   server:
+     # Required: SearxNG won't start without one. Generate via `openssl rand -hex 32`.
+     secret_key: "<random-hex>"
+     # Listen on all interfaces inside the container so the published port works.
+     bind_address: "0.0.0.0"
+   search:
+     # JSON is off by default; the bot's web_search calls the JSON endpoint, so enable it.
+     formats:
+       - html
+       - json
+   ```
+
+2. **Run the container**, mounting that config and publishing port 8080 on the host:
+   ```bash
+   docker run -d --name searxng --restart unless-stopped \
+     -p 8080:8080 \
+     -v <config-dir>:/etc/searxng \
+     searxng/searxng
+   ```
+   The bot runs with `--network host`, so the host's `:8080` is reachable at the default `SEARXNG_URL=http://localhost:8080`.
+
+3. **Verify JSON output works:**
+   ```bash
+   curl "http://localhost:8080/search?q=test&format=json"   # → JSON with a "results" array
+   ```
+   A `403`/HTML response usually means JSON isn't enabled (check `search.formats`) or the limiter is blocking direct API calls (set `server.limiter: false` for a private instance).
 
 ## Architecture
 
