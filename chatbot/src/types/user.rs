@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use strum::{EnumDiscriminants, EnumIter};
 
-pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 20;
+/// Per-result snippet cap in web search output. Generous — SearxNG snippets rarely exceed a few
+/// hundred chars, so this is effectively "don't truncate" with a safety net (was 20, far too tight
+/// for the current model/context).
+pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
 
 /// Max tool calls the model may make in a single user turn before the loop is cut short. Single
 /// source of truth: the state machine enforces it; the system prompt discloses it.
