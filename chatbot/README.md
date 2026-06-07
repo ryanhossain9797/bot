@@ -79,6 +79,25 @@ To improve startup performance, the bot pre-evaluates the static base prompt (sy
 - On startup, if the session file exists, it's loaded to skip re-evaluation.
 - If missing or invalid, it falls back to full evaluation and regenerates the file.
 
+### Web Search (SearxNG)
+
+The `web_search` tool queries a [SearxNG](https://github.com/searxng/searxng) instance — a self-hosted metasearch engine — instead of a metered third-party API, so there's no external rate limit to trip.
+
+The bot only needs a reachable instance with **JSON output enabled**:
+
+- Point `SEARXNG_URL` (in `src/configuration.rs`) at the instance's base URL. The bot runs with host networking (`--network host`), so `localhost` is the host machine — the default `http://localhost:8080` reaches a SearxNG published on the host's port 8080. A remote instance works too (e.g. `https://search.example.com`).
+- The instance **must** have JSON format enabled, off by default. In its `settings.yml`:
+  ```yaml
+  search:
+    formats:
+      - html
+      - json
+  ```
+- Verify with: `curl "$SEARXNG_URL/search?q=test&format=json"` — it should return JSON with a `results` array.
+
+> [!NOTE]
+> How you run SearxNG (Docker, bare metal, hosted) is out of scope here — see the [upstream SearxNG docs](https://docs.searxng.org/). A quick local container is `docker run -d --name searxng -p 8080:8080 -v <config-dir>:/etc/searxng searxng/searxng`, with the JSON format and a `server.secret_key` set in the mounted `settings.yml`.
+
 ## Architecture
 
 ### Directory Structure

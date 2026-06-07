@@ -1,5 +1,5 @@
 use crate::{
-    configuration::client_tokens::BRAVE_SEARCH_TOKEN,
+    configuration::client_tokens::SEARXNG_URL,
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     types::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, UserAction,
@@ -126,35 +126,29 @@ async fn fetch_weather(location: &str) -> anyhow::Result<ToolResultData> {
     })
 }
 
+/// SearxNG `/search?format=json` response. We only read `query` (echoed back) and `results`; the
+/// many other top-level fields (suggestions, infoboxes, …) are ignored.
 #[derive(Deserialize)]
-struct BraveSearchResponse {
-    query: BraveSearchQuery,
-    web: BraveWebResults,
+struct SearxngResponse {
+    query: String,
+    results: Vec<SearxngResult>,
 }
 
 #[derive(Deserialize)]
-struct BraveSearchQuery {
-    original: String,
-}
-
-#[derive(Deserialize)]
-struct BraveWebResults {
-    results: Vec<BraveSearchResult>,
-}
-
-#[derive(Deserialize)]
-struct BraveSearchResult {
+struct SearxngResult {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     url: Option<String>,
+    /// SearxNG's result snippet (mapped to our "Description" line).
     #[serde(default)]
-    description: Option<String>,
+    content: Option<String>,
 }
 
 async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     let search_url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}",
+        "{}/search?q={}&format=json",
+        SEARXNG_URL.trim_end_matches('/'),
         urlencoding::encode(query)
     );
 
@@ -165,10 +159,9 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     let response = client
         .get(&search_url)
         .header("Accept", "application/json")
-        .header("X-Subscription-Token", BRAVE_SEARCH_TOKEN)
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to Brave Search API: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to connect to SearxNG at {SEARXNG_URL}: {e}"))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -177,29 +170,26 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
         return Err(anyhow::anyhow!(
-            "Brave Search API returned error status {}: {}",
-            status,
-            error_text
+            "SearxNG returned error status {status}: {error_text}"
         ));
     }
 
     let search_response = response
-        .json::<BraveSearchResponse>()
+        .json::<SearxngResponse>()
         .await
         .map_err(|e| {
-            anyhow::anyhow!("Failed to parse Brave Search response: {}. Make sure BRAVE_SEARCH_TOKEN is set correctly.", e)
+            anyhow::anyhow!("Failed to parse SearxNG response: {e}. Ensure SEARXNG_URL points at a SearxNG instance with JSON format enabled (search.formats includes json).")
         })?;
 
-    let original_query = search_response.query.original;
+    let original_query = search_response.query;
     let formatted_results: Vec<String> = search_response
-        .web
         .results
         .into_iter()
         .take(3)
         .map(|result| {
             let title = result.title.as_deref().unwrap_or("null");
             let url = result.url.as_deref().unwrap_or("null");
-            let description = result.description.as_deref().unwrap_or("null");
+            let description = result.content.as_deref().unwrap_or("null");
 
             let safe_len = description.floor_char_boundary(MAX_SEARCH_DESCRIPTION_LENGTH);
             let description = &description[..safe_len];
@@ -347,10 +337,12 @@ mod tests {
         assert!(weather.actual.contains("Wind Speed"));
     }
 
+    // Integration test: hits the SearxNG instance at SEARXNG_URL (reachable as localhost:8080 from
+    // the host). Requires a running instance with JSON format enabled.
     #[tokio::test]
     async fn test_fetch_web_search() {
         let search_results = fetch_web_search("Rust programming").await.unwrap();
-        assert!(search_results.actual.contains("Search Results for"));
+        assert!(search_results.actual.contains("Search results for"));
         assert!(search_results.actual.contains("Rust programming"));
     }
 

@@ -2,7 +2,10 @@ pub const MONGODB_AUTH: &str = "FOO";
 pub mod client_tokens {
     pub const TELEGRAM_TOKEN: &str = "FOO";
     pub const DISCORD_TOKEN: &str = "FOO";
-    pub const BRAVE_SEARCH_TOKEN: &str = "FOO";
+    /// Base URL of the SearxNG instance backing `web_search` (JSON format must be enabled on it).
+    /// The bot runs with host networking, so `localhost` is the host — point a SearxNG at the
+    /// host's :8080, or set this to a remote instance's URL.
+    pub const SEARXNG_URL: &str = "http://localhost:8080";
 }
 pub mod debug {
     pub const DEBUG_LIVE_LLM_OUTPUT: bool = false;
