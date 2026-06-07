@@ -1,5 +1,5 @@
 use crate::{
-    configuration::client_tokens::SEARXNG_URL,
+    configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     types::user::{
         HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, UserAction,
@@ -260,6 +260,110 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
 
     let simplified = format!(
         "{lead}Search results for \"{original_query}\":\n{}",
+        primary.join("\n")
+    );
+
+    let actual = format!("{simplified}\n{}", secondary.join("\n"));
+
+    Ok(ToolResultData { actual, simplified })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dormant fallback: the legacy Brave Search path, kept intact but NOT wired into `web_search`
+// (the active tool uses `fetch_web_search` / SearxNG above). Left in place so we can fall back by
+// swapping the call in `run_tool`. Remove once SearxNG is proven out. See #113 / closed #112.
+// ---------------------------------------------------------------------------------------------
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct BraveSearchResponse {
+    query: BraveSearchQuery,
+    web: BraveWebResults,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct BraveSearchQuery {
+    original: String,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct BraveWebResults {
+    results: Vec<BraveSearchResult>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize)]
+struct BraveSearchResult {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[allow(dead_code)]
+async fn fetch_web_search_brave(query: &str) -> anyhow::Result<ToolResultData> {
+    let search_url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}",
+        urlencoding::encode(query)
+    );
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let response = client
+        .get(&search_url)
+        .header("Accept", "application/json")
+        .header("X-Subscription-Token", BRAVE_SEARCH_TOKEN)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Brave Search API: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Err(anyhow::anyhow!(
+            "Brave Search API returned error status {}: {}",
+            status,
+            error_text
+        ));
+    }
+
+    let search_response = response
+        .json::<BraveSearchResponse>()
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("Failed to parse Brave Search response: {}. Make sure BRAVE_SEARCH_TOKEN is set correctly.", e)
+        })?;
+
+    let original_query = search_response.query.original;
+    let formatted_results: Vec<String> = search_response
+        .web
+        .results
+        .into_iter()
+        .take(MAX_SEARCH_RESULTS)
+        .map(|result| {
+            let title = result.title.as_deref().unwrap_or("null");
+            let url = result.url.as_deref().unwrap_or("null");
+            let description = result.description.as_deref().unwrap_or("null");
+
+            let safe_len = description.floor_char_boundary(MAX_SEARCH_DESCRIPTION_LENGTH);
+            let description = &description[..safe_len];
+            format!("Title: {title}\nURL to visit: {url}\nDescription: {description}\n\n")
+        })
+        .collect();
+
+    let split = SIMPLIFIED_SEARCH_RESULTS.min(formatted_results.len());
+    let (primary, secondary) = formatted_results.split_at(split);
+
+    let simplified = format!(
+        "Search results for \"{original_query}\":\n{}",
         primary.join("\n")
     );
 
