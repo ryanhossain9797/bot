@@ -20,10 +20,10 @@ where
     Id: PersistedStateMachineItem + Ord + 'static,
     Action: PersistedStateMachineItem + 'static,
 {
-    pub async fn act(&self, user_id: Id, user_action: Action) {
+    pub async fn act(&self, id: Id, action: Action) {
         let _ = self
             .sender
-            .send((user_id, user_action))
+            .send((id, action))
             .await
             .expect("Send failed");
     }
@@ -40,13 +40,13 @@ pub fn new_state_machine<
     schedule: Schedule<State, Action>,
 ) -> StateMachineHandle<Id, Action> {
     let (sender, receiver) = mpsc::channel(8);
-    let user_state_machine_handle = StateMachineHandle { sender };
+    let handle = StateMachineHandle { sender };
     tokio::spawn(start_state_machine(
         env,
-        user_state_machine_handle.clone(),
+        handle.clone(),
         receiver,
         transition,
         schedule,
     ));
-    user_state_machine_handle
+    handle
 }
