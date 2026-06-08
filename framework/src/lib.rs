@@ -85,14 +85,14 @@ async fn run_entity<
         match activity {
             Activity::StateMachineAction(action) => {
                 match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
-                    Ok((updated_user, external)) => {
+                    Ok((updated_state, external)) => {
                         match &maybe_scheduled {
                             Some(scheduled) => {
                                 scheduled.abort();
                             }
                             None => {}
                         }
-                        let mut scheduled = schedule.0(&updated_user);
+                        let mut scheduled = schedule.0(&updated_state);
 
                         scheduled.sort_by_key(|scheduled| scheduled.at);
 
@@ -131,13 +131,13 @@ async fn run_entity<
 
                         external.into_iter().for_each(|f| {
                             let handle: StateMachineHandle<Id, Action> = handle.clone();
-                            let user_id = id.clone();
+                            let id = id.clone();
                             tokio::spawn(async move {
                                 let action = f.await;
-                                handle.act(user_id, action).await;
+                                handle.act(id, action).await;
                             });
                         });
-                        state = updated_user;
+                        state = updated_state;
                     }
                     Err(_) => (),
                 }

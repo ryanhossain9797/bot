@@ -36,7 +36,7 @@ pub fn new_entity<
 >(
     env: Arc<Env>,
     id: Id,
-    user_state_machine_handle: StateMachineHandle<Id, Action>,
+    handle: StateMachineHandle<Id, Action>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
 ) -> Handle<Action> {
@@ -45,7 +45,7 @@ pub fn new_entity<
         env,
         id,
         receiver,
-        user_state_machine_handle,
+        handle,
         transition,
         schedule,
         sender.clone(),
