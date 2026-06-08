@@ -40,7 +40,7 @@ struct Handler {
 impl EventHandler for Handler {
     // Set a handler for the `message` event - so that whenever a new message
     // is received - the closure (or function) passed will be called.
-    async fn message(&self, ctx: Context, message: DMessage) {
+    async fn message(&self, _ctx: Context, message: DMessage) {
         let env = crate::ENV.get().expect("ENV initialized before clients start");
 
         // Ignore only our OWN messages (matched by id), not all bots — so the bot still sees and can
@@ -56,20 +56,15 @@ impl EventHandler for Handler {
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
         let user_id = author_id.to_string();
-        // Display name: a guild nick if set, else the global/display name, else the username (no nick
-        // in a DM). Name resolution lives only in this adapter — the domain layer never sees it.
-        let name = match message.guild_id {
-            Some(_) => message
-                .author_nick(&ctx)
-                .await
-                .or_else(|| message.author.global_name.clone())
-                .unwrap_or_else(|| message.author.name.clone()),
-            None => message
-                .author
-                .global_name
-                .clone()
-                .unwrap_or_else(|| message.author.name.clone()),
-        };
+        // Display name straight from the message payload (global/display name, else username). No
+        // guild-nick lookup: that would be a blocking HTTP member fetch on every group message (we
+        // don't request GUILD_MEMBERS, so it's never cached), which can stall the whole inbound path
+        // under rate limiting. Nicks can be re-added later via the cache without a blocking call.
+        let name = message
+            .author
+            .global_name
+            .clone()
+            .unwrap_or_else(|| message.author.name.clone());
 
         // Prefix the sender's identity — name AND Discord id — onto the text, for every message, DM
         // or group. The id makes the speaker unambiguous: names can collide or change, and the model
@@ -125,7 +120,7 @@ fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String
     }
 
     let text = text.trim().trim_start_matches('/').trim().to_string();
-    let space_trimmer = Regex::new(r"\s+").unwrap();
+    let space_trimmer = Regex::new(r"\s+").expect("static whitespace regex is valid");
     let text: String = space_trimmer.replace_all(&text, " ").trim().to_string();
 
     (!text.is_empty()).then_some(text)
