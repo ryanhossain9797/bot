@@ -82,6 +82,7 @@ impl LlamaCppService {
         &self,
         conversation: serde_json::Value,
         allow_tools: bool,
+        is_group: bool,
     ) -> anyhow::Result<serde_json::Value> {
         self.primary_agent
             .respond(
@@ -91,6 +92,7 @@ impl LlamaCppService {
                 Self::BATCH_CHUNK_SIZE,
                 conversation,
                 allow_tools,
+                is_group,
             )
             .await
     }

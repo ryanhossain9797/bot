@@ -10,7 +10,11 @@ use crate::{
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
     // Configure the client with your Discord bot token in the environment.
 
-    let intents = GatewayIntents::DIRECT_MESSAGES;
+    // DMs + group/server channels. MESSAGE_CONTENT is a privileged intent (must also be enabled in
+    // the Discord Developer Portal) — required to read the text of messages that don't mention us.
+    let intents = GatewayIntents::DIRECT_MESSAGES
+        | GatewayIntents::GUILD_MESSAGES
+        | GatewayIntents::MESSAGE_CONTENT;
 
     let conversation_state_machine = CONVERSATION_STATE_MACHINE.clone();
 
@@ -37,29 +41,58 @@ impl EventHandler for Handler {
     // Set a handler for the `message` event - so that whenever a new message
     // is received - the closure (or function) passed will be called.
     async fn message(&self, ctx: Context, message: DMessage) {
-        if !message.author.bot {
-            if let Some((msg, start_conversation)) = filter(&message, &ctx).await {
-                // Key the conversation by the channel the message arrived on (a DM channel is 1:1,
-                // a server channel is shared). The channel id is stored as the opaque conversation
-                // id string; only this Discord adapter knows it's a channel id.
-                let conversation_id = ConversationId(Platform::Discord, message.channel_id.get().to_string());
-                let action = ConversationAction::NewMessage {
-                    start_conversation,
-                    msg,
-                };
-                self.conversation_state_machine.act(conversation_id, action).await;
-            }
+        if message.author.bot {
+            return;
         }
+        let Some(text) = filter(&message, &ctx).await else {
+            return;
+        };
+
+        let is_group = message.guild_id.is_some();
+        let user_id = message.author.id.get().to_string();
+        // Display name: a guild nick if set, else the global/display name, else the username (no nick
+        // in a DM). Name resolution lives only in this adapter — the domain layer never sees it.
+        let name = match message.guild_id {
+            Some(_) => message
+                .author_nick(&ctx)
+                .await
+                .or_else(|| message.author.global_name.clone())
+                .unwrap_or_else(|| message.author.name.clone()),
+            None => message
+                .author
+                .global_name
+                .clone()
+                .unwrap_or_else(|| message.author.name.clone()),
+        };
+
+        // Prefix the sender's name onto the text — for every message, DM or group — so the model
+        // always knows who is speaking (every human maps to OpenAI role "user", so the name in the
+        // content is the only speaker signal).
+        let msg = format!("{name}: {text}");
+
+        // Key the conversation by the channel the message arrived on (a DM channel is 1:1, a server
+        // channel is shared). The channel id is stored as the opaque conversation id string; only
+        // this Discord adapter knows it's a channel id.
+        let conversation_id =
+            ConversationId(Platform::Discord, message.channel_id.get().to_string());
+        let action = ConversationAction::NewMessage {
+            msg,
+            user_id,
+            name,
+            is_group,
+        };
+        self.conversation_state_machine
+            .act(conversation_id, action)
+            .await;
     }
 }
 
-///Filter basically does some spring cleaning.
-/// - checks whether the update is actually a message or some other type.
-/// - trims leading and trailing spaces ("   /hellow    @machinelifeformbot   world  " becomes "/hellow    @machinelifeformbot   world").
-/// - removes / from start if it's there ("/hellow    @machinelifeformbot   world" becomes "hellow    @machinelifeformbot   world").
-/// - removes mentions of the bot from the message ("hellow    @machinelifeformbot   world" becomes "hellow      world").
-/// - replaces redundant spaces with single spaces using regex ("hellow      world" becomes "hellow world").
-async fn filter(message: &DMessage, ctx: &Context) -> Option<(String, bool)> {
+/// Clean a raw message into the text we feed the model, or `None` to ignore it:
+/// - strips a leading `/` and the bot's own `@mention`,
+/// - collapses runs of whitespace,
+/// - returns `None` if nothing textual remains (e.g. an attachment-only or bare-mention message),
+///   so we don't run the model on empty content.
+async fn filter(message: &DMessage, ctx: &Context) -> Option<String> {
     let Ok(info) = ctx.http.get_current_application_info().await else {
         return None;
     };
@@ -77,11 +110,7 @@ async fn filter(message: &DMessage, ctx: &Context) -> Option<(String, bool)> {
         .to_string();
 
     let space_trimmer = Regex::new(r"\s+").unwrap();
+    let msg: String = space_trimmer.replace_all(&msg, " ").trim().to_string();
 
-    let msg: String = space_trimmer.replace_all(&msg, " ").into();
-    //-----------------------check if message is from a group chat.......
-    Some((
-        msg,
-        message.guild_id.is_none() || message.content.contains(handle.as_str()),
-    ))
+    (!msg.is_empty()).then_some(msg)
 }

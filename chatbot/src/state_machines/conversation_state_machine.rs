@@ -3,10 +3,12 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::types::conversation::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::conversation::{
+    latest_is_group, LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
+};
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationId, IncomingUpdate,
+        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationId, ConversationMessage,
         ConversationState,
     },
     Env, ENV,
@@ -30,7 +32,7 @@ fn handle_outcome(
     is_timeout: bool,
     response: LLMResponse,
     recent_conversation: RecentConversation,
-    pending: Vec<IncomingUpdate>,
+    pending: Vec<ConversationMessage>,
     tool_rounds: usize,
 ) -> ConversationTransitionResult {
     // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
@@ -102,32 +104,24 @@ pub fn conversation_transition(
                 user_state,
                 ConversationAction::NewMessage {
                     msg,
-                    start_conversation,
+                    user_id,
+                    name,
+                    is_group,
                 },
             ) => {
-                let accept_message = match (&user_state, start_conversation) {
-                    (
-                        ConversationState::Idle {
-                            recent_conversation: None,
-                        },
-                        false,
-                    ) => false,
-                    _ => true,
-                };
-
-                let pending = if accept_message {
-                    let mut pending = conversation.pending;
-                    // Queued iff it arrived while the bot was busy (any non-Idle state) — i.e. it
-                    // crossed an in-flight response. An Idle arrival drains immediately and isn't.
-                    let queued = !matches!(&user_state, ConversationState::Idle { .. });
-                    pending.push(IncomingUpdate {
-                        text: msg.clone(),
-                        queued,
-                    });
-                    pending
-                } else {
-                    conversation.pending
-                };
+                // Every message is accepted and buffered (the old `start_conversation` mention-gate
+                // is gone — in a group the model itself decides whether to reply; see the group
+                // system prompt). Queued iff it arrived while the bot was busy (any non-Idle state),
+                // so it crossed an in-flight response; an Idle arrival drains immediately and isn't.
+                let mut pending = conversation.pending;
+                let queued = !matches!(&user_state, ConversationState::Idle { .. });
+                pending.push(ConversationMessage {
+                    text: msg.clone(),
+                    queued,
+                    user_id: user_id.clone(),
+                    name: name.clone(),
+                    is_group: *is_group,
+                });
 
                 Ok((
                     Conversation {
@@ -365,9 +359,14 @@ pub fn conversation_transition(
                 println!("Commited to Memory");
 
                 let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
-                let current_input = LLMInput::IncomingUpdate(IncomingUpdate {
+                // Synthetic system message (no real sender). Inherit the conversation's group-ness
+                // from the last real message so the goodbye uses the right system prompt.
+                let current_input = LLMInput::ConversationMessage(ConversationMessage {
                     text: timeout_message,
                     queued: false,
+                    user_id: String::new(),
+                    name: String::new(),
+                    is_group: latest_is_group(&recent_conversation.history),
                 });
 
                 let mut external = Vec::<ConversationExternalOperation>::new();
@@ -404,18 +403,29 @@ pub fn conversation_transition(
 /// Drain buffered user messages into a single newline-joined string, clearing `pending`. Returns
 /// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
 /// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
-fn take_pending(pending: &mut Vec<IncomingUpdate>) -> Option<IncomingUpdate> {
+fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
     (!pending.is_empty()).then(|| {
         let drained = std::mem::take(pending);
         // Messages drained together are homogeneous (all queued during a busy turn, or a single
-        // Idle arrival); mark the merged message queued if any were.
+        // Idle arrival); mark the merged message queued if any were. Each member's `text` already
+        // carries its own name prefix, so joining keeps per-speaker attribution even when a group
+        // batch mixes senders. Identity fields take the last message's (best-effort for the merge).
         let queued = drained.iter().any(|m| m.queued);
+        let is_group = drained.last().map(|m| m.is_group).unwrap_or(false);
+        let user_id = drained.last().map(|m| m.user_id.clone()).unwrap_or_default();
+        let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
         let text = drained
             .into_iter()
             .map(|m| m.text)
             .collect::<Vec<_>>()
             .join("\n");
-        IncomingUpdate { text, queued }
+        ConversationMessage {
+            text,
+            queued,
+            user_id,
+            name,
+            is_group,
+        }
     })
 }
 
@@ -444,7 +454,7 @@ fn post_transition(
         .map(|(rc, _)| rc.history())
         .unwrap_or_else(Vec::new);
 
-    let current_input = LLMInput::IncomingUpdate(msg);
+    let current_input = LLMInput::ConversationMessage(msg);
 
     external.push(Box::pin(get_llm_decision(
         env.clone(),

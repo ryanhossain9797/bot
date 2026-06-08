@@ -99,20 +99,28 @@ impl Default for ConversationState {
     }
 }
 
-/// An inbound update from a conversation — today always a user's message (later may also carry
-/// non-message events: edits, reactions, joins). `queued` is true when it was buffered into
-/// `pending` while the bot was busy (a non-Idle state), so it crossed an in-flight response. The
-/// flag is the persisted truth; the `[Followup]` tag is applied only at prompt-render time (see
-/// `to_content`).
+/// One inbound message in a conversation. `text` already carries the sender's name prefix
+/// (`"Alice: hello"`) — the Discord adapter prepends it for every message, DM or group, so the
+/// model always knows who is speaking (in a group, every human still maps to OpenAI `role: "user"`,
+/// so the name in the text is the only speaker signal). `name`/`user_id` keep the same identity in
+/// structured form. `is_group` is the DM-vs-group context of the message (latest message wins; not
+/// persisted on the `Conversation`). `queued` is true when it was buffered into `pending` while the
+/// bot was busy, so it crossed an in-flight response — surfaced as a `[Followup]` tag at render time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IncomingUpdate {
+pub struct ConversationMessage {
     pub text: String,
     pub queued: bool,
+    /// Sender's platform user id (stable identity); empty for synthetic/system messages.
+    pub user_id: String,
+    /// Sender's display name; empty for synthetic/system messages. Already baked into `text`.
+    pub name: String,
+    /// Whether this message came from a group chat (vs a 1:1 DM). Drives system-prompt selection.
+    pub is_group: bool,
 }
 
-impl IncomingUpdate {
-    /// Prompt content: the text, prefixed with `[Followup]` when it was queued mid-response so the
-    /// model knows it may already be addressed. Render-time only — the stored `text` stays clean.
+impl ConversationMessage {
+    /// Prompt content: the text (which already includes the `name:` prefix), tagged with
+    /// `[Followup]` when it was queued mid-response so the model knows it may already be addressed.
     pub fn to_content(&self) -> String {
         if self.queued {
             format!("[Followup] {}", self.text)
@@ -127,19 +135,34 @@ impl IncomingUpdate {
 /// channel/DM on some [`Platform`]) — one independent instance per conversation.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Conversation {
-    pub pending: Vec<IncomingUpdate>,
+    pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
-    IncomingUpdate(IncomingUpdate),
+    ConversationMessage(ConversationMessage),
     /// One turn's batch of tool results (id order), each tagged with the call it answers.
-    /// The optional trailing `IncomingUpdate` is input that arrived mid-tool-run, folded into this
+    /// The optional trailing `ConversationMessage` is input that arrived mid-tool-run, folded into this
     /// same turn *after* the results — OpenAI requires tool responses to immediately follow the
     /// assistant's `tool_calls`, so the user message comes last.
-    ToolResults(Vec<ToolResult>, Option<IncomingUpdate>),
+    ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
+}
+
+/// The `is_group` of the most recent message in `history` (latest message wins; defaults to DM /
+/// `false` when there's no message to read). Used to pick the DM-vs-group system prompt and to give
+/// synthetic messages (e.g. the timeout goodbye) the conversation's group-ness.
+pub fn latest_is_group(history: &[HistoryEntry]) -> bool {
+    history
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            HistoryEntry::Input(LLMInput::ConversationMessage(m)) => Some(m.is_group),
+            HistoryEntry::Input(LLMInput::ToolResults(_, Some(m))) => Some(m.is_group),
+            _ => None,
+        })
+        .unwrap_or(false)
 }
 
 impl LLMInput {
@@ -147,7 +170,7 @@ impl LLMInput {
     /// message per result (the template groups them into a single tool-response turn).
     pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
-            LLMInput::IncomingUpdate(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
+            LLMInput::ConversationMessage(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<Value> = results
                     .iter()
@@ -260,7 +283,7 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::IncomingUpdate(m) => format!("User:\n{}", m.text),
+                LLMInput::ConversationMessage(m) => format!("User:\n{}", m.text),
                 LLMInput::ToolResults(results, user_msg) => {
                     let joined = results
                         .iter()
@@ -294,8 +317,13 @@ impl HistoryEntry {
 pub enum ConversationAction {
     ForceReset,
     NewMessage {
+        /// Message text with the sender's name already prefixed (`"Alice: hello"`).
         msg: String,
-        start_conversation: bool,
+        /// Sender's platform user id and display name (for the structured `ConversationMessage`).
+        user_id: String,
+        name: String,
+        /// Whether it arrived from a group chat (vs a 1:1 DM).
+        is_group: bool,
     },
     Timeout,
     CommitResult(Result<(), String>),

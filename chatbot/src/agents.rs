@@ -138,13 +138,14 @@ fn respond_blocking(
     batch_chunk_size: usize,
     conversation: serde_json::Value,
     allow_tools: bool,
+    is_group: bool,
 ) -> anyhow::Result<serde_json::Value> {
-    // Prepend the system turn (persona + current time), then render with the model's template. At
-    // the budget cap, advertise no tools so the model physically cannot emit another tool call (the
-    // synthesis nudge itself rides the message stream, not this stable system turn).
+    // Prepend the system turn (persona + DM/group guidance), then render with the model's template.
+    // At the budget cap, advertise no tools so the model physically cannot emit another tool call
+    // (the synthesis nudge itself rides the message stream, not this stable system turn).
     let mut messages = vec![serde_json::json!({
         "role": "system",
-        "content": agent.system_content(),
+        "content": agent.system_content(is_group),
     })];
     if let Some(arr) = conversation.as_array() {
         messages.extend(arr.iter().cloned());
@@ -214,10 +215,18 @@ impl Agent {
         self.temperature
     }
 
-    pub fn system_content(&self) -> String {
+    /// The system turn. `is_group` selects a DM vs group-chat variant; both are static per kind so
+    /// the cached system prefix stays stable. The group variant tells the model it's one participant
+    /// among many and that it may stay silent by replying with an empty string.
+    pub fn system_content(&self, is_group: bool) -> String {
+        let context_note = if is_group {
+            "\n\nYou are in a GROUP CHAT with multiple people. Every message is prefixed with the sender's name (\"Name: ...\"); use names to keep track of who said what, and address people by name when it helps. You are one participant among many, not a personal assistant — only reply when you're addressed or can genuinely add something. If a message doesn't call for a response from you, reply with an empty string to stay silent (an empty reply sends nothing to the chat)."
+        } else {
+            ""
+        };
         format!(
-            "{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — A [Followup] message arrived while you were still replying or while tools were running, so the user hadn't seen the result yet (they never see tool calls or their outputs, only your replies). If it follows one of your replies: gauge what you already covered and build on it rather than repeat — or handle it normally if it's a different track. If it follows tool results: weigh it against those results and consider whether it needs new information before answering. Either way, the goal is the same: make sure the user ends up with everything they asked for across your replies.",
-            self.system_prompt
+            "{}{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — A [Followup] message arrived while you were still replying or while tools were running, so the user hadn't seen the result yet (they never see tool calls or their outputs, only your replies). If it follows one of your replies: gauge what you already covered and build on it rather than repeat — or handle it normally if it's a different track. If it follows tool results: weigh it against those results and consider whether it needs new information before answering. Either way, the goal is the same: make sure the user ends up with everything they asked for across your replies.",
+            self.system_prompt, context_note
         )
     }
 
@@ -229,6 +238,7 @@ impl Agent {
         batch_chunk_size: usize,
         conversation: serde_json::Value,
         allow_tools: bool,
+        is_group: bool,
     ) -> anyhow::Result<serde_json::Value> {
         let task = spawn_blocking(move || {
             respond_blocking(
@@ -239,6 +249,7 @@ impl Agent {
                 batch_chunk_size,
                 conversation,
                 allow_tools,
+                is_group,
             )
         });
 

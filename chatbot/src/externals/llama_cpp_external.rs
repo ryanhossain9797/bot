@@ -1,6 +1,6 @@
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        latest_is_group, HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -121,6 +121,18 @@ async fn get_response_from_llm(
     max_tool_rounds: usize,
     allow_tools: bool,
 ) -> anyhow::Result<LLMResponse> {
+    // DM-vs-group context for system-prompt selection: the latest message wins. Use the current
+    // input's flag when it's a message (or carries a folded message); otherwise (a tool-result
+    // continuation) read the most recent message from history.
+    let is_group = match current_input {
+        LLMInput::ConversationMessage(m) => m.is_group,
+        LLMInput::ToolResults(_, Some(m)) => m.is_group,
+        LLMInput::ToolResults(_, None) => maybe_recent_conversation
+            .as_ref()
+            .map(|rc| latest_is_group(&rc.history))
+            .unwrap_or(false),
+    };
+
     let conversation = build_conversation(
         current_input,
         maybe_recent_conversation,
@@ -135,7 +147,7 @@ async fn get_response_from_llm(
     );
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools)
+        .get_primary_response(conversation, allow_tools, is_group)
         .await?;
 
     let thoughts = parsed
