@@ -83,6 +83,7 @@ impl LlamaCppService {
         conversation: serde_json::Value,
         allow_tools: bool,
         is_group: bool,
+        bot_name: &str,
     ) -> anyhow::Result<serde_json::Value> {
         self.primary_agent
             .respond(
@@ -93,6 +94,7 @@ impl LlamaCppService {
                 conversation,
                 allow_tools,
                 is_group,
+                bot_name.to_string(),
             )
             .await
     }

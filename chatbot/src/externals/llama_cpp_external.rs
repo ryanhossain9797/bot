@@ -120,6 +120,7 @@ async fn get_response_from_llm(
     tool_rounds: usize,
     max_tool_rounds: usize,
     allow_tools: bool,
+    bot_name: &str,
 ) -> anyhow::Result<LLMResponse> {
     // DM-vs-group context for system-prompt selection: the latest message wins. Use the current
     // input's flag when it's a message (or carries a folded message); otherwise (a tool-result
@@ -147,7 +148,7 @@ async fn get_response_from_llm(
     );
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools, is_group)
+        .get_primary_response(conversation, allow_tools, is_group, bot_name)
         .await?;
 
     let thoughts = parsed
@@ -157,11 +158,13 @@ async fn get_response_from_llm(
         .to_string();
 
     // Straight from JSON to Option — absent / null / blank content is None, never a "" round-trip.
+    // The model also emits the literal "<empty>" to deliberately stay silent (easier for it than
+    // producing nothing at all); map that to None too, so it flows into the silent path.
     let message = parsed
         .get("content")
         .and_then(|v| v.as_str())
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("<empty>"))
         .map(String::from);
 
     // message and tool calls are independent — a turn may carry either or both. Binding failures
@@ -205,6 +208,7 @@ pub async fn get_llm_decision(
         tool_rounds,
         max_tool_rounds,
         allow_tools,
+        &env.bot_name,
     )
     .await;
 

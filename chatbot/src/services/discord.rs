@@ -41,10 +41,15 @@ impl EventHandler for Handler {
     // Set a handler for the `message` event - so that whenever a new message
     // is received - the closure (or function) passed will be called.
     async fn message(&self, ctx: Context, message: DMessage) {
-        if message.author.bot {
+        let env = crate::ENV.get().expect("ENV initialized before clients start");
+
+        // Ignore only our OWN messages (matched by id), not all bots — so the bot still sees and can
+        // react to other bots in the channel. (Our own replies are already in history as assistant
+        // turns; re-ingesting them as user input would double them and risk a self-loop.)
+        if message.author.id.get() == env.bot_user_id {
             return;
         }
-        let Some(text) = filter(&message, &ctx).await else {
+        let Some(text) = filter(&message, env.bot_user_id, &env.bot_name) else {
             return;
         };
 
@@ -88,29 +93,20 @@ impl EventHandler for Handler {
 }
 
 /// Clean a raw message into the text we feed the model, or `None` to ignore it:
-/// - strips a leading `/` and the bot's own `@mention`,
-/// - collapses runs of whitespace,
-/// - returns `None` if nothing textual remains (e.g. an attachment-only or bare-mention message),
-///   so we don't run the model on empty content.
-async fn filter(message: &DMessage, ctx: &Context) -> Option<String> {
-    let Ok(info) = ctx.http.get_current_application_info().await else {
-        return None;
-    };
+/// - replaces the bot's own `@mention` (both `<@id>` and `<@!id>` forms) with its **name**, so the
+///   model can see when it's being addressed instead of the mention being silently stripped,
+/// - strips a leading `/`, collapses runs of whitespace,
+/// - returns `None` if nothing textual remains (e.g. an attachment-only message), so we don't run
+///   the model on empty content.
+fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String> {
+    let mut text = message.content.clone();
+    for handle in [format!("<@{bot_user_id}>"), format!("<@!{bot_user_id}>")] {
+        text = text.replace(&handle, bot_name);
+    }
 
-    let id: i64 = info.id.into();
-    //-----------------------remove self mention from message
-    let handle = format!("<@{}>", &id);
-
-    let msg = message
-        .content
-        .replace(handle.as_str(), "")
-        .trim()
-        .trim_start_matches('/')
-        .trim()
-        .to_string();
-
+    let text = text.trim().trim_start_matches('/').trim().to_string();
     let space_trimmer = Regex::new(r"\s+").unwrap();
-    let msg: String = space_trimmer.replace_all(&msg, " ").trim().to_string();
+    let text: String = space_trimmer.replace_all(&text, " ").trim().to_string();
 
-    (!msg.is_empty()).then_some(msg)
+    (!text.is_empty()).then_some(text)
 }

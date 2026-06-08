@@ -14,7 +14,7 @@ The bot uses **Qwen3.6-27B** (quantized Q4_K_M) running locally via `llama-cpp-2
 - **Conversation Context**: Maintains conversation summaries for multi-turn conversations.
 - **Structured Output**: Uses GBNF grammar to ensure valid JSON responses.
 - **Type-Safe State Machine**: Built on `framework` framework for compile-time safety.
-- **DMs and group chats**: Works in 1:1 DMs and in server channels. Each conversation is keyed by its channel; in a group the model sees every message (prefixed with the sender's name) and decides for itself whether to reply, staying silent by returning an empty response.
+- **DMs and group chats**: Works in 1:1 DMs and in server channels. Each conversation is keyed by its channel; in a group the model sees every message (prefixed with the sender's name) and decides for itself whether to reply, staying silent by replying with the marker `<empty>`.
 
 ## Quick Start
 

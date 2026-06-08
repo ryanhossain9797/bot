@@ -30,6 +30,12 @@ struct Env {
     /// Feature flag (from `configuration::features`): announce each tool batch to the user with a
     /// fixed "Using tool: <name>" notice. Read via `env.announce_tool_use`, never the const inline.
     announce_tool_use: bool,
+    /// The bot's own Discord user id — used to ignore only *our own* messages (so other bots are
+    /// still seen), and to recognize when we're addressed.
+    bot_user_id: u64,
+    /// The bot's own display name, surfaced in the system prompt so the model knows who it is in a
+    /// (group) conversation.
+    bot_name: String,
 }
 
 // ENV needs to be initialized asynchronously, so we use OnceCell
@@ -43,13 +49,26 @@ async fn init_env() -> anyhow::Result<Arc<Env>> {
 
     // let ollama_service = OllamaService::new().await?;
 
+    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
+
+    // Fetch our own Discord identity once, up front, so the message filter can ignore only our own
+    // messages (not other bots) and the system prompt can tell the model its name.
+    let bot_user = discord_http.get_current_user().await?;
+    let bot_user_id = bot_user.id.get();
+    let bot_name = bot_user
+        .global_name
+        .clone()
+        .unwrap_or_else(|| bot_user.name.clone());
+
     Ok(Arc::new(Env {
-        discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
+        discord_http,
         bot_singleton_handle: BotHandle::new(),
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),
         // ollama: Arc::new(ollama_service),
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
+        bot_user_id,
+        bot_name,
     }))
 }
 
