@@ -240,9 +240,8 @@ pub struct LLMResponse {
 }
 
 impl LLMResponse {
-    /// A degenerate decision: no user-facing message and no tool calls. Currently unused — we keep
-    /// empty decisions in history (they render as `content: ""`) — but kept as a ready predicate.
-    #[allow(dead_code)]
+    /// A degenerate decision: no user-facing message and no tool calls — i.e. the model chose to
+    /// stay silent. Used to render an explicit silent marker (see `to_openai_message`).
     pub fn is_empty(&self) -> bool {
         self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
     }
@@ -250,9 +249,19 @@ impl LLMResponse {
     pub fn to_openai_message(&self) -> Value {
         // Assistant turn: the message (if any) as content, plus a native tool_calls array when
         // present. name/arguments are derived back from each bound ToolType (the inverse of `bind`).
+        //
+        // A silent turn (empty message, no tools — the model chose not to reply, common in groups)
+        // is stored faithfully as `message: None`, but rendered here with an explicit marker so the
+        // model can see in later turns that it deliberately passed (matters for [Followup] context).
+        // The marker is render-time only — it is NEVER written back into stored history.
+        let content = if self.is_empty() {
+            "(stayed silent — chose not to reply)"
+        } else {
+            self.message.as_deref().unwrap_or("")
+        };
         let mut msg = json!({
             "role": "assistant",
-            "content": self.message.as_deref().unwrap_or(""),
+            "content": content,
         });
         if !self.tool_calls.is_empty() {
             msg["tool_calls"] = Value::Array(
