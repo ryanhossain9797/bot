@@ -5,9 +5,9 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use serenity::futures::TryStreamExt;
 
-use crate::{types::user::ToolResultData, Env};
+use crate::{types::conversation::ToolResultData, Env};
 
-async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::Result<String> {
+async fn recall(env: Arc<Env>, conversation_id: String, search_term: String) -> anyhow::Result<String> {
     let mut options = InitOptions::default();
     options.show_download_progress = true;
     options.model_name = EmbeddingModel::BGESmallENV15;
@@ -17,7 +17,7 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
 
     let query_embedding = model.embed(vec![search_term], None)?[0].clone();
 
-    let history_table = env.lance_service.table_for_user(&user_id).await;
+    let history_table = env.lance_service.table_for_conversation(&conversation_id).await;
 
     let mut res = history_table
         .query()
@@ -59,10 +59,10 @@ async fn recall(env: Arc<Env>, user_id: String, search_term: String) -> anyhow::
 
 pub async fn recall_long(
     env: Arc<Env>,
-    user_id: String,
+    conversation_id: String,
     search_term: String,
 ) -> anyhow::Result<ToolResultData> {
-    let recalled = recall(env, user_id, search_term).await?;
+    let recalled = recall(env, conversation_id, search_term).await?;
     let text = format!("LONG TERM RECALL:\n{recalled}\n");
     Ok(ToolResultData {
         actual: text.clone(),

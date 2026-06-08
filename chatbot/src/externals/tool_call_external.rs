@@ -1,8 +1,8 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
     externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
-    types::user::{
-        HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, UserAction,
+    types::conversation::{
+        HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, ConversationAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
     Env,
@@ -453,7 +453,7 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
 async fn run_tool(
     env: Arc<Env>,
     tool_type: ToolType,
-    user_id: String,
+    conversation_id: String,
     history: Vec<HistoryEntry>,
 ) -> Result<ToolResultData, String> {
     match tool_type {
@@ -463,7 +463,7 @@ async fn run_tool(
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
         ToolType::RecallShortTerm { .. } => Ok(recall_short(&history)),
         ToolType::RecallLongTerm { search_term } => {
-            recall_long(env, user_id, search_term).await.map_err(|e| e.to_string())
+            recall_long(env, conversation_id, search_term).await.map_err(|e| e.to_string())
         }
     }
 }
@@ -473,11 +473,11 @@ async fn run_tool(
 pub async fn execute_tool(
     env: Arc<Env>,
     tool_call: ToolCall,
-    user_id: String,
+    conversation_id: String,
     history: Vec<HistoryEntry>,
-) -> UserAction {
-    let result = run_tool(env, tool_call.tool_type, user_id, history).await;
-    UserAction::ToolResult {
+) -> ConversationAction {
+    let result = run_tool(env, tool_call.tool_type, conversation_id, history).await;
+    ConversationAction::ToolResult {
         id: tool_call.id,
         result,
     }

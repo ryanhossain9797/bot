@@ -3,8 +3,8 @@ use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    types::user::{UserAction, UserChannel, UserId},
-    state_machines::user_state_machine::USER_STATE_MACHINE,
+    types::conversation::{ConversationAction, Platform, ConversationId},
+    state_machines::conversation_state_machine::CONVERSATION_STATE_MACHINE,
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -12,11 +12,11 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
 
     let intents = GatewayIntents::DIRECT_MESSAGES;
 
-    let user_state_machine = USER_STATE_MACHINE.clone();
+    let conversation_state_machine = CONVERSATION_STATE_MACHINE.clone();
 
     // Create a new instance of the Client, logging in as a bot. This will
     let client = Client::builder(discord_token, intents)
-        .event_handler(Handler { user_state_machine })
+        .event_handler(Handler { conversation_state_machine })
         .await?;
 
     Ok(client)
@@ -29,7 +29,7 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    user_state_machine: StateMachineHandle<UserId, UserAction>,
+    conversation_state_machine: StateMachineHandle<ConversationId, ConversationAction>,
 }
 
 #[async_trait]
@@ -39,12 +39,15 @@ impl EventHandler for Handler {
     async fn message(&self, ctx: Context, message: DMessage) {
         if !message.author.bot {
             if let Some((msg, start_conversation)) = filter(&message, &ctx).await {
-                let user_id = UserId(UserChannel::Discord, message.author.id.get().to_string());
-                let action = UserAction::NewMessage {
+                // Key the conversation by the channel the message arrived on (a DM channel is 1:1,
+                // a server channel is shared). The channel id is stored as the opaque conversation
+                // id string; only this Discord adapter knows it's a channel id.
+                let conversation_id = ConversationId(Platform::Discord, message.channel_id.get().to_string());
+                let action = ConversationAction::NewMessage {
                     start_conversation,
                     msg,
                 };
-                self.user_state_machine.act(user_id, action).await;
+                self.conversation_state_machine.act(conversation_id, action).await;
             }
         }
     }

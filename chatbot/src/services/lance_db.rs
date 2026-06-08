@@ -20,8 +20,8 @@ impl LanceService {
         }
     }
 
-    pub async fn table_for_user(&self, user_id: &str) -> Table {
-        let table_name = format!("history_{}", user_id);
+    pub async fn table_for_conversation(&self, conversation_id: &str) -> Table {
+        let table_name = format!("history_{}", conversation_id);
 
         match self.connection.open_table(&table_name).execute().await {
             Ok(t) => t,
@@ -45,7 +45,7 @@ async fn setup_table_and_schema() -> (Connection, Arc<Schema>) {
 
     let dim = 384;
     let schema = Arc::new(Schema::new(vec![
-        Field::new("user_id", DataType::Utf8, false),
+        Field::new("conversation_id", DataType::Utf8, false),
         Field::new("content", DataType::Utf8, false),
         Field::new(
             "embedding",

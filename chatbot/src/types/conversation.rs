@@ -15,32 +15,32 @@ pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
 pub const MAX_TOOL_ROUNDS: usize = 10;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum UserChannel {
+pub enum Platform {
     Telegram,
     Discord,
 }
-impl Display for UserChannel {
+impl Display for Platform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserChannel::Telegram => write!(f, "Telegram"),
-            UserChannel::Discord => write!(f, "Discord"),
+            Platform::Telegram => write!(f, "Telegram"),
+            Platform::Discord => write!(f, "Discord"),
         }
     }
 }
 
-impl UserChannel {
+impl Platform {
     fn to_string(&self) -> &'static str {
         match self {
-            UserChannel::Telegram => "Telegram",
-            UserChannel::Discord => "Discord",
+            Platform::Telegram => "Telegram",
+            Platform::Discord => "Discord",
         }
     }
 }
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
-pub struct UserId(pub UserChannel, pub String);
+pub struct ConversationId(pub Platform, pub String);
 
-impl Display for UserId {
+impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}_{}", self.0.to_string(), self.1)
     }
@@ -58,7 +58,7 @@ impl RecentConversation {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum UserState {
+pub enum ConversationState {
     Idle {
         recent_conversation: Option<(RecentConversation, DateTime<Utc>)>,
     },
@@ -91,24 +91,26 @@ pub enum UserState {
         completed_tools: Vec<(ToolCall, ToolResultData)>,
     },
 }
-impl Default for UserState {
+impl Default for ConversationState {
     fn default() -> Self {
-        UserState::Idle {
+        ConversationState::Idle {
             recent_conversation: None,
         }
     }
 }
 
-/// A user message. `queued` is true when it was buffered into `pending` while the bot was busy
-/// (a non-Idle state), so it crossed an in-flight response. The flag is the persisted truth;
-/// the `[Followup]` tag is applied only at prompt-render time (see `to_content`).
+/// An inbound update from a conversation — today always a user's message (later may also carry
+/// non-message events: edits, reactions, joins). `queued` is true when it was buffered into
+/// `pending` while the bot was busy (a non-Idle state), so it crossed an in-flight response. The
+/// flag is the persisted truth; the `[Followup]` tag is applied only at prompt-render time (see
+/// `to_content`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserMessage {
+pub struct IncomingUpdate {
     pub text: String,
     pub queued: bool,
 }
 
-impl UserMessage {
+impl IncomingUpdate {
     /// Prompt content: the text, prefixed with `[Followup]` when it was queued mid-response so the
     /// model knows it may already be addressed. Render-time only — the stored `text` stays clean.
     pub fn to_content(&self) -> String {
@@ -120,21 +122,24 @@ impl UserMessage {
     }
 }
 
+/// The per-conversation entity the state machine drives: its current `state`, any `pending`
+/// updates buffered while busy, and when it last transitioned. Keyed by [`ConversationId`] (a
+/// channel/DM on some [`Platform`]) — one independent instance per conversation.
 #[derive(Clone, Default, Serialize, Deserialize)]
-pub struct User {
-    pub pending: Vec<UserMessage>,
-    pub state: UserState,
+pub struct Conversation {
+    pub pending: Vec<IncomingUpdate>,
+    pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
-    UserMessage(UserMessage),
+    IncomingUpdate(IncomingUpdate),
     /// One turn's batch of tool results (id order), each tagged with the call it answers.
-    /// The optional trailing `UserMessage` is input that arrived mid-tool-run, folded into this
+    /// The optional trailing `IncomingUpdate` is input that arrived mid-tool-run, folded into this
     /// same turn *after* the results — OpenAI requires tool responses to immediately follow the
     /// assistant's `tool_calls`, so the user message comes last.
-    ToolResults(Vec<ToolResult>, Option<UserMessage>),
+    ToolResults(Vec<ToolResult>, Option<IncomingUpdate>),
 }
 
 impl LLMInput {
@@ -142,7 +147,7 @@ impl LLMInput {
     /// message per result (the template groups them into a single tool-response turn).
     pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
-            LLMInput::UserMessage(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
+            LLMInput::IncomingUpdate(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<Value> = results
                     .iter()
@@ -205,7 +210,7 @@ pub struct ToolResult {
 pub struct LLMResponse {
     /// Reasoning (`<think>`); kept for logging but never replayed into the next prompt.
     pub thoughts: String,
-    /// User-facing text, if the model produced any.
+    /// Conversation-facing text, if the model produced any.
     pub message: Option<String>,
     /// Tool calls to dispatch this turn; empty if none.
     pub tool_calls: Vec<ToolCall>,
@@ -255,7 +260,7 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::UserMessage(m) => format!("User:\n{}", m.text),
+                LLMInput::IncomingUpdate(m) => format!("User:\n{}", m.text),
                 LLMInput::ToolResults(results, user_msg) => {
                     let joined = results
                         .iter()
@@ -286,7 +291,7 @@ impl HistoryEntry {
 }
 
 #[derive(Clone, Serialize)]
-pub enum UserAction {
+pub enum ConversationAction {
     ForceReset,
     NewMessage {
         msg: String,
@@ -309,16 +314,16 @@ pub struct ToolResultData {
     pub simplified: String,
 }
 
-impl std::fmt::Debug for UserAction {
+impl std::fmt::Debug for ConversationAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserAction::ForceReset => write!(f, "ForceReset"),
-            UserAction::NewMessage { .. } => write!(f, "NewMessage"),
-            UserAction::Timeout => write!(f, "Timeout"),
-            UserAction::CommitResult(_) => write!(f, "CommitResult"),
-            UserAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
-            UserAction::MessageSent(_) => write!(f, "MessageSent"),
-            UserAction::ToolResult { .. } => write!(f, "ToolResult"),
+            ConversationAction::ForceReset => write!(f, "ForceReset"),
+            ConversationAction::NewMessage { .. } => write!(f, "NewMessage"),
+            ConversationAction::Timeout => write!(f, "Timeout"),
+            ConversationAction::CommitResult(_) => write!(f, "CommitResult"),
+            ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
+            ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
+            ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),
         }
     }
 }
