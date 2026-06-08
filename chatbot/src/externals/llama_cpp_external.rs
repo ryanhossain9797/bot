@@ -1,7 +1,7 @@
 use crate::{
-    types::user::{
+    types::conversation::{
         HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
-        ToolType, UserAction,
+        ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
     Env,
@@ -176,7 +176,7 @@ pub async fn get_llm_decision(
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
     max_tool_rounds: usize,
-) -> UserAction {
+) -> ConversationAction {
     // Budget spent → final call with tools off, so the model can't emit another tool call; the
     // matching synthesis directive on the last tool result (see `budget_note`) nudges it to answer
     // from what it already gathered.
@@ -197,7 +197,7 @@ pub async fn get_llm_decision(
     .await;
 
     match llama_cpp_result {
-        Ok(llama_cpp_response) => UserAction::LLMDecisionResult(Ok(llama_cpp_response)),
-        Err(err) => UserAction::LLMDecisionResult(Err(err.to_string())),
+        Ok(llama_cpp_response) => ConversationAction::LLMDecisionResult(Ok(llama_cpp_response)),
+        Err(err) => ConversationAction::LLMDecisionResult(Err(err.to_string())),
     }
 }

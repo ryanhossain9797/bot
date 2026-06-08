@@ -3,11 +3,11 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::types::user::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::conversation::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
-    types::user::{
-        HistoryEntry, LLMInput, RecentConversation, User, UserAction, UserId, UserMessage,
-        UserState,
+    types::conversation::{
+        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationId, IncomingUpdate,
+        ConversationState,
     },
     Env, ENV,
 };
@@ -21,24 +21,24 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-type UserTransitionResult = TransitionResult<User, UserAction>;
-type UserExternalOperation = ExternalOperation<UserAction>;
+type ConversationTransitionResult = TransitionResult<Conversation, ConversationAction>;
+type ConversationExternalOperation = ExternalOperation<ConversationAction>;
 
 fn handle_outcome(
     env: Arc<Env>,
-    user_id: &UserId,
+    conversation_id: &ConversationId,
     is_timeout: bool,
     response: LLMResponse,
     recent_conversation: RecentConversation,
-    pending: Vec<UserMessage>,
+    pending: Vec<IncomingUpdate>,
     tool_rounds: usize,
-) -> UserTransitionResult {
+) -> ConversationTransitionResult {
     // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
     if response.tool_calls.is_empty() {
         // No tools to run — settle into Idle.
         Ok((
-            User {
-                state: UserState::Idle {
+            Conversation {
+                state: ConversationState::Idle {
                     recent_conversation: if is_timeout {
                         None
                     } else {
@@ -53,21 +53,21 @@ fn handle_outcome(
     } else {
         // Dispatch every call as its own external op and seed pending_tools, so each returning
         // result can be moved to completed_tools by id (one round per batch).
-        let mut external = Vec::<UserExternalOperation>::new();
+        let mut external = Vec::<ConversationExternalOperation>::new();
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
             external.push(Box::pin(execute_tool(
                 env.clone(),
                 tool_call.clone(),
-                user_id.to_string(),
+                conversation_id.to_string(),
                 recent_conversation.history.clone(),
             )));
             pending_tools.insert(tool_call.id.clone(), tool_call);
         }
 
         Ok((
-            User {
-                state: UserState::RunningTools {
+            Conversation {
+                state: ConversationState::RunningTools {
                     is_timeout,
                     recent_conversation,
                     tool_rounds: tool_rounds + 1,
@@ -82,32 +82,32 @@ fn handle_outcome(
     }
 }
 
-pub fn user_transition(
+pub fn conversation_transition(
     env: Arc<Env>,
-    user_id: UserId,
-    user: User,
-    action: &UserAction,
-) -> Pin<Box<dyn Future<Output = UserTransitionResult> + Send + '_>> {
+    conversation_id: ConversationId,
+    conversation: Conversation,
+    action: &ConversationAction,
+) -> Pin<Box<dyn Future<Output = ConversationTransitionResult> + Send + '_>> {
     Box::pin(async move {
-        let state = match (user.state, action) {
-            (_, UserAction::ForceReset) => Ok((
-                User {
+        let state = match (conversation.state, action) {
+            (_, ConversationAction::ForceReset) => Ok((
+                Conversation {
                     pending: Vec::new(),
-                    state: UserState::default(),
+                    state: ConversationState::default(),
                     last_transition: Utc::now(),
                 },
                 Vec::new(),
             )),
             (
                 user_state,
-                UserAction::NewMessage {
+                ConversationAction::NewMessage {
                     msg,
                     start_conversation,
                 },
             ) => {
                 let accept_message = match (&user_state, start_conversation) {
                     (
-                        UserState::Idle {
+                        ConversationState::Idle {
                             recent_conversation: None,
                         },
                         false,
@@ -116,36 +116,36 @@ pub fn user_transition(
                 };
 
                 let pending = if accept_message {
-                    let mut pending = user.pending;
+                    let mut pending = conversation.pending;
                     // Queued iff it arrived while the bot was busy (any non-Idle state) — i.e. it
                     // crossed an in-flight response. An Idle arrival drains immediately and isn't.
-                    let queued = !matches!(&user_state, UserState::Idle { .. });
-                    pending.push(UserMessage {
+                    let queued = !matches!(&user_state, ConversationState::Idle { .. });
+                    pending.push(IncomingUpdate {
                         text: msg.clone(),
                         queued,
                     });
                     pending
                 } else {
-                    user.pending
+                    conversation.pending
                 };
 
                 Ok((
-                    User {
+                    Conversation {
                         pending,
                         state: user_state,
-                        ..user
+                        ..conversation
                     },
                     Vec::new(),
                 ))
             }
             (
-                UserState::AwaitingLLMDecision {
+                ConversationState::AwaitingLLMDecision {
                     is_timeout,
                     history,
                     current_input,
                     tool_rounds,
                 },
-                UserAction::LLMDecisionResult(res),
+                ConversationAction::LLMDecisionResult(res),
             ) => match res {
                 Ok(response) => {
                     // Add the input and output to history. An empty decision (no message, no tool
@@ -184,75 +184,75 @@ pub fn user_transition(
                     match message_to_send {
                         Some(message) => {
                             // Transition to SendingMessage state and trigger message sending
-                            let mut external = Vec::<UserExternalOperation>::new();
+                            let mut external = Vec::<ConversationExternalOperation>::new();
                             external.push(Box::pin(send_message(
                                 env.clone(),
-                                user_id.clone(),
+                                conversation_id.clone(),
                                 message,
                             )));
 
                             Ok((
-                                User {
-                                    state: UserState::SendingMessage {
+                                Conversation {
+                                    state: ConversationState::SendingMessage {
                                         is_timeout,
                                         outcome: response.clone(),
                                         recent_conversation: updated_conversation,
                                         tool_rounds,
                                     },
                                     last_transition: Utc::now(),
-                                    ..user
+                                    ..conversation
                                 },
                                 external,
                             ))
                         }
                         None => handle_outcome(
                             env.clone(),
-                            &user_id,
+                            &conversation_id,
                             is_timeout,
                             response.clone(),
                             updated_conversation,
-                            user.pending,
+                            conversation.pending,
                             tool_rounds,
                         ),
                     }
                 }
                 Err(_) => Ok((
-                    User {
-                        state: UserState::Idle {
+                    Conversation {
+                        state: ConversationState::Idle {
                             recent_conversation: None,
                         },
                         last_transition: Utc::now(),
-                        ..user
+                        ..conversation
                     },
                     Vec::new(),
                 )),
             },
             (
-                UserState::SendingMessage {
+                ConversationState::SendingMessage {
                     is_timeout,
                     outcome,
                     recent_conversation,
                     tool_rounds,
                 },
-                UserAction::MessageSent(_res),
+                ConversationAction::MessageSent(_res),
             ) => handle_outcome(
                 env.clone(),
-                &user_id,
+                &conversation_id,
                 is_timeout,
                 outcome,
                 recent_conversation,
-                user.pending,
+                conversation.pending,
                 tool_rounds,
             ),
             (
-                UserState::RunningTools {
+                ConversationState::RunningTools {
                     recent_conversation,
                     is_timeout,
                     tool_rounds,
                     mut pending_tools,
                     mut completed_tools,
                 },
-                UserAction::ToolResult { id, result },
+                ConversationAction::ToolResult { id, result },
             ) => {
                 // Move this tool from pending to completed, folding any error into the result data.
                 if let Some(tool_call) = pending_tools.remove(id) {
@@ -285,11 +285,11 @@ pub fn user_transition(
                     // Fold any messages the user sent mid-tool-run into this same turn (after the
                     // results, per the OpenAI protocol). Clearing pending here is required — else
                     // post_transition drains it again at Idle and the message is sent twice.
-                    let mut pending = user.pending;
+                    let mut pending = conversation.pending;
                     let current_input = LLMInput::ToolResults(results, take_pending(&mut pending));
 
                     let history = recent_conversation.history();
-                    let mut external = Vec::<UserExternalOperation>::new();
+                    let mut external = Vec::<ConversationExternalOperation>::new();
                     external.push(Box::pin(get_llm_decision(
                         env.clone(),
                         current_input.clone(),
@@ -299,8 +299,8 @@ pub fn user_transition(
                     )));
 
                     Ok((
-                        User {
-                            state: UserState::AwaitingLLMDecision {
+                        Conversation {
+                            state: ConversationState::AwaitingLLMDecision {
                                 is_timeout,
                                 history,
                                 current_input,
@@ -314,8 +314,8 @@ pub fn user_transition(
                 } else {
                     // Still waiting on other tools in the batch — stay put, dispatch nothing new.
                     Ok((
-                        User {
-                            state: UserState::RunningTools {
+                        Conversation {
+                            state: ConversationState::RunningTools {
                                 is_timeout,
                                 recent_conversation,
                                 tool_rounds,
@@ -323,54 +323,54 @@ pub fn user_transition(
                                 completed_tools,
                             },
                             last_transition: Utc::now(),
-                            ..user
+                            ..conversation
                         },
                         Vec::new(),
                     ))
                 }
             }
             (
-                UserState::Idle {
+                ConversationState::Idle {
                     recent_conversation: Some((recent_conversation, _)),
                 },
-                UserAction::Timeout,
+                ConversationAction::Timeout,
             ) => {
                 println!("Timed Out");
 
-                let mut external = Vec::<UserExternalOperation>::new();
+                let mut external = Vec::<ConversationExternalOperation>::new();
 
                 external.push(Box::pin(commit_to_memory(
                     Arc::clone(&env),
-                    user_id.to_string(),
+                    conversation_id.to_string(),
                     recent_conversation.history.clone(),
                 )));
 
                 Ok((
-                    User {
-                        state: UserState::CommitingToMemory {
+                    Conversation {
+                        state: ConversationState::CommitingToMemory {
                             recent_conversation,
                         },
                         last_transition: Utc::now(),
-                        ..user
+                        ..conversation
                     },
                     external,
                 ))
             }
             (
-                UserState::CommitingToMemory {
+                ConversationState::CommitingToMemory {
                     recent_conversation,
                 },
-                UserAction::CommitResult(_),
+                ConversationAction::CommitResult(_),
             ) => {
                 println!("Commited to Memory");
 
                 let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
-                let current_input = LLMInput::UserMessage(UserMessage {
+                let current_input = LLMInput::IncomingUpdate(IncomingUpdate {
                     text: timeout_message,
                     queued: false,
                 });
 
-                let mut external = Vec::<UserExternalOperation>::new();
+                let mut external = Vec::<ConversationExternalOperation>::new();
 
                 external.push(Box::pin(get_llm_decision(
                     env.clone(),
@@ -381,15 +381,15 @@ pub fn user_transition(
                 )));
 
                 Ok((
-                    User {
-                        state: UserState::AwaitingLLMDecision {
+                    Conversation {
+                        state: ConversationState::AwaitingLLMDecision {
                             is_timeout: true,
                             history: recent_conversation.history,
                             current_input,
                             tool_rounds: 0,
                         },
                         last_transition: Utc::now(),
-                        ..user
+                        ..conversation
                     },
                     external,
                 ))
@@ -397,14 +397,14 @@ pub fn user_transition(
             _ => Err(anyhow::anyhow!("Invalid state or action")),
         };
 
-        post_transition(env, user_id, state)
+        post_transition(env, conversation_id, state)
     })
 }
 
 /// Drain buffered user messages into a single newline-joined string, clearing `pending`. Returns
 /// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
 /// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
-fn take_pending(pending: &mut Vec<UserMessage>) -> Option<UserMessage> {
+fn take_pending(pending: &mut Vec<IncomingUpdate>) -> Option<IncomingUpdate> {
     (!pending.is_empty()).then(|| {
         let drained = std::mem::take(pending);
         // Messages drained together are homogeneous (all queued during a busy turn, or a single
@@ -415,28 +415,28 @@ fn take_pending(pending: &mut Vec<UserMessage>) -> Option<UserMessage> {
             .map(|m| m.text)
             .collect::<Vec<_>>()
             .join("\n");
-        UserMessage { text, queued }
+        IncomingUpdate { text, queued }
     })
 }
 
 fn post_transition(
     env: Arc<Env>,
-    _user_id: UserId,
-    result: UserTransitionResult,
-) -> UserTransitionResult {
-    let (mut user, mut external) = result?;
+    _conversation_id: ConversationId,
+    result: ConversationTransitionResult,
+) -> ConversationTransitionResult {
+    let (mut conversation, mut external) = result?;
 
     // Never rest in Idle with buffered input: drain it into a fresh user turn. (Mirrors the
     // mid-tool-loop fold in the RunningTools branch, which folds into a tool-result turn instead.)
-    let recent_conversation = match &user.state {
-        UserState::Idle {
+    let recent_conversation = match &conversation.state {
+        ConversationState::Idle {
             recent_conversation,
         } => recent_conversation.clone(),
-        _ => return Ok((user, external)),
+        _ => return Ok((conversation, external)),
     };
 
-    let Some(msg) = take_pending(&mut user.pending) else {
-        return Ok((user, external));
+    let Some(msg) = take_pending(&mut conversation.pending) else {
+        return Ok((conversation, external));
     };
 
     let history = recent_conversation
@@ -444,7 +444,7 @@ fn post_transition(
         .map(|(rc, _)| rc.history())
         .unwrap_or_else(Vec::new);
 
-    let current_input = LLMInput::UserMessage(msg);
+    let current_input = LLMInput::IncomingUpdate(msg);
 
     external.push(Box::pin(get_llm_decision(
         env.clone(),
@@ -455,8 +455,8 @@ fn post_transition(
     )));
 
     Ok((
-        User {
-            state: UserState::AwaitingLLMDecision {
+        Conversation {
+            state: ConversationState::AwaitingLLMDecision {
                 is_timeout: false,
                 history,
                 current_input,
@@ -469,21 +469,21 @@ fn post_transition(
     ))
 }
 
-pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
+pub fn schedule(conversation: &Conversation) -> Vec<Scheduled<ConversationAction>> {
     let mut schedules = Vec::new();
-    match user.state {
-        UserState::Idle {
+    match conversation.state {
+        ConversationState::Idle {
             recent_conversation: Some((_, last_activity)),
         } => schedules.push(Scheduled {
             at: last_activity + ChronoDuration::milliseconds(900_000),
-            action: UserAction::Timeout,
+            action: ConversationAction::Timeout,
         }),
-        UserState::AwaitingLLMDecision { .. }
-        | UserState::SendingMessage { .. }
-        | UserState::CommitingToMemory { .. }
-        | UserState::RunningTools { .. } => schedules.push(Scheduled {
-            at: user.last_transition + ChronoDuration::milliseconds(600_000),
-            action: UserAction::ForceReset,
+        ConversationState::AwaitingLLMDecision { .. }
+        | ConversationState::SendingMessage { .. }
+        | ConversationState::CommitingToMemory { .. }
+        | ConversationState::RunningTools { .. } => schedules.push(Scheduled {
+            at: conversation.last_transition + ChronoDuration::milliseconds(600_000),
+            action: ConversationAction::ForceReset,
         }),
         _ => {}
     }
@@ -491,11 +491,11 @@ pub fn schedule(user: &User) -> Vec<Scheduled<UserAction>> {
     schedules
 }
 
-pub static USER_STATE_MACHINE: Lazy<framework::StateMachineHandle<UserId, UserAction>> =
+pub static CONVERSATION_STATE_MACHINE: Lazy<framework::StateMachineHandle<ConversationId, ConversationAction>> =
     Lazy::new(|| {
         new_state_machine(
             ENV.get().expect("ENV not initialized").clone(),
-            Transition(user_transition),
+            Transition(conversation_transition),
             Schedule(schedule),
         )
     });

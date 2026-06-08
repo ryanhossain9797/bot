@@ -1,5 +1,5 @@
 use crate::{
-    types::user::{HistoryEntry, LLMInput, LLMResponse, UserAction},
+    types::conversation::{HistoryEntry, LLMInput, LLMResponse, ConversationAction},
     services::lance_db::LanceService,
     Env,
 };
@@ -43,17 +43,17 @@ pub async fn ensure_embedding_index(table: &Table, column: &str) -> Result<(), S
 
 async fn commit(
     lance_service: Arc<LanceService>,
-    user_id: String,
+    conversation_id: String,
     history: Vec<HistoryEntry>,
 ) -> Result<(), String> {
     let schema = Arc::clone(&lance_service.history_schema);
 
-    let table = lance_service.table_for_user(&user_id).await;
+    let table = lance_service.table_for_conversation(&conversation_id).await;
 
     let filtered: Vec<String> = history
         .iter()
         .filter_map(|h| match h {
-            HistoryEntry::Input(LLMInput::UserMessage(msg)) => {
+            HistoryEntry::Input(LLMInput::IncomingUpdate(msg)) => {
                 Some(format!("USER MESSAGE: {}", msg.text))
             }
             HistoryEntry::Output(LLMResponse {
@@ -95,13 +95,13 @@ async fn commit(
     )
     .map_err(|e| e.to_string())?;
 
-    let user_ids: Vec<String> = vec![user_id.clone(); filtered.len()];
+    let conversation_ids: Vec<String> = vec![conversation_id.clone(); filtered.len()];
 
     // 4. Build RecordBatch (Ensure your schema matches these 3 columns)
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
-            Arc::new(StringArray::from(user_ids)),
+            Arc::new(StringArray::from(conversation_ids)),
             Arc::new(StringArray::from(filtered)),
             Arc::new(vector_array), // The new vector column
         ],
@@ -123,8 +123,8 @@ async fn commit(
 
 pub async fn commit_to_memory(
     env: Arc<Env>,
-    user_id: String,
+    conversation_id: String,
     history: Vec<HistoryEntry>,
-) -> UserAction {
-    UserAction::CommitResult(commit(Arc::clone(&env.lance_service), user_id, history).await)
+) -> ConversationAction {
+    ConversationAction::CommitResult(commit(Arc::clone(&env.lance_service), conversation_id, history).await)
 }
