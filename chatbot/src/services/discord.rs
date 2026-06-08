@@ -54,7 +54,8 @@ impl EventHandler for Handler {
         };
 
         let is_group = message.guild_id.is_some();
-        let user_id = message.author.id.get().to_string();
+        let author_id = message.author.id.get();
+        let user_id = author_id.to_string();
         // Display name: a guild nick if set, else the global/display name, else the username (no nick
         // in a DM). Name resolution lives only in this adapter — the domain layer never sees it.
         let name = match message.guild_id {
@@ -70,10 +71,11 @@ impl EventHandler for Handler {
                 .unwrap_or_else(|| message.author.name.clone()),
         };
 
-        // Prefix the sender's name onto the text — for every message, DM or group — so the model
-        // always knows who is speaking (every human maps to OpenAI role "user", so the name in the
-        // content is the only speaker signal).
-        let msg = format!("{name}: {text}");
+        // Prefix the sender's identity — name AND Discord id — onto the text, for every message, DM
+        // or group. The id makes the speaker unambiguous: names can collide or change, and the model
+        // needs a stable handle to tell who's who and whether a mention refers to itself (see
+        // `identity` / mention humanization in `filter`).
+        let msg = format!("{}: {text}", identity(&name, author_id));
 
         // Key the conversation by the channel the message arrived on (a DM channel is 1:1, a server
         // channel is shared). The channel id is stored as the opaque conversation id string; only
@@ -92,16 +94,34 @@ impl EventHandler for Handler {
     }
 }
 
+/// A person's stable identifier as the model sees it: name plus Discord id, e.g.
+/// `Zireael9797 (id:12345)`. Used for both message prefixes and humanized @mentions so the model
+/// can always correlate who's who — and tell when an id matches its own. Deliberately *not* the
+/// `<@id>` ping form, so the bot echoing an identity can't accidentally ping anyone.
+fn identity(name: &str, id: u64) -> String {
+    format!("{name} (id:{id})")
+}
+
 /// Clean a raw message into the text we feed the model, or `None` to ignore it:
-/// - replaces the bot's own `@mention` (both `<@id>` and `<@!id>` forms) with its **name**, so the
-///   model can see when it's being addressed instead of the mention being silently stripped,
+/// - rewrites every `@mention` (`<@id>` / `<@!id>`) into the mentioned user's `identity` (name+id),
+///   so no raw numeric id ever reaches the model with no name attached,
 /// - strips a leading `/`, collapses runs of whitespace,
 /// - returns `None` if nothing textual remains (e.g. an attachment-only message), so we don't run
 ///   the model on empty content.
 fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String> {
     let mut text = message.content.clone();
-    for handle in [format!("<@{bot_user_id}>"), format!("<@!{bot_user_id}>")] {
-        text = text.replace(&handle, bot_name);
+    for user in &message.mentions {
+        let id = user.id.get();
+        // Use our configured name for ourselves; otherwise the mentioned user's display name.
+        let name = if id == bot_user_id {
+            bot_name.to_string()
+        } else {
+            user.global_name.clone().unwrap_or_else(|| user.name.clone())
+        };
+        let label = identity(&name, id);
+        text = text
+            .replace(&format!("<@{id}>"), &label)
+            .replace(&format!("<@!{id}>"), &label);
     }
 
     let text = text.trim().trim_start_matches('/').trim().to_string();

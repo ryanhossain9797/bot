@@ -139,14 +139,14 @@ fn respond_blocking(
     conversation: serde_json::Value,
     allow_tools: bool,
     is_group: bool,
-    bot_name: String,
+    bot_identity: String,
 ) -> anyhow::Result<serde_json::Value> {
     // Prepend the system turn (persona + DM/group guidance), then render with the model's template.
     // At the budget cap, advertise no tools so the model physically cannot emit another tool call
     // (the synthesis nudge itself rides the message stream, not this stable system turn).
     let mut messages = vec![serde_json::json!({
         "role": "system",
-        "content": agent.system_content(is_group, &bot_name),
+        "content": agent.system_content(is_group, &bot_identity),
     })];
     if let Some(arr) = conversation.as_array() {
         messages.extend(arr.iter().cloned());
@@ -216,15 +216,15 @@ impl Agent {
         self.temperature
     }
 
-    /// The system turn. `is_group` selects a DM vs group-chat variant and `bot_name` is the bot's
-    /// own display name (so it knows who it is / when it's addressed). Both inputs are effectively
-    /// static per deployment, so the cached system prefix stays stable. The group variant tells the
-    /// model it's one participant among many and that it may stay silent by replying `<empty>`.
-    pub fn system_content(&self, is_group: bool, bot_name: &str) -> String {
+    /// The system turn. `is_group` selects a DM vs group-chat variant and `bot_identity` is the
+    /// bot's own `Name (id:NUMBER)` handle (so it can recognize itself among the participants). Both
+    /// inputs are effectively static per deployment, so the cached system prefix stays stable. The
+    /// group variant tells the model it's one participant among many and may stay silent via `<empty>`.
+    pub fn system_content(&self, is_group: bool, bot_identity: &str) -> String {
         let context_note = if is_group {
-            format!("\n\nYou are in a GROUP CHAT with multiple people, and your own name here is \"{bot_name}\" — when someone writes \"{bot_name}\" (or @mentions you) they are addressing you. Every message is prefixed with its sender's name (\"Name: ...\"); use those names to track who said what, and address people by name when it helps. You are one participant among many, not a personal assistant — only reply when you're addressed or can genuinely add something. If a message doesn't call for a response from you, reply with exactly `<empty>` to stay silent — that sends nothing to the chat.")
+            format!("\n\nYou are in a GROUP CHAT with multiple participants. You are \"{bot_identity}\". Every message is prefixed with its sender's identity in the form \"Name (id:NUMBER)\", and any @mention is shown the same way — so each participant is identified by both a name and a stable numeric id. A message addresses you when it mentions the id that matches yours; match on the id, not just the name (names can repeat or change). Address people by name, and use ids to keep who's who straight. You are one participant among many, not a personal assistant — only reply when you're addressed or can genuinely add something. If a message doesn't call for a response from you, reply with exactly `<empty>` to stay silent — that sends nothing to the chat.")
         } else {
-            format!("\n\nYour name is \"{bot_name}\".")
+            format!("\n\nYou are \"{bot_identity}\".")
         };
         format!(
             "{}{}\n\nUse tools deliberately and answer once you've gathered enough. You can call multiple tools in one turn when that helps.\n\nIMPORTANT — A [Followup] message arrived while you were still replying or while tools were running, so the user hadn't seen the result yet (they never see tool calls or their outputs, only your replies). If it follows one of your replies: gauge what you already covered and build on it rather than repeat — or handle it normally if it's a different track. If it follows tool results: weigh it against those results and consider whether it needs new information before answering. Either way, the goal is the same: make sure the user ends up with everything they asked for across your replies.",
@@ -241,7 +241,7 @@ impl Agent {
         conversation: serde_json::Value,
         allow_tools: bool,
         is_group: bool,
-        bot_name: String,
+        bot_identity: String,
     ) -> anyhow::Result<serde_json::Value> {
         let task = spawn_blocking(move || {
             respond_blocking(
@@ -253,7 +253,7 @@ impl Agent {
                 conversation,
                 allow_tools,
                 is_group,
-                bot_name,
+                bot_identity,
             )
         });
 
