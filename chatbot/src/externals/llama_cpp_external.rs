@@ -1,6 +1,6 @@
 use crate::{
     types::conversation::{
-        last_conversation_message, HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -120,20 +120,12 @@ async fn get_response_from_llm(
     tool_rounds: usize,
     max_tool_rounds: usize,
     allow_tools: bool,
+    is_group: bool,
+    bot_identity: &str,
 ) -> anyhow::Result<LLMResponse> {
-    // Per-message context for the system prompt (latest message wins): the DM-vs-group flag and the
-    // bot's own identity on this conversation's platform. Use the current input's message when it
-    // has one; otherwise (a tool-result continuation) read the most recent message from history.
-    let latest = match current_input {
-        LLMInput::ConversationMessage(m) => Some(m),
-        LLMInput::ToolResults(_, Some(m)) => Some(m),
-        LLMInput::ToolResults(_, None) => maybe_recent_conversation
-            .as_ref()
-            .and_then(|rc| last_conversation_message(&rc.history)),
-    };
-    let is_group = latest.map(|m| m.is_group).unwrap_or(false);
-    let bot_identity = latest.map(|m| m.bot_identity.clone()).unwrap_or_default();
-
+    // DM-vs-group flag and the bot's own identity on this conversation's platform are conversation
+    // facts (set once at construction, persisted on the state) — they're passed straight in now,
+    // no longer reconstructed per message from history.
     let conversation = build_conversation(
         current_input,
         maybe_recent_conversation,
@@ -148,7 +140,7 @@ async fn get_response_from_llm(
     );
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools, is_group, &bot_identity)
+        .get_primary_response(conversation, allow_tools, is_group, bot_identity)
         .await?;
 
     let thoughts = parsed
@@ -191,6 +183,8 @@ pub async fn get_llm_decision(
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
     max_tool_rounds: usize,
+    is_group: bool,
+    bot_identity: String,
 ) -> ConversationAction {
     // Budget spent → final call with tools off, so the model can't emit another tool call; the
     // matching synthesis directive on the last tool result (see `budget_note`) nudges it to answer
@@ -208,6 +202,8 @@ pub async fn get_llm_decision(
         tool_rounds,
         max_tool_rounds,
         allow_tools,
+        is_group,
+        &bot_identity,
     )
     .await;
 

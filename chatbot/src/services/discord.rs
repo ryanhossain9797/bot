@@ -3,7 +3,7 @@ use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    types::conversation::{ConversationAction, Platform, ConversationId},
+    types::conversation::{ConversationAction, ConversationConstructor, Platform, ConversationId},
     state_machines::conversation_state_machine::CONVERSATION_STATE_MACHINE,
 };
 
@@ -47,7 +47,8 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    conversation_state_machine: StateMachineHandle<ConversationId, ConversationAction>,
+    conversation_state_machine:
+        StateMachineHandle<ConversationId, ConversationConstructor, ConversationAction>,
     /// This bot's own Discord identity (adapter-local — bot identity is per-platform, never a global
     /// Env value). Used to ignore our own messages, humanize our own @mentions, and stamp the
     /// `bot_identity` carried on each message into the domain.
@@ -98,12 +99,23 @@ impl EventHandler for Handler {
         // this Discord adapter knows it's a channel id.
         let conversation_id =
             ConversationId(Platform::Discord, message.channel_id.get().to_string());
+
+        // Construct-then-act: ensure the conversation exists (idempotent — only the first message on
+        // this channel actually creates it, baking in the group-vs-DM context and our identity),
+        // then deliver the message. `is_group`/`bot_identity` are conversation facts, set once here.
+        self.conversation_state_machine
+            .construct(
+                conversation_id.clone(),
+                ConversationConstructor {
+                    is_group,
+                    bot_identity,
+                },
+            )
+            .await;
         let action = ConversationAction::NewMessage {
             msg,
             user_id,
             name,
-            is_group,
-            bot_identity,
         };
         self.conversation_state_machine
             .act(conversation_id, action)

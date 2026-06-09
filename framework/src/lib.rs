@@ -34,6 +34,13 @@ pub struct Transition<Id, State, Action, Env>(
     ) -> Pin<Box<dyn Future<Output = TransitionResult<State, Action>> + Send + '_>>,
 );
 
+/// Builds an entity's initial `State` from its `Id` and a domain-supplied `Constructor` payload.
+/// This is the *only* thing that ever produces a starting state — there is no implicit `Default`
+/// fallback — so the domain decides up front what a fresh entity looks like (e.g. carrying
+/// construction-time facts that are then persisted on the state for the entity's whole life).
+#[derive(Clone)]
+pub struct Construct<Id, State, Constructor>(pub fn(Id, Constructor) -> State);
+
 #[derive(Clone)]
 pub struct Scheduled<Action> {
     pub at: DateTime<Utc>,
@@ -49,21 +56,32 @@ pub enum Activity<Action: PersistedStateMachineItem + 'static> {
     DeleteSelf,
 }
 
+/// What the router receives for a given `Id`. `Construct` is the only path that creates an entity
+/// (idempotent — a second `Construct` for an already-live id is a no-op); `Act` delivers an action
+/// to an entity that must already exist. An `Act` for an unknown id is warned about and dropped —
+/// there is no implicit/lazy creation, so the domain is responsible for constructing before acting.
+pub enum Input<Constructor, Action> {
+    Construct(Constructor),
+    Act(Action),
+}
+
 async fn run_entity<
     Id: PersistedStateMachineItem + Ord + 'static,
-    State: PersistedStateMachineItem + Default + 'static,
+    State: PersistedStateMachineItem + 'static,
+    Constructor: PersistedStateMachineItem + 'static,
     Action: PersistedStateMachineItem + std::fmt::Debug + 'static,
     Env: StateMachineItem + 'static,
 >(
     env: Arc<Env>,
     id: Id,
+    initial_state: State,
     mut receiver: Receiver<Activity<Action>>,
-    handle: StateMachineHandle<Id, Action>,
+    handle: StateMachineHandle<Id, Constructor, Action>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
     self_sender: Sender<Activity<Action>>,
 ) {
-    let mut state = State::default();
+    let mut state = initial_state;
     let mut maybe_scheduled: Option<JoinHandle<()>> = None;
 
     while let Some(activity) = receiver.recv().await {
@@ -130,7 +148,7 @@ async fn run_entity<
                         }
 
                         external.into_iter().for_each(|f| {
-                            let handle: StateMachineHandle<Id, Action> = handle.clone();
+                            let handle: StateMachineHandle<Id, Constructor, Action> = handle.clone();
                             let id = id.clone();
                             tokio::spawn(async move {
                                 let action = f.await;
@@ -174,34 +192,56 @@ async fn run_entity<
 
 async fn start_state_machine<
     Id: PersistedStateMachineItem + Ord + 'static,
-    State: PersistedStateMachineItem + Default + 'static,
+    State: PersistedStateMachineItem + 'static,
+    Constructor: PersistedStateMachineItem + 'static,
     Action: PersistedStateMachineItem + std::fmt::Debug + 'static,
     Env: StateMachineItem + 'static,
 >(
     env: Arc<Env>,
-    state_machine_handle: StateMachineHandle<Id, Action>,
-    mut receiver: Receiver<(Id, Action)>,
+    state_machine_handle: StateMachineHandle<Id, Constructor, Action>,
+    mut receiver: Receiver<(Id, Input<Constructor, Action>)>,
+    construct: Construct<Id, State, Constructor>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
 ) -> ! {
     let mut handle_by_id = std::collections::BTreeMap::<Id, Handle<Action>>::new();
 
-    while let Some((id, action)) = receiver.recv().await {
-        match handle_by_id.contains_key(&id) {
-            true => (),
-            false => {
+    while let Some((id, input)) = receiver.recv().await {
+        match input {
+            // The single, idempotent creation path. The router owns the existence check, so the
+            // domain can construct unconditionally (e.g. on every inbound message) without tracking
+            // a seen-set; a Construct for a live id is dropped. mpsc FIFO makes this race-free, and
+            // an Act enqueued right after its Construct can never overtake it.
+            Input::Construct(constructor) => {
+                if handle_by_id.contains_key(&id) {
+                    continue;
+                }
+                let initial_state = construct.0(id.clone(), constructor);
                 let handle = new_entity(
                     env.clone(),
                     id.clone(),
+                    initial_state,
                     state_machine_handle.clone(),
                     transition.clone(),
                     schedule.clone(),
                 );
-                handle_by_id.insert(id.clone(), handle.clone());
+                handle_by_id.insert(id, handle);
             }
+            // No implicit creation: an action for an id we've never constructed is a bug in the
+            // caller (it should have constructed first), so warn and drop rather than silently
+            // spinning up a default entity.
+            Input::Act(action) => match handle_by_id.get(&id) {
+                Some(handle) => {
+                    let handle = handle.clone();
+                    tokio::spawn(async move { handle.act(action).await });
+                }
+                None => {
+                    eprintln!(
+                        "[warn] action {action:?} for unconstructed entity; dropping (Construct must precede Act)"
+                    );
+                }
+            },
         }
-        let handle = handle_by_id[&id].clone();
-        tokio::spawn(async move { handle.act(action).await });
     }
     panic!()
 }
