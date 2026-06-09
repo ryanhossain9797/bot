@@ -4,7 +4,7 @@ use crate::externals::{
     tool_call_external::execute_tool,
 };
 use crate::types::conversation::{
-    last_conversation_message, LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
+    LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
 };
 use crate::{
     types::conversation::{
@@ -29,7 +29,6 @@ type ConversationExternalOperation = ExternalOperation<ConversationAction>;
 fn handle_outcome(
     env: Arc<Env>,
     conversation_id: &ConversationId,
-    is_timeout: bool,
     response: LLMResponse,
     recent_conversation: RecentConversation,
     pending: Vec<ConversationMessage>,
@@ -37,15 +36,11 @@ fn handle_outcome(
 ) -> ConversationTransitionResult {
     // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
     if response.tool_calls.is_empty() {
-        // No tools to run — settle into Idle.
+        // No tools to run — settle back into Idle, holding the conversation for the idle window.
         Ok((
             Conversation {
                 state: ConversationState::Idle {
-                    recent_conversation: if is_timeout {
-                        None
-                    } else {
-                        Some((recent_conversation, Utc::now()))
-                    },
+                    recent_conversation: Some((recent_conversation, Utc::now())),
                 },
                 last_transition: Utc::now(),
                 pending,
@@ -70,7 +65,6 @@ fn handle_outcome(
         Ok((
             Conversation {
                 state: ConversationState::RunningTools {
-                    is_timeout,
                     recent_conversation,
                     tool_rounds: tool_rounds + 1,
                     pending_tools,
@@ -136,7 +130,6 @@ pub fn conversation_transition(
             }
             (
                 ConversationState::AwaitingLLMDecision {
-                    is_timeout,
                     history,
                     current_input,
                     tool_rounds,
@@ -190,7 +183,6 @@ pub fn conversation_transition(
                             Ok((
                                 Conversation {
                                     state: ConversationState::SendingMessage {
-                                        is_timeout,
                                         outcome: response.clone(),
                                         recent_conversation: updated_conversation,
                                         tool_rounds,
@@ -204,7 +196,6 @@ pub fn conversation_transition(
                         None => handle_outcome(
                             env.clone(),
                             &conversation_id,
-                            is_timeout,
                             response.clone(),
                             updated_conversation,
                             conversation.pending,
@@ -225,7 +216,6 @@ pub fn conversation_transition(
             },
             (
                 ConversationState::SendingMessage {
-                    is_timeout,
                     outcome,
                     recent_conversation,
                     tool_rounds,
@@ -234,7 +224,6 @@ pub fn conversation_transition(
             ) => handle_outcome(
                 env.clone(),
                 &conversation_id,
-                is_timeout,
                 outcome,
                 recent_conversation,
                 conversation.pending,
@@ -243,7 +232,6 @@ pub fn conversation_transition(
             (
                 ConversationState::RunningTools {
                     recent_conversation,
-                    is_timeout,
                     tool_rounds,
                     mut pending_tools,
                     mut completed_tools,
@@ -297,7 +285,6 @@ pub fn conversation_transition(
                     Ok((
                         Conversation {
                             state: ConversationState::AwaitingLLMDecision {
-                                is_timeout,
                                 history,
                                 current_input,
                                 tool_rounds,
@@ -312,7 +299,6 @@ pub fn conversation_transition(
                     Ok((
                         Conversation {
                             state: ConversationState::RunningTools {
-                                is_timeout,
                                 recent_conversation,
                                 tool_rounds,
                                 pending_tools,
@@ -353,49 +339,22 @@ pub fn conversation_transition(
                 ))
             }
             (
-                ConversationState::CommitingToMemory {
-                    recent_conversation,
-                },
+                ConversationState::CommitingToMemory { .. },
                 ConversationAction::CommitResult(_),
             ) => {
                 println!("Commited to Memory");
 
-                let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
-                // Synthetic system message (no real sender). Inherit the conversation's group-ness
-                // and the bot's platform identity from the last real message so the goodbye uses the
-                // right system prompt.
-                let last = last_conversation_message(&recent_conversation.history);
-                let current_input = LLMInput::ConversationMessage(ConversationMessage {
-                    text: timeout_message,
-                    queued: false,
-                    user_id: String::new(),
-                    name: String::new(),
-                    is_group: last.map(|m| m.is_group).unwrap_or(false),
-                    bot_identity: last.map(|m| m.bot_identity.clone()).unwrap_or_default(),
-                });
-
-                let mut external = Vec::<ConversationExternalOperation>::new();
-
-                external.push(Box::pin(get_llm_decision(
-                    env.clone(),
-                    current_input.clone(),
-                    Some(recent_conversation.clone()),
-                    0,
-                    MAX_TOOL_ROUNDS,
-                )));
-
+                // History has been committed to long-term memory; drop it and return to a fresh
+                // Idle. (No goodbye turn — we don't send a parting message.)
                 Ok((
                     Conversation {
-                        state: ConversationState::AwaitingLLMDecision {
-                            is_timeout: true,
-                            history: recent_conversation.history,
-                            current_input,
-                            tool_rounds: 0,
+                        state: ConversationState::Idle {
+                            recent_conversation: None,
                         },
                         last_transition: Utc::now(),
                         ..conversation
                     },
-                    external,
+                    Vec::new(),
                 ))
             }
             _ => Err(anyhow::anyhow!("Invalid state or action")),
@@ -474,7 +433,6 @@ fn post_transition(
     Ok((
         Conversation {
             state: ConversationState::AwaitingLLMDecision {
-                is_timeout: false,
                 history,
                 current_input,
                 tool_rounds: 0,

@@ -66,14 +66,12 @@ pub enum ConversationState {
         recent_conversation: RecentConversation,
     },
     AwaitingLLMDecision {
-        is_timeout: bool,
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
         /// Tool calls made so far in this turn (resets to 0 on a new user turn).
         tool_rounds: usize,
     },
     SendingMessage {
-        is_timeout: bool,
         outcome: LLMResponse,
         recent_conversation: RecentConversation,
         /// Tool rounds so far this turn, carried through so that if `outcome` holds tool calls
@@ -82,7 +80,6 @@ pub enum ConversationState {
         tool_rounds: usize,
     },
     RunningTools {
-        is_timeout: bool,
         recent_conversation: RecentConversation,
         tool_rounds: usize,
         /// Calls still in flight this batch, keyed by id (id duplicated as the key).
