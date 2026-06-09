@@ -102,62 +102,52 @@ async fn run_entity<
         );
         match activity {
             Activity::StateMachineAction(action) => {
-                match transition.0(env.clone(), id.clone(), state.clone(), &action).await {
-                    Ok((updated_state, external)) => {
-                        match &maybe_scheduled {
-                            Some(scheduled) => {
-                                scheduled.abort();
-                            }
-                            None => {}
-                        }
-                        let mut scheduled = schedule.0(&updated_state);
-
-                        scheduled.sort_by_key(|scheduled| scheduled.at);
-
-                        let earliest = scheduled.into_iter().next();
-
-                        match earliest {
-                            Some(scheduled) => {
-                                let self_sender = self_sender.clone();
-                                let timer_handle = tokio::spawn(async move {
-                                    let sleep_for = scheduled.clone().at - now;
-                                    match sleep_for.to_std() {
-                                        Ok(sleep_duration) => {
-                                            tokio::time::sleep(sleep_duration).await;
-                                            while Utc::now() < scheduled.at {
-                                                tokio::time::sleep(Duration::from_millis(10)).await;
-                                            }
-                                            let _ = self_sender
-                                                .clone()
-                                                .send(Activity::ScheduledWakeup)
-                                                .await;
-                                        }
-                                        Err(_negative_time_error) => {
-                                            // Negative duration means the scheduled time has already passed
-                                            let _ = self_sender
-                                                .clone()
-                                                .send(Activity::ScheduledWakeup)
-                                                .await;
-                                        }
-                                    }
-                                });
-
-                                maybe_scheduled = Some(timer_handle)
-                            }
-                            None => {}
-                        }
-
-                        external.into_iter().for_each(|f| {
-                            let handle: StateMachineHandle<Id, Constructor, Action> = handle.clone();
-                            let id = id.clone();
-                            tokio::spawn(async move {
-                                let action = f.await;
-                                handle.act(id, action).await;
-                            });
-                        });
-                        state = updated_state;
+                if let Ok((updated_state, external)) =
+                    transition.0(env.clone(), id.clone(), state.clone(), &action).await
+                {
+                    if let Some(scheduled) = &maybe_scheduled {
+                        scheduled.abort();
                     }
-                    Err(_) => (),
+
+                    let mut scheduled = schedule.0(&updated_state);
+
+                    scheduled.sort_by_key(|scheduled| scheduled.at);
+
+                    let earliest = scheduled.into_iter().next();
+
+                    if let Some(scheduled) = earliest {
+                        let self_sender = self_sender.clone();
+                        let timer_handle = tokio::spawn(async move {
+                            let sleep_for = scheduled.clone().at - now;
+                            match sleep_for.to_std() {
+                                Ok(sleep_duration) => {
+                                    tokio::time::sleep(sleep_duration).await;
+                                    while Utc::now() < scheduled.at {
+                                        tokio::time::sleep(Duration::from_millis(10)).await;
+                                    }
+                                    let _ =
+                                        self_sender.clone().send(Activity::ScheduledWakeup).await;
+                                }
+                                Err(_negative_time_error) => {
+                                    // Negative duration means the scheduled time has already passed
+                                    let _ =
+                                        self_sender.clone().send(Activity::ScheduledWakeup).await;
+                                }
+                            }
+                        });
+
+                        maybe_scheduled = Some(timer_handle)
+                    }
+
+                    external.into_iter().for_each(|f| {
+                        let handle: StateMachineHandle<Id, Constructor, Action> = handle.clone();
+                        let id = id.clone();
+                        tokio::spawn(async move {
+                            let action = f.await;
+                            handle.act(id, action).await;
+                        });
+                    });
+                    state = updated_state;
                 }
             }
             Activity::ScheduledWakeup => {
@@ -166,23 +156,20 @@ async fn run_entity<
 
                 let earliest = scheduled.into_iter().next();
 
-                match earliest {
-                    Some(scheduled) => {
-                        let sleep_for = scheduled.at - now;
+                if let Some(scheduled) = earliest {
+                    let sleep_for = scheduled.at - now;
 
-                        match sleep_for.to_std() {
-                            Ok(_time_left) => {
-                                println!("Not Ready"); //TODO handle unexpected wakeup
-                            }
-                            Err(_negative_time_error) => {
-                                // Negative duration means the scheduled time has already passed
-                                let _ = self_sender
-                                    .send(Activity::StateMachineAction(scheduled.action))
-                                    .await;
-                            }
+                    match sleep_for.to_std() {
+                        Ok(_time_left) => {
+                            println!("Not Ready"); //TODO handle unexpected wakeup
+                        }
+                        Err(_negative_time_error) => {
+                            // Negative duration means the scheduled time has already passed
+                            let _ = self_sender
+                                .send(Activity::StateMachineAction(scheduled.action))
+                                .await;
                         }
                     }
-                    None => {}
                 }
             }
             Activity::DeleteSelf => todo!(),

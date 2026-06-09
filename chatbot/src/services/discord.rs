@@ -3,8 +3,8 @@ use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    types::conversation::{ConversationAction, ConversationConstructor, Platform, ConversationId},
     state_machines::conversation_state_machine::CONVERSATION_STATE_MACHINE,
+    types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -100,11 +100,12 @@ impl EventHandler for Handler {
         let conversation_id =
             ConversationId(Platform::Discord, message.channel_id.get().to_string());
 
-        // Construct-then-act: ensure the conversation exists (idempotent — only the first message on
-        // this channel actually creates it, baking in the group-vs-DM context and our identity),
-        // then deliver the message. `is_group`/`bot_identity` are conversation facts, set once here.
+        // maybe_construct-then-act: ensure the conversation exists (idempotent — only the first
+        // message on this channel actually creates it, baking in the group-vs-DM context and our
+        // identity), then deliver the message. `is_group`/`bot_identity` are conversation facts,
+        // set once here.
         self.conversation_state_machine
-            .construct(
+            .maybe_construct(
                 conversation_id.clone(),
                 ConversationConstructor {
                     is_group,
@@ -112,11 +113,9 @@ impl EventHandler for Handler {
                 },
             )
             .await;
-        let action = ConversationAction::NewMessage {
-            msg,
-            user_id,
-            name,
-        };
+
+        let action = ConversationAction::NewMessage { msg, user_id, name };
+
         self.conversation_state_machine
             .act(conversation_id, action)
             .await;
@@ -145,7 +144,9 @@ fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String
         let name = if id == bot_user_id {
             bot_name.to_string()
         } else {
-            user.global_name.clone().unwrap_or_else(|| user.name.clone())
+            user.global_name
+                .clone()
+                .unwrap_or_else(|| user.name.clone())
         };
         let label = identity(&name, id);
         text = text
