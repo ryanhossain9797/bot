@@ -103,9 +103,12 @@ impl Default for ConversationState {
 /// (`"Alice: hello"`) — the Discord adapter prepends it for every message, DM or group, so the
 /// model always knows who is speaking (in a group, every human still maps to OpenAI `role: "user"`,
 /// so the name in the text is the only speaker signal). `name`/`user_id` keep the same identity in
-/// structured form. `is_group` is the DM-vs-group context of the message (latest message wins; not
-/// persisted on the `Conversation`). `queued` is true when it was buffered into `pending` while the
-/// bot was busy, so it crossed an in-flight response — surfaced as a `[Followup]` tag at render time.
+/// structured form. `is_group` is the DM-vs-group context of the message, and `bot_identity` is the
+/// bot's own `Name (id:N)` handle *on the platform this message came from* — both ride the message
+/// because they're platform-specific facts the adapter knows (the domain layer must not assume one
+/// global bot identity; different conversations can be on different platforms). Latest message wins;
+/// neither is persisted on the `Conversation`. `queued` is true when it was buffered into `pending`
+/// while the bot was busy, so it crossed an in-flight response — surfaced as `[Followup]` at render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
     pub text: String,
@@ -116,6 +119,9 @@ pub struct ConversationMessage {
     pub name: String,
     /// Whether this message came from a group chat (vs a 1:1 DM). Drives system-prompt selection.
     pub is_group: bool,
+    /// The bot's own identity (`Name (id:N)`) on the platform this message arrived from, stamped by
+    /// that adapter. Fed to the system prompt so the model can recognize when it's addressed.
+    pub bot_identity: String,
 }
 
 impl ConversationMessage {
@@ -150,19 +156,15 @@ pub enum LLMInput {
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
-/// The `is_group` of the most recent message in `history` (latest message wins; defaults to DM /
-/// `false` when there's no message to read). Used to pick the DM-vs-group system prompt and to give
-/// synthetic messages (e.g. the timeout goodbye) the conversation's group-ness.
-pub fn latest_is_group(history: &[HistoryEntry]) -> bool {
-    history
-        .iter()
-        .rev()
-        .find_map(|e| match e {
-            HistoryEntry::Input(LLMInput::ConversationMessage(m)) => Some(m.is_group),
-            HistoryEntry::Input(LLMInput::ToolResults(_, Some(m))) => Some(m.is_group),
-            _ => None,
-        })
-        .unwrap_or(false)
+/// The most recent real `ConversationMessage` in `history` (latest wins). Source of the per-message
+/// context facts (`is_group`, `bot_identity`) for turns whose current input isn't itself a message —
+/// e.g. a tool-result continuation, or the synthetic timeout goodbye.
+pub fn last_conversation_message(history: &[HistoryEntry]) -> Option<&ConversationMessage> {
+    history.iter().rev().find_map(|e| match e {
+        HistoryEntry::Input(LLMInput::ConversationMessage(m)) => Some(m),
+        HistoryEntry::Input(LLMInput::ToolResults(_, Some(m))) => Some(m),
+        _ => None,
+    })
 }
 
 impl LLMInput {
@@ -333,6 +335,8 @@ pub enum ConversationAction {
         name: String,
         /// Whether it arrived from a group chat (vs a 1:1 DM).
         is_group: bool,
+        /// The bot's own `Name (id:N)` identity on the platform this message came from.
+        bot_identity: String,
     },
     Timeout,
     CommitResult(Result<(), String>),

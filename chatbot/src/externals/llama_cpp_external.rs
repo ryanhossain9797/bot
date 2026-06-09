@@ -1,6 +1,6 @@
 use crate::{
     types::conversation::{
-        latest_is_group, HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        last_conversation_message, HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -120,19 +120,19 @@ async fn get_response_from_llm(
     tool_rounds: usize,
     max_tool_rounds: usize,
     allow_tools: bool,
-    bot_identity: &str,
 ) -> anyhow::Result<LLMResponse> {
-    // DM-vs-group context for system-prompt selection: the latest message wins. Use the current
-    // input's flag when it's a message (or carries a folded message); otherwise (a tool-result
-    // continuation) read the most recent message from history.
-    let is_group = match current_input {
-        LLMInput::ConversationMessage(m) => m.is_group,
-        LLMInput::ToolResults(_, Some(m)) => m.is_group,
+    // Per-message context for the system prompt (latest message wins): the DM-vs-group flag and the
+    // bot's own identity on this conversation's platform. Use the current input's message when it
+    // has one; otherwise (a tool-result continuation) read the most recent message from history.
+    let latest = match current_input {
+        LLMInput::ConversationMessage(m) => Some(m),
+        LLMInput::ToolResults(_, Some(m)) => Some(m),
         LLMInput::ToolResults(_, None) => maybe_recent_conversation
             .as_ref()
-            .map(|rc| latest_is_group(&rc.history))
-            .unwrap_or(false),
+            .and_then(|rc| last_conversation_message(&rc.history)),
     };
+    let is_group = latest.map(|m| m.is_group).unwrap_or(false);
+    let bot_identity = latest.map(|m| m.bot_identity.clone()).unwrap_or_default();
 
     let conversation = build_conversation(
         current_input,
@@ -148,7 +148,7 @@ async fn get_response_from_llm(
     );
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools, is_group, bot_identity)
+        .get_primary_response(conversation, allow_tools, is_group, &bot_identity)
         .await?;
 
     let thoughts = parsed
@@ -201,10 +201,6 @@ pub async fn get_llm_decision(
         if allow_tools { "on" } else { "off — synthesizing" }
     );
 
-    // The bot's own identity in the same name+id form used for message prefixes / mentions, so the
-    // model can recognize when an id refers to itself.
-    let bot_identity = format!("{} (id:{})", env.bot_name, env.bot_user_id);
-
     let llama_cpp_result = get_response_from_llm(
         env.llama_cpp.as_ref(),
         &current_input,
@@ -212,7 +208,6 @@ pub async fn get_llm_decision(
         tool_rounds,
         max_tool_rounds,
         allow_tools,
-        &bot_identity,
     )
     .await;
 

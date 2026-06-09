@@ -4,7 +4,7 @@ use crate::externals::{
     tool_call_external::execute_tool,
 };
 use crate::types::conversation::{
-    latest_is_group, LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
+    last_conversation_message, LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
 };
 use crate::{
     types::conversation::{
@@ -107,6 +107,7 @@ pub fn conversation_transition(
                     user_id,
                     name,
                     is_group,
+                    bot_identity,
                 },
             ) => {
                 // Every message is accepted and buffered (the old `start_conversation` mention-gate
@@ -121,6 +122,7 @@ pub fn conversation_transition(
                     user_id: user_id.clone(),
                     name: name.clone(),
                     is_group: *is_group,
+                    bot_identity: bot_identity.clone(),
                 });
 
                 Ok((
@@ -360,13 +362,16 @@ pub fn conversation_transition(
 
                 let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
                 // Synthetic system message (no real sender). Inherit the conversation's group-ness
-                // from the last real message so the goodbye uses the right system prompt.
+                // and the bot's platform identity from the last real message so the goodbye uses the
+                // right system prompt.
+                let last = last_conversation_message(&recent_conversation.history);
                 let current_input = LLMInput::ConversationMessage(ConversationMessage {
                     text: timeout_message,
                     queued: false,
                     user_id: String::new(),
                     name: String::new(),
-                    is_group: latest_is_group(&recent_conversation.history),
+                    is_group: last.map(|m| m.is_group).unwrap_or(false),
+                    bot_identity: last.map(|m| m.bot_identity.clone()).unwrap_or_default(),
                 });
 
                 let mut external = Vec::<ConversationExternalOperation>::new();
@@ -414,6 +419,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
         let is_group = drained.last().map(|m| m.is_group).unwrap_or(false);
         let user_id = drained.last().map(|m| m.user_id.clone()).unwrap_or_default();
         let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
+        let bot_identity = drained.last().map(|m| m.bot_identity.clone()).unwrap_or_default();
         let text = drained
             .into_iter()
             .map(|m| m.text)
@@ -425,6 +431,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
             user_id,
             name,
             is_group,
+            bot_identity,
         }
     })
 }

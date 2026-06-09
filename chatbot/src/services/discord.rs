@@ -16,11 +16,25 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
         | GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
+    // Fetch our own Discord identity up front (id + display name). This is adapter-local — bot
+    // identity is per-platform, not a global Env concept, so each platform's adapter holds its own.
+    let http = serenity::all::HttpBuilder::new(discord_token).build();
+    let bot_user = http.get_current_user().await?;
+    let bot_user_id = bot_user.id.get();
+    let bot_name = bot_user
+        .global_name
+        .clone()
+        .unwrap_or_else(|| bot_user.name.clone());
+
     let conversation_state_machine = CONVERSATION_STATE_MACHINE.clone();
 
     // Create a new instance of the Client, logging in as a bot. This will
     let client = Client::builder(discord_token, intents)
-        .event_handler(Handler { conversation_state_machine })
+        .event_handler(Handler {
+            conversation_state_machine,
+            bot_user_id,
+            bot_name,
+        })
         .await?;
 
     Ok(client)
@@ -34,6 +48,11 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 
 struct Handler {
     conversation_state_machine: StateMachineHandle<ConversationId, ConversationAction>,
+    /// This bot's own Discord identity (adapter-local — bot identity is per-platform, never a global
+    /// Env value). Used to ignore our own messages, humanize our own @mentions, and stamp the
+    /// `bot_identity` carried on each message into the domain.
+    bot_user_id: u64,
+    bot_name: String,
 }
 
 #[async_trait]
@@ -41,15 +60,13 @@ impl EventHandler for Handler {
     // Set a handler for the `message` event - so that whenever a new message
     // is received - the closure (or function) passed will be called.
     async fn message(&self, _ctx: Context, message: DMessage) {
-        let env = crate::ENV.get().expect("ENV initialized before clients start");
-
         // Ignore only our OWN messages (matched by id), not all bots — so the bot still sees and can
         // react to other bots in the channel. (Our own replies are already in history as assistant
         // turns; re-ingesting them as user input would double them and risk a self-loop.)
-        if message.author.id.get() == env.bot_user_id {
+        if message.author.id.get() == self.bot_user_id {
             return;
         }
-        let Some(text) = filter(&message, env.bot_user_id, &env.bot_name) else {
+        let Some(text) = filter(&message, self.bot_user_id, &self.bot_name) else {
             return;
         };
 
@@ -72,6 +89,10 @@ impl EventHandler for Handler {
         // `identity` / mention humanization in `filter`).
         let msg = format!("{}: {text}", identity(&name, author_id));
 
+        // The bot's own identity on this platform, stamped onto the message so the domain/LLM path
+        // knows it per-conversation without a global Env value (identity is per-platform).
+        let bot_identity = identity(&self.bot_name, self.bot_user_id);
+
         // Key the conversation by the channel the message arrived on (a DM channel is 1:1, a server
         // channel is shared). The channel id is stored as the opaque conversation id string; only
         // this Discord adapter knows it's a channel id.
@@ -82,6 +103,7 @@ impl EventHandler for Handler {
             user_id,
             name,
             is_group,
+            bot_identity,
         };
         self.conversation_state_machine
             .act(conversation_id, action)
