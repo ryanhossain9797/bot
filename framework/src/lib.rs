@@ -65,6 +65,51 @@ pub enum Input<Constructor, Action> {
     Act(Action),
 }
 
+/// (Re)arm the single pending timer for an entity from its current `state`: abort whatever timer
+/// was running, ask `schedule` for the soonest due action, and spawn a task that fires a
+/// `ScheduledWakeup` back into the entity at that time (immediately if it's already past). A state
+/// whose schedule is empty leaves the entity with no timer. Called both on the constructed initial
+/// state and after every transition, so a freshly-constructed (or, later, rehydrated) entity arms
+/// its timers immediately rather than only after its first action.
+fn arm_schedule<State, Action>(
+    schedule: &Schedule<State, Action>,
+    state: &State,
+    now: DateTime<Utc>,
+    self_sender: &Sender<Activity<Action>>,
+    maybe_scheduled: &mut Option<JoinHandle<()>>,
+) where
+    Action: PersistedStateMachineItem + 'static,
+{
+    if let Some(existing) = maybe_scheduled.take() {
+        existing.abort();
+    }
+
+    let mut scheduled = schedule.0(state);
+    scheduled.sort_by_key(|scheduled| scheduled.at);
+
+    if let Some(scheduled) = scheduled.into_iter().next() {
+        let at = scheduled.at;
+        let self_sender = self_sender.clone();
+        let timer_handle = tokio::spawn(async move {
+            match (at - now).to_std() {
+                Ok(sleep_duration) => {
+                    tokio::time::sleep(sleep_duration).await;
+                    while Utc::now() < at {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    let _ = self_sender.send(Activity::ScheduledWakeup).await;
+                }
+                // Negative duration means the scheduled time has already passed — fire now.
+                Err(_negative_time_error) => {
+                    let _ = self_sender.send(Activity::ScheduledWakeup).await;
+                }
+            }
+        });
+
+        *maybe_scheduled = Some(timer_handle);
+    }
+}
+
 async fn run_entity<
     Id: PersistedStateMachineItem + Ord + 'static,
     State: PersistedStateMachineItem + 'static,
@@ -83,6 +128,11 @@ async fn run_entity<
 ) {
     let mut state = initial_state;
     let mut maybe_scheduled: Option<JoinHandle<()>> = None;
+
+    // Arm any timers implied by the constructed initial state up front, so correctness doesn't
+    // depend on the initial state happening to have an empty schedule (it does today — Idle{None} —
+    // but a rehydrated entity, #106, can start mid-flight and must time out without a first action).
+    arm_schedule(&schedule, &state, Utc::now(), &self_sender, &mut maybe_scheduled);
 
     while let Some(activity) = receiver.recv().await {
         let now = Utc::now();
@@ -105,39 +155,7 @@ async fn run_entity<
                 if let Ok((updated_state, external)) =
                     transition.0(env.clone(), id.clone(), state.clone(), &action).await
                 {
-                    if let Some(scheduled) = &maybe_scheduled {
-                        scheduled.abort();
-                    }
-
-                    let mut scheduled = schedule.0(&updated_state);
-
-                    scheduled.sort_by_key(|scheduled| scheduled.at);
-
-                    let earliest = scheduled.into_iter().next();
-
-                    if let Some(scheduled) = earliest {
-                        let self_sender = self_sender.clone();
-                        let timer_handle = tokio::spawn(async move {
-                            let sleep_for = scheduled.clone().at - now;
-                            match sleep_for.to_std() {
-                                Ok(sleep_duration) => {
-                                    tokio::time::sleep(sleep_duration).await;
-                                    while Utc::now() < scheduled.at {
-                                        tokio::time::sleep(Duration::from_millis(10)).await;
-                                    }
-                                    let _ =
-                                        self_sender.clone().send(Activity::ScheduledWakeup).await;
-                                }
-                                Err(_negative_time_error) => {
-                                    // Negative duration means the scheduled time has already passed
-                                    let _ =
-                                        self_sender.clone().send(Activity::ScheduledWakeup).await;
-                                }
-                            }
-                        });
-
-                        maybe_scheduled = Some(timer_handle)
-                    }
+                    arm_schedule(&schedule, &updated_state, now, &self_sender, &mut maybe_scheduled);
 
                     external.into_iter().for_each(|f| {
                         let handle: StateMachineHandle<Id, Constructor, Action> = handle.clone();
