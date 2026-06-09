@@ -3,8 +3,8 @@ use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    types::conversation::{ConversationAction, Platform, ConversationId},
     state_machines::conversation_state_machine::CONVERSATION_STATE_MACHINE,
+    types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -47,7 +47,8 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    conversation_state_machine: StateMachineHandle<ConversationId, ConversationAction>,
+    conversation_state_machine:
+        StateMachineHandle<ConversationId, ConversationConstructor, ConversationAction>,
     /// This bot's own Discord identity (adapter-local — bot identity is per-platform, never a global
     /// Env value). Used to ignore our own messages, humanize our own @mentions, and stamp the
     /// `bot_identity` carried on each message into the domain.
@@ -98,13 +99,23 @@ impl EventHandler for Handler {
         // this Discord adapter knows it's a channel id.
         let conversation_id =
             ConversationId(Platform::Discord, message.channel_id.get().to_string());
-        let action = ConversationAction::NewMessage {
-            msg,
-            user_id,
-            name,
-            is_group,
-            bot_identity,
-        };
+
+        // maybe_construct-then-act: ensure the conversation exists (idempotent — only the first
+        // message on this channel actually creates it, baking in the group-vs-DM context and our
+        // identity), then deliver the message. `is_group`/`bot_identity` are conversation facts,
+        // set once here.
+        self.conversation_state_machine
+            .maybe_construct(
+                conversation_id.clone(),
+                ConversationConstructor {
+                    is_group,
+                    bot_identity,
+                },
+            )
+            .await;
+
+        let action = ConversationAction::NewMessage { msg, user_id, name };
+
         self.conversation_state_machine
             .act(conversation_id, action)
             .await;
@@ -133,7 +144,9 @@ fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String
         let name = if id == bot_user_id {
             bot_name.to_string()
         } else {
-            user.global_name.clone().unwrap_or_else(|| user.name.clone())
+            user.global_name
+                .clone()
+                .unwrap_or_else(|| user.name.clone())
         };
         let label = identity(&name, id);
         text = text

@@ -100,12 +100,11 @@ impl Default for ConversationState {
 /// (`"Alice: hello"`) — the Discord adapter prepends it for every message, DM or group, so the
 /// model always knows who is speaking (in a group, every human still maps to OpenAI `role: "user"`,
 /// so the name in the text is the only speaker signal). `name`/`user_id` keep the same identity in
-/// structured form. `is_group` is the DM-vs-group context of the message, and `bot_identity` is the
-/// bot's own `Name (id:N)` handle *on the platform this message came from* — both ride the message
-/// because they're platform-specific facts the adapter knows (the domain layer must not assume one
-/// global bot identity; different conversations can be on different platforms). Latest message wins;
-/// neither is persisted on the `Conversation`. `queued` is true when it was buffered into `pending`
-/// while the bot was busy, so it crossed an in-flight response — surfaced as `[Followup]` at render.
+/// structured form. `queued` is true when it was buffered into `pending` while the bot was busy, so
+/// it crossed an in-flight response — surfaced as `[Followup]` at render.
+///
+/// The DM-vs-group context and the bot's own identity used to ride each message; they now live on
+/// the [`Conversation`], set once at construction (see [`ConversationConstructor`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
     pub text: String,
@@ -114,10 +113,18 @@ pub struct ConversationMessage {
     pub user_id: String,
     /// Sender's display name; empty for synthetic/system messages. Already baked into `text`.
     pub name: String,
-    /// Whether this message came from a group chat (vs a 1:1 DM). Drives system-prompt selection.
+}
+
+/// The construction-time facts for a conversation, supplied by the adapter on first contact and
+/// baked into the [`Conversation`] state once (never per-message). Both are platform-specific facts
+/// the adapter knows — the domain layer must not assume one global bot identity, since different
+/// conversations can be on different platforms.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationConstructor {
+    /// Whether this conversation is a group chat (vs a 1:1 DM). Drives system-prompt selection.
     pub is_group: bool,
-    /// The bot's own identity (`Name (id:N)`) on the platform this message arrived from, stamped by
-    /// that adapter. Fed to the system prompt so the model can recognize when it's addressed.
+    /// The bot's own identity (`Name (id:N)`) on the platform this conversation lives on. Fed to the
+    /// system prompt so the model can recognize when it's addressed.
     pub bot_identity: String,
 }
 
@@ -136,11 +143,20 @@ impl ConversationMessage {
 /// The per-conversation entity the state machine drives: its current `state`, any `pending`
 /// updates buffered while busy, and when it last transitioned. Keyed by [`ConversationId`] (a
 /// channel/DM on some [`Platform`]) — one independent instance per conversation.
-#[derive(Clone, Default, Serialize, Deserialize)]
+///
+/// `is_group` and `bot_identity` are set once at construction (from [`ConversationConstructor`]) and
+/// persisted for the conversation's whole life — they're properties of the conversation/channel, not
+/// of individual messages. There is no `Default`: a `Conversation` is only ever produced by
+/// `construct_conversation`, never conjured implicitly.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
+    /// Whether this conversation is a group chat (vs a 1:1 DM). Drives system-prompt selection.
+    pub is_group: bool,
+    /// The bot's own `Name (id:N)` identity on this conversation's platform.
+    pub bot_identity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,17 +167,6 @@ pub enum LLMInput {
     /// same turn *after* the results — OpenAI requires tool responses to immediately follow the
     /// assistant's `tool_calls`, so the user message comes last.
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
-}
-
-/// The most recent real `ConversationMessage` in `history` (latest wins). Source of the per-message
-/// context facts (`is_group`, `bot_identity`) for turns whose current input isn't itself a message —
-/// e.g. a tool-result continuation, or the synthetic timeout goodbye.
-pub fn last_conversation_message(history: &[HistoryEntry]) -> Option<&ConversationMessage> {
-    history.iter().rev().find_map(|e| match e {
-        HistoryEntry::Input(LLMInput::ConversationMessage(m)) => Some(m),
-        HistoryEntry::Input(LLMInput::ToolResults(_, Some(m))) => Some(m),
-        _ => None,
-    })
 }
 
 impl LLMInput {
@@ -330,10 +335,6 @@ pub enum ConversationAction {
         /// Sender's platform user id and display name (for the structured `ConversationMessage`).
         user_id: String,
         name: String,
-        /// Whether it arrived from a group chat (vs a 1:1 DM).
-        is_group: bool,
-        /// The bot's own `Name (id:N)` identity on the platform this message came from.
-        bot_identity: String,
     },
     Timeout,
     CommitResult(Result<(), String>),

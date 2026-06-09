@@ -8,14 +8,15 @@ use crate::types::conversation::{
 };
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationId, ConversationMessage,
+        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationConstructor, ConversationId, ConversationMessage,
         ConversationState,
     },
     Env, ENV,
 };
 use chrono::{Duration as ChronoDuration, Utc};
 use framework::{
-    new_state_machine, ExternalOperation, Schedule, Scheduled, Transition, TransitionResult,
+    new_state_machine, Construct, ExternalOperation, Schedule, Scheduled, Transition,
+    TransitionResult,
 };
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -33,6 +34,8 @@ fn handle_outcome(
     recent_conversation: RecentConversation,
     pending: Vec<ConversationMessage>,
     tool_rounds: usize,
+    is_group: bool,
+    bot_identity: String,
 ) -> ConversationTransitionResult {
     // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
     if response.tool_calls.is_empty() {
@@ -44,6 +47,8 @@ fn handle_outcome(
                 },
                 last_transition: Utc::now(),
                 pending,
+                is_group,
+                bot_identity,
             },
             Vec::new(),
         ))
@@ -72,6 +77,8 @@ fn handle_outcome(
                 },
                 last_transition: Utc::now(),
                 pending,
+                is_group,
+                bot_identity,
             },
             external,
         ))
@@ -91,6 +98,9 @@ pub fn conversation_transition(
                     pending: Vec::new(),
                     state: ConversationState::default(),
                     last_transition: Utc::now(),
+                    // is_group/bot_identity persist across a reset — they're conversation identity,
+                    // set once at construction, not turn state.
+                    ..conversation
                 },
                 Vec::new(),
             )),
@@ -100,8 +110,6 @@ pub fn conversation_transition(
                     msg,
                     user_id,
                     name,
-                    is_group,
-                    bot_identity,
                 },
             ) => {
                 // Every message is accepted and buffered (the old `start_conversation` mention-gate
@@ -115,8 +123,6 @@ pub fn conversation_transition(
                     queued,
                     user_id: user_id.clone(),
                     name: name.clone(),
-                    is_group: *is_group,
-                    bot_identity: bot_identity.clone(),
                 });
 
                 Ok((
@@ -200,6 +206,8 @@ pub fn conversation_transition(
                             updated_conversation,
                             conversation.pending,
                             tool_rounds,
+                            conversation.is_group,
+                            conversation.bot_identity.clone(),
                         ),
                     }
                 }
@@ -228,6 +236,8 @@ pub fn conversation_transition(
                 recent_conversation,
                 conversation.pending,
                 tool_rounds,
+                conversation.is_group,
+                conversation.bot_identity.clone(),
             ),
             (
                 ConversationState::RunningTools {
@@ -271,6 +281,8 @@ pub fn conversation_transition(
                     // post_transition drains it again at Idle and the message is sent twice.
                     let mut pending = conversation.pending;
                     let current_input = LLMInput::ToolResults(results, take_pending(&mut pending));
+                    let is_group = conversation.is_group;
+                    let bot_identity = conversation.bot_identity.clone();
 
                     let history = recent_conversation.history();
                     let mut external = Vec::<ConversationExternalOperation>::new();
@@ -280,6 +292,8 @@ pub fn conversation_transition(
                         Some(recent_conversation),
                         tool_rounds,
                         MAX_TOOL_ROUNDS,
+                        is_group,
+                        bot_identity.clone(),
                     )));
 
                     Ok((
@@ -291,6 +305,8 @@ pub fn conversation_transition(
                             },
                             last_transition: Utc::now(),
                             pending,
+                            is_group,
+                            bot_identity,
                         },
                         external,
                     ))
@@ -375,10 +391,8 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
         // carries its own name prefix, so joining keeps per-speaker attribution even when a group
         // batch mixes senders. Identity fields take the last message's (best-effort for the merge).
         let queued = drained.iter().any(|m| m.queued);
-        let is_group = drained.last().map(|m| m.is_group).unwrap_or(false);
         let user_id = drained.last().map(|m| m.user_id.clone()).unwrap_or_default();
         let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
-        let bot_identity = drained.last().map(|m| m.bot_identity.clone()).unwrap_or_default();
         let text = drained
             .into_iter()
             .map(|m| m.text)
@@ -389,8 +403,6 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
             queued,
             user_id,
             name,
-            is_group,
-            bot_identity,
         }
     })
 }
@@ -415,6 +427,9 @@ fn post_transition(
         return Ok((conversation, external));
     };
 
+    let is_group = conversation.is_group;
+    let bot_identity = conversation.bot_identity.clone();
+
     let history = recent_conversation
         .as_ref()
         .map(|(rc, _)| rc.history())
@@ -428,6 +443,8 @@ fn post_transition(
         recent_conversation.map(|(rc, _)| rc),
         0,
         MAX_TOOL_ROUNDS,
+        is_group,
+        bot_identity.clone(),
     )));
 
     Ok((
@@ -439,6 +456,8 @@ fn post_transition(
             },
             last_transition: Utc::now(),
             pending: Vec::new(),
+            is_group,
+            bot_identity,
         },
         external,
     ))
@@ -466,11 +485,30 @@ pub fn schedule(conversation: &Conversation) -> Vec<Scheduled<ConversationAction
     schedules
 }
 
-pub static CONVERSATION_STATE_MACHINE: Lazy<framework::StateMachineHandle<ConversationId, ConversationAction>> =
-    Lazy::new(|| {
-        new_state_machine(
-            ENV.get().expect("ENV not initialized").clone(),
-            Transition(conversation_transition),
-            Schedule(schedule),
-        )
-    });
+/// The one and only path that produces a fresh [`Conversation`]: bake the adapter-supplied
+/// construction facts onto an otherwise-empty `Idle` conversation. The framework calls this exactly
+/// once per id (idempotent construct), so `is_group`/`bot_identity` are set once and then persisted
+/// for the conversation's whole life.
+fn construct_conversation(
+    _id: ConversationId,
+    constructor: ConversationConstructor,
+) -> Conversation {
+    Conversation {
+        pending: Vec::new(),
+        state: ConversationState::default(),
+        last_transition: Utc::now(),
+        is_group: constructor.is_group,
+        bot_identity: constructor.bot_identity,
+    }
+}
+
+pub static CONVERSATION_STATE_MACHINE: Lazy<
+    framework::StateMachineHandle<ConversationId, ConversationConstructor, ConversationAction>,
+> = Lazy::new(|| {
+    new_state_machine(
+        ENV.get().expect("ENV not initialized").clone(),
+        Construct(construct_conversation),
+        Transition(conversation_transition),
+        Schedule(schedule),
+    )
+});

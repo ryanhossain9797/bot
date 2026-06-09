@@ -30,13 +30,15 @@ where
 
 pub fn new_entity<
     Id: PersistedStateMachineItem + Ord + 'static,
-    State: PersistedStateMachineItem + 'static + Default,
+    State: PersistedStateMachineItem + 'static,
+    Constructor: PersistedStateMachineItem + 'static,
     Action: PersistedStateMachineItem + std::fmt::Debug + 'static,
     Env: StateMachineItem + 'static,
 >(
     env: Arc<Env>,
     id: Id,
-    handle: StateMachineHandle<Id, Action>,
+    initial_state: State,
+    handle: StateMachineHandle<Id, Constructor, Action>,
     transition: Transition<Id, State, Action, Env>,
     schedule: Schedule<State, Action>,
 ) -> Handle<Action> {
@@ -44,6 +46,7 @@ pub fn new_entity<
     tokio::spawn(run_entity(
         env,
         id,
+        initial_state,
         receiver,
         handle,
         transition,
