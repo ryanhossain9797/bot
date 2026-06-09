@@ -43,8 +43,10 @@ async fn init_env() -> anyhow::Result<Arc<Env>> {
 
     // let ollama_service = OllamaService::new().await?;
 
+    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
+
     Ok(Arc::new(Env {
-        discord_http: Arc::new(HttpBuilder::new(discord_token).build()),
+        discord_http,
         bot_singleton_handle: BotHandle::new(),
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),

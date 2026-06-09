@@ -66,14 +66,12 @@ pub enum ConversationState {
         recent_conversation: RecentConversation,
     },
     AwaitingLLMDecision {
-        is_timeout: bool,
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
         /// Tool calls made so far in this turn (resets to 0 on a new user turn).
         tool_rounds: usize,
     },
     SendingMessage {
-        is_timeout: bool,
         outcome: LLMResponse,
         recent_conversation: RecentConversation,
         /// Tool rounds so far this turn, carried through so that if `outcome` holds tool calls
@@ -82,7 +80,6 @@ pub enum ConversationState {
         tool_rounds: usize,
     },
     RunningTools {
-        is_timeout: bool,
         recent_conversation: RecentConversation,
         tool_rounds: usize,
         /// Calls still in flight this batch, keyed by id (id duplicated as the key).
@@ -99,20 +96,34 @@ impl Default for ConversationState {
     }
 }
 
-/// An inbound update from a conversation — today always a user's message (later may also carry
-/// non-message events: edits, reactions, joins). `queued` is true when it was buffered into
-/// `pending` while the bot was busy (a non-Idle state), so it crossed an in-flight response. The
-/// flag is the persisted truth; the `[Followup]` tag is applied only at prompt-render time (see
-/// `to_content`).
+/// One inbound message in a conversation. `text` already carries the sender's name prefix
+/// (`"Alice: hello"`) — the Discord adapter prepends it for every message, DM or group, so the
+/// model always knows who is speaking (in a group, every human still maps to OpenAI `role: "user"`,
+/// so the name in the text is the only speaker signal). `name`/`user_id` keep the same identity in
+/// structured form. `is_group` is the DM-vs-group context of the message, and `bot_identity` is the
+/// bot's own `Name (id:N)` handle *on the platform this message came from* — both ride the message
+/// because they're platform-specific facts the adapter knows (the domain layer must not assume one
+/// global bot identity; different conversations can be on different platforms). Latest message wins;
+/// neither is persisted on the `Conversation`. `queued` is true when it was buffered into `pending`
+/// while the bot was busy, so it crossed an in-flight response — surfaced as `[Followup]` at render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IncomingUpdate {
+pub struct ConversationMessage {
     pub text: String,
     pub queued: bool,
+    /// Sender's platform user id (stable identity); empty for synthetic/system messages.
+    pub user_id: String,
+    /// Sender's display name; empty for synthetic/system messages. Already baked into `text`.
+    pub name: String,
+    /// Whether this message came from a group chat (vs a 1:1 DM). Drives system-prompt selection.
+    pub is_group: bool,
+    /// The bot's own identity (`Name (id:N)`) on the platform this message arrived from, stamped by
+    /// that adapter. Fed to the system prompt so the model can recognize when it's addressed.
+    pub bot_identity: String,
 }
 
-impl IncomingUpdate {
-    /// Prompt content: the text, prefixed with `[Followup]` when it was queued mid-response so the
-    /// model knows it may already be addressed. Render-time only — the stored `text` stays clean.
+impl ConversationMessage {
+    /// Prompt content: the text (which already includes the `name:` prefix), tagged with
+    /// `[Followup]` when it was queued mid-response so the model knows it may already be addressed.
     pub fn to_content(&self) -> String {
         if self.queued {
             format!("[Followup] {}", self.text)
@@ -127,19 +138,30 @@ impl IncomingUpdate {
 /// channel/DM on some [`Platform`]) — one independent instance per conversation.
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Conversation {
-    pub pending: Vec<IncomingUpdate>,
+    pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
-    IncomingUpdate(IncomingUpdate),
+    ConversationMessage(ConversationMessage),
     /// One turn's batch of tool results (id order), each tagged with the call it answers.
-    /// The optional trailing `IncomingUpdate` is input that arrived mid-tool-run, folded into this
+    /// The optional trailing `ConversationMessage` is input that arrived mid-tool-run, folded into this
     /// same turn *after* the results — OpenAI requires tool responses to immediately follow the
     /// assistant's `tool_calls`, so the user message comes last.
-    ToolResults(Vec<ToolResult>, Option<IncomingUpdate>),
+    ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
+}
+
+/// The most recent real `ConversationMessage` in `history` (latest wins). Source of the per-message
+/// context facts (`is_group`, `bot_identity`) for turns whose current input isn't itself a message —
+/// e.g. a tool-result continuation, or the synthetic timeout goodbye.
+pub fn last_conversation_message(history: &[HistoryEntry]) -> Option<&ConversationMessage> {
+    history.iter().rev().find_map(|e| match e {
+        HistoryEntry::Input(LLMInput::ConversationMessage(m)) => Some(m),
+        HistoryEntry::Input(LLMInput::ToolResults(_, Some(m))) => Some(m),
+        _ => None,
+    })
 }
 
 impl LLMInput {
@@ -147,7 +169,7 @@ impl LLMInput {
     /// message per result (the template groups them into a single tool-response turn).
     pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
-            LLMInput::IncomingUpdate(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
+            LLMInput::ConversationMessage(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<Value> = results
                     .iter()
@@ -217,9 +239,8 @@ pub struct LLMResponse {
 }
 
 impl LLMResponse {
-    /// A degenerate decision: no user-facing message and no tool calls. Currently unused — we keep
-    /// empty decisions in history (they render as `content: ""`) — but kept as a ready predicate.
-    #[allow(dead_code)]
+    /// A degenerate decision: no user-facing message and no tool calls — i.e. the model chose to
+    /// stay silent. Used to render an explicit silent marker (see `to_openai_message`).
     pub fn is_empty(&self) -> bool {
         self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
     }
@@ -227,9 +248,19 @@ impl LLMResponse {
     pub fn to_openai_message(&self) -> Value {
         // Assistant turn: the message (if any) as content, plus a native tool_calls array when
         // present. name/arguments are derived back from each bound ToolType (the inverse of `bind`).
+        //
+        // A silent turn (empty message, no tools — the model chose not to reply, common in groups)
+        // is stored faithfully as `message: None`, but rendered here with an explicit marker so the
+        // model can see in later turns that it deliberately passed (matters for [Followup] context).
+        // The marker is render-time only — it is NEVER written back into stored history.
+        let content = if self.is_empty() {
+            "(stayed silent — chose not to reply)"
+        } else {
+            self.message.as_deref().unwrap_or("")
+        };
         let mut msg = json!({
             "role": "assistant",
-            "content": self.message.as_deref().unwrap_or(""),
+            "content": content,
         });
         if !self.tool_calls.is_empty() {
             msg["tool_calls"] = Value::Array(
@@ -260,7 +291,7 @@ impl HistoryEntry {
     pub fn format_simplified(&self) -> String {
         match self {
             HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::IncomingUpdate(m) => format!("User:\n{}", m.text),
+                LLMInput::ConversationMessage(m) => format!("User:\n{}", m.text),
                 LLMInput::ToolResults(results, user_msg) => {
                     let joined = results
                         .iter()
@@ -294,8 +325,15 @@ impl HistoryEntry {
 pub enum ConversationAction {
     ForceReset,
     NewMessage {
+        /// Message text with the sender's name already prefixed (`"Alice: hello"`).
         msg: String,
-        start_conversation: bool,
+        /// Sender's platform user id and display name (for the structured `ConversationMessage`).
+        user_id: String,
+        name: String,
+        /// Whether it arrived from a group chat (vs a 1:1 DM).
+        is_group: bool,
+        /// The bot's own `Name (id:N)` identity on the platform this message came from.
+        bot_identity: String,
     },
     Timeout,
     CommitResult(Result<(), String>),

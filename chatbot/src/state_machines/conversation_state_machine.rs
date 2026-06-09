@@ -3,10 +3,12 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::types::conversation::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::conversation::{
+    LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
+};
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationId, IncomingUpdate,
+        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationId, ConversationMessage,
         ConversationState,
     },
     Env, ENV,
@@ -27,23 +29,18 @@ type ConversationExternalOperation = ExternalOperation<ConversationAction>;
 fn handle_outcome(
     env: Arc<Env>,
     conversation_id: &ConversationId,
-    is_timeout: bool,
     response: LLMResponse,
     recent_conversation: RecentConversation,
-    pending: Vec<IncomingUpdate>,
+    pending: Vec<ConversationMessage>,
     tool_rounds: usize,
 ) -> ConversationTransitionResult {
     // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
     if response.tool_calls.is_empty() {
-        // No tools to run — settle into Idle.
+        // No tools to run — settle back into Idle, holding the conversation for the idle window.
         Ok((
             Conversation {
                 state: ConversationState::Idle {
-                    recent_conversation: if is_timeout {
-                        None
-                    } else {
-                        Some((recent_conversation, Utc::now()))
-                    },
+                    recent_conversation: Some((recent_conversation, Utc::now())),
                 },
                 last_transition: Utc::now(),
                 pending,
@@ -68,7 +65,6 @@ fn handle_outcome(
         Ok((
             Conversation {
                 state: ConversationState::RunningTools {
-                    is_timeout,
                     recent_conversation,
                     tool_rounds: tool_rounds + 1,
                     pending_tools,
@@ -102,32 +98,26 @@ pub fn conversation_transition(
                 user_state,
                 ConversationAction::NewMessage {
                     msg,
-                    start_conversation,
+                    user_id,
+                    name,
+                    is_group,
+                    bot_identity,
                 },
             ) => {
-                let accept_message = match (&user_state, start_conversation) {
-                    (
-                        ConversationState::Idle {
-                            recent_conversation: None,
-                        },
-                        false,
-                    ) => false,
-                    _ => true,
-                };
-
-                let pending = if accept_message {
-                    let mut pending = conversation.pending;
-                    // Queued iff it arrived while the bot was busy (any non-Idle state) — i.e. it
-                    // crossed an in-flight response. An Idle arrival drains immediately and isn't.
-                    let queued = !matches!(&user_state, ConversationState::Idle { .. });
-                    pending.push(IncomingUpdate {
-                        text: msg.clone(),
-                        queued,
-                    });
-                    pending
-                } else {
-                    conversation.pending
-                };
+                // Every message is accepted and buffered (the old `start_conversation` mention-gate
+                // is gone — in a group the model itself decides whether to reply; see the group
+                // system prompt). Queued iff it arrived while the bot was busy (any non-Idle state),
+                // so it crossed an in-flight response; an Idle arrival drains immediately and isn't.
+                let mut pending = conversation.pending;
+                let queued = !matches!(&user_state, ConversationState::Idle { .. });
+                pending.push(ConversationMessage {
+                    text: msg.clone(),
+                    queued,
+                    user_id: user_id.clone(),
+                    name: name.clone(),
+                    is_group: *is_group,
+                    bot_identity: bot_identity.clone(),
+                });
 
                 Ok((
                     Conversation {
@@ -140,7 +130,6 @@ pub fn conversation_transition(
             }
             (
                 ConversationState::AwaitingLLMDecision {
-                    is_timeout,
                     history,
                     current_input,
                     tool_rounds,
@@ -194,7 +183,6 @@ pub fn conversation_transition(
                             Ok((
                                 Conversation {
                                     state: ConversationState::SendingMessage {
-                                        is_timeout,
                                         outcome: response.clone(),
                                         recent_conversation: updated_conversation,
                                         tool_rounds,
@@ -208,7 +196,6 @@ pub fn conversation_transition(
                         None => handle_outcome(
                             env.clone(),
                             &conversation_id,
-                            is_timeout,
                             response.clone(),
                             updated_conversation,
                             conversation.pending,
@@ -229,7 +216,6 @@ pub fn conversation_transition(
             },
             (
                 ConversationState::SendingMessage {
-                    is_timeout,
                     outcome,
                     recent_conversation,
                     tool_rounds,
@@ -238,7 +224,6 @@ pub fn conversation_transition(
             ) => handle_outcome(
                 env.clone(),
                 &conversation_id,
-                is_timeout,
                 outcome,
                 recent_conversation,
                 conversation.pending,
@@ -247,7 +232,6 @@ pub fn conversation_transition(
             (
                 ConversationState::RunningTools {
                     recent_conversation,
-                    is_timeout,
                     tool_rounds,
                     mut pending_tools,
                     mut completed_tools,
@@ -301,7 +285,6 @@ pub fn conversation_transition(
                     Ok((
                         Conversation {
                             state: ConversationState::AwaitingLLMDecision {
-                                is_timeout,
                                 history,
                                 current_input,
                                 tool_rounds,
@@ -316,7 +299,6 @@ pub fn conversation_transition(
                     Ok((
                         Conversation {
                             state: ConversationState::RunningTools {
-                                is_timeout,
                                 recent_conversation,
                                 tool_rounds,
                                 pending_tools,
@@ -357,41 +339,22 @@ pub fn conversation_transition(
                 ))
             }
             (
-                ConversationState::CommitingToMemory {
-                    recent_conversation,
-                },
+                ConversationState::CommitingToMemory { .. },
                 ConversationAction::CommitResult(_),
             ) => {
                 println!("Commited to Memory");
 
-                let timeout_message = "User said goodbye, RESPOND WITH GOODBYE BUT MENTION RELEVANT THINGS ABOUT THE CONVERSATION".to_string();
-                let current_input = LLMInput::IncomingUpdate(IncomingUpdate {
-                    text: timeout_message,
-                    queued: false,
-                });
-
-                let mut external = Vec::<ConversationExternalOperation>::new();
-
-                external.push(Box::pin(get_llm_decision(
-                    env.clone(),
-                    current_input.clone(),
-                    Some(recent_conversation.clone()),
-                    0,
-                    MAX_TOOL_ROUNDS,
-                )));
-
+                // History has been committed to long-term memory; drop it and return to a fresh
+                // Idle. (No goodbye turn — we don't send a parting message.)
                 Ok((
                     Conversation {
-                        state: ConversationState::AwaitingLLMDecision {
-                            is_timeout: true,
-                            history: recent_conversation.history,
-                            current_input,
-                            tool_rounds: 0,
+                        state: ConversationState::Idle {
+                            recent_conversation: None,
                         },
                         last_transition: Utc::now(),
                         ..conversation
                     },
-                    external,
+                    Vec::new(),
                 ))
             }
             _ => Err(anyhow::anyhow!("Invalid state or action")),
@@ -404,18 +367,31 @@ pub fn conversation_transition(
 /// Drain buffered user messages into a single newline-joined string, clearing `pending`. Returns
 /// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
 /// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
-fn take_pending(pending: &mut Vec<IncomingUpdate>) -> Option<IncomingUpdate> {
+fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
     (!pending.is_empty()).then(|| {
         let drained = std::mem::take(pending);
         // Messages drained together are homogeneous (all queued during a busy turn, or a single
-        // Idle arrival); mark the merged message queued if any were.
+        // Idle arrival); mark the merged message queued if any were. Each member's `text` already
+        // carries its own name prefix, so joining keeps per-speaker attribution even when a group
+        // batch mixes senders. Identity fields take the last message's (best-effort for the merge).
         let queued = drained.iter().any(|m| m.queued);
+        let is_group = drained.last().map(|m| m.is_group).unwrap_or(false);
+        let user_id = drained.last().map(|m| m.user_id.clone()).unwrap_or_default();
+        let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
+        let bot_identity = drained.last().map(|m| m.bot_identity.clone()).unwrap_or_default();
         let text = drained
             .into_iter()
             .map(|m| m.text)
             .collect::<Vec<_>>()
             .join("\n");
-        IncomingUpdate { text, queued }
+        ConversationMessage {
+            text,
+            queued,
+            user_id,
+            name,
+            is_group,
+            bot_identity,
+        }
     })
 }
 
@@ -444,7 +420,7 @@ fn post_transition(
         .map(|(rc, _)| rc.history())
         .unwrap_or_else(Vec::new);
 
-    let current_input = LLMInput::IncomingUpdate(msg);
+    let current_input = LLMInput::ConversationMessage(msg);
 
     external.push(Box::pin(get_llm_decision(
         env.clone(),
@@ -457,7 +433,6 @@ fn post_transition(
     Ok((
         Conversation {
             state: ConversationState::AwaitingLLMDecision {
-                is_timeout: false,
                 history,
                 current_input,
                 tool_rounds: 0,

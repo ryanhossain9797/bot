@@ -1,6 +1,6 @@
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        last_conversation_message, HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
         ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -121,6 +121,19 @@ async fn get_response_from_llm(
     max_tool_rounds: usize,
     allow_tools: bool,
 ) -> anyhow::Result<LLMResponse> {
+    // Per-message context for the system prompt (latest message wins): the DM-vs-group flag and the
+    // bot's own identity on this conversation's platform. Use the current input's message when it
+    // has one; otherwise (a tool-result continuation) read the most recent message from history.
+    let latest = match current_input {
+        LLMInput::ConversationMessage(m) => Some(m),
+        LLMInput::ToolResults(_, Some(m)) => Some(m),
+        LLMInput::ToolResults(_, None) => maybe_recent_conversation
+            .as_ref()
+            .and_then(|rc| last_conversation_message(&rc.history)),
+    };
+    let is_group = latest.map(|m| m.is_group).unwrap_or(false);
+    let bot_identity = latest.map(|m| m.bot_identity.clone()).unwrap_or_default();
+
     let conversation = build_conversation(
         current_input,
         maybe_recent_conversation,
@@ -135,7 +148,7 @@ async fn get_response_from_llm(
     );
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools)
+        .get_primary_response(conversation, allow_tools, is_group, &bot_identity)
         .await?;
 
     let thoughts = parsed
@@ -145,11 +158,13 @@ async fn get_response_from_llm(
         .to_string();
 
     // Straight from JSON to Option — absent / null / blank content is None, never a "" round-trip.
+    // The model also emits the literal "<empty>" to deliberately stay silent (easier for it than
+    // producing nothing at all); map that to None too, so it flows into the silent path.
     let message = parsed
         .get("content")
         .and_then(|v| v.as_str())
         .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("<empty>"))
         .map(String::from);
 
     // message and tool calls are independent — a turn may carry either or both. Binding failures
