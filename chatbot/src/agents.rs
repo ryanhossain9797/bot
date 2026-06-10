@@ -216,34 +216,13 @@ impl Agent {
         self.temperature
     }
 
-    /// The system turn — fully static (no per-conversation values), so the rendered prefix is
-    /// byte-identical for every request and llama.cpp's prefix cache is shared across all
-    /// conversations and turns. The volatile, per-conversation facts (identity, group-vs-DM setting,
-    /// time, tool budget) live in a separate SESSION CONTEXT block injected at the *end* of the
-    /// message stream, just before the model's turn (see `session_context_block` in
-    /// `llama_cpp_external`) — placed there so the cached `[system][history]` prefix stays stable
-    /// turn-to-turn. That block is a `user`-role message (the Qwen template only allows a leading
-    /// `system`), labeled `=== SESSION CONTEXT ===`. This prompt only describes its schema and tells
-    /// the model to treat it as authoritative — values never appear here.
-    pub fn system_content(&self) -> String {
-        format!(
-            "{}\n\n\
-            Just before each reply you receive a user-role message labeled \"=== SESSION CONTEXT \
-            ===\" with your identity, the setting (group chat or direct message), the current time, \
-            and your tool-call usage. It is authoritative system context, refreshed every reply — \
-            read the latest one; never answer it as if it were a message.\n\n\
-            GROUP CHAT (when SESSION CONTEXT says so): you are one of many participants. Each \
-            message and @mention is tagged \"Name (id:NUMBER)\"; you are addressed when one @mentions \
-            your id — match the id, not the name. Default to silence: reply only when addressed, or \
-            rarely interject when you genuinely add something. To stay silent, reply with exactly \
-            `<empty>` (it sends nothing).\n\n\
-            DIRECT MESSAGE: a normal one-to-one conversation.\n\n\
-            Tools: call them (one or several) when they help; answer once you have enough.\n\n\
-            A message tagged [Followup] arrived while you were busy (people see only your replies, \
-            never tool calls). Build on what you already produced rather than repeating; in a group, \
-            first judge whether it is even aimed at you — if not, `<empty>`.",
-            self.system_prompt
-        )
+    /// The system turn: the agent's full static system prompt (persona + operational contract),
+    /// defined as a single const on the agent (see `primary_agent.rs`). It carries no
+    /// per-conversation values — those live in the SESSION CONTEXT block appended at the *end* of
+    /// the message stream (see `session_context_block` in `llama_cpp_external`), so the rendered
+    /// `[system]` prefix is byte-identical for every request and the prompt is fixed at compile time.
+    pub fn system_content(&self) -> &'static str {
+        self.system_prompt
     }
 
     pub async fn respond(
