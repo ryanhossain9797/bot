@@ -33,7 +33,6 @@ async fn recall(env: Arc<Env>, conversation_id: String, search_term: String) -> 
             .column_by_name("content")
             .ok_or_else(|| anyhow::Error::msg("column 'content' missing".to_string()))?;
 
-        // 2. Downcast
         let array = column
             .as_any()
             .downcast_ref::<StringArray>()

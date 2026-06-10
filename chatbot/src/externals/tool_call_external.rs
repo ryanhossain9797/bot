@@ -11,7 +11,6 @@ use rs_trafilatura::extract;
 use serde::Deserialize;
 use std::sync::Arc;
 
-/// Execute a list of math operations and return the results
 async fn execute_math(operations: Vec<MathOperation>) -> ToolResultData {
     let mut results = Vec::new();
 
@@ -126,10 +125,6 @@ async fn fetch_weather(location: &str) -> anyhow::Result<ToolResultData> {
     })
 }
 
-/// SearxNG `/search?format=json` response. Beyond the ranked `results`, SearxNG aggregates an
-/// instant `answers` summary and structured `infoboxes` (entity cards) — these are often a direct
-/// answer to the query, so we surface them ahead of the links. Other top-level fields
-/// (suggestions, corrections, …) are ignored.
 #[derive(Deserialize)]
 struct SearxngResponse {
     query: String,
@@ -148,7 +143,6 @@ struct SearxngAnswer {
 
 #[derive(Deserialize)]
 struct SearxngInfobox {
-    /// The infobox heading (entity name), e.g. "Rust (programming language)".
     #[serde(default)]
     infobox: Option<String>,
     #[serde(default)]
@@ -161,18 +155,13 @@ struct SearxngResult {
     title: Option<String>,
     #[serde(default)]
     url: Option<String>,
-    /// SearxNG's result snippet (mapped to our "Description" line).
     #[serde(default)]
     content: Option<String>,
-    /// Publication date, when the engine reports one (news/articles); absent for most pages.
     #[serde(default, rename = "publishedDate")]
     published_date: Option<String>,
 }
 
-/// Search results formatted for the model. The 32k-token context affords plenty of room; the old
-/// cap of 3 was tuned for a much smaller, less capable setup.
 const MAX_SEARCH_RESULTS: usize = 8;
-/// Of those, how many also go into the `simplified` (recall/memory) text.
 const SIMPLIFIED_SEARCH_RESULTS: usize = 3;
 
 async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
@@ -213,8 +202,6 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
 
     let original_query = search_response.query;
 
-    // High-signal lead: instant answers and the first infobox, when present — often a direct
-    // answer to the query, placed ahead of the ranked links. Shared by both simplified and actual.
     let mut lead = String::new();
     for answer in search_response
         .answers
@@ -242,7 +229,6 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
 
             let safe_len = description.floor_char_boundary(MAX_SEARCH_DESCRIPTION_LENGTH);
             let description = &description[..safe_len];
-            // Surface the publication date when the engine provides one (recency cue).
             let published = result
                 .published_date
                 .as_deref()
@@ -253,8 +239,6 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
         })
         .collect();
 
-    // `simplified` (recall/memory) keeps the lead plus the top few results; `actual` (fed to the
-    // model live) keeps the lead plus every result.
     let split = SIMPLIFIED_SEARCH_RESULTS.min(formatted_results.len());
     let (primary, secondary) = formatted_results.split_at(split);
 
@@ -268,11 +252,6 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
-// ---------------------------------------------------------------------------------------------
-// Dormant fallback: the legacy Brave Search path, kept intact but NOT wired into `web_search`
-// (the active tool uses `fetch_web_search` / SearxNG above). Left in place so we can fall back by
-// swapping the call in `run_tool`. Remove once SearxNG is proven out. See #113 / closed #112.
-// ---------------------------------------------------------------------------------------------
 #[allow(dead_code)]
 #[derive(Deserialize)]
 struct BraveSearchResponse {
@@ -380,7 +359,6 @@ struct ExtractedPage {
 }
 
 async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
-    // Fetch HTML content from URL
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
         .timeout(std::time::Duration::from_secs(30))
@@ -400,7 +378,6 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
 
     let final_url = response.url().to_string();
 
-    // Check content type
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -416,24 +393,17 @@ async fn fetch_page(url: &str) -> anyhow::Result<ExtractedPage> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to read response body: {}", e))?;
 
-    // // Convert HTML to Markdown using the service
-    // let markdown = markdown_service.convert(&html_body);
-
     let content = extract(&html_body)?.content_text;
 
     Ok(ExtractedPage { final_url, content })
 }
 
 async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
-    // Generous caps for the 32k-token context: `actual` is the full read fed to the model,
-    // `simplified` a longer preview for recall/memory (were 10000 / 300).
     pub const MAX_ACTUAL_WEB_CONTENT_LENGTH: usize = 50000;
     pub const MAX_SIMPLIFIED_WEB_CONTENT_LENGTH: usize = 2000;
 
     let extracted = fetch_page(url).await?;
 
-    // `floor_char_boundary` clamps to the string length and never splits a multi-byte char, so a
-    // raw byte-index slice here can't panic on a UTF-8 boundary (the old `[..N]` could).
     let actual_end = extracted.content.floor_char_boundary(MAX_ACTUAL_WEB_CONTENT_LENGTH);
     let actual_content = &extracted.content[..actual_end];
 
@@ -448,8 +418,6 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
-/// Run one tool to its result. Errors are returned as `Err(String)`; the state machine folds them
-/// into a `ToolResultData` when moving the call to `completed_tools`.
 async fn run_tool(
     env: Arc<Env>,
     tool_type: ToolType,
@@ -468,8 +436,6 @@ async fn run_tool(
     }
 }
 
-/// Execute a single tool call as its own external op, tagging the result action with the call's id
-/// so the state machine can move it from `pending_tools` to `completed_tools`.
 pub async fn execute_tool(
     env: Arc<Env>,
     tool_call: ToolCall,
@@ -495,8 +461,6 @@ mod tests {
         assert!(weather.actual.contains("Wind Speed"));
     }
 
-    // Integration test: hits the SearxNG instance at SEARXNG_URL (reachable as localhost:8080 from
-    // the host). Requires a running instance with JSON format enabled.
     #[tokio::test]
     async fn test_fetch_web_search() {
         let search_results = fetch_web_search("Rust programming").await.unwrap();
@@ -534,24 +498,19 @@ mod tests {
         let operations = vec![
             MathOperation::Add(5.5, 3.2),
             MathOperation::Div(7.0, 2.0),
-            MathOperation::Exp(2.0, 0.5), // Square root via exponentiation
+            MathOperation::Exp(2.0, 0.5),
         ];
 
         let result = execute_math(operations).await;
         assert!(result.actual.contains("5.5 + 3.2 = 8.7"));
         assert!(result.actual.contains("7 ÷ 2 = 3.5"));
-        assert!(result.actual.contains("2 ^ 0.5")); // Should calculate sqrt(2)
+        assert!(result.actual.contains("2 ^ 0.5"));
     }
 
     #[tokio::test]
     async fn test_fetch_url_content_real() {
-        // Test with example.com
         let content = fetch_url_content("https://example.com").await.unwrap();
-        // println!("{}", content); // Keep it clean
         assert!(content.actual.contains("Example Domain"));
-        // The text on example.com seems to vary or has changed.
-        // We match parts of the text found in the debug run:
-        // "This domain is for use in documentation examples without needing permission."
         assert!(content
             .actual
             .contains("This domain is for use in documentation examples"));

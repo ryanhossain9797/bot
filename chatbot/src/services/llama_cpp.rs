@@ -47,7 +47,6 @@ impl LlamaCppService {
 
         let backend_arc = Arc::new(backend);
 
-        // Load off the runtime thread; spawn_blocking so more models can load in parallel later.
         let primary_task: JoinHandle<anyhow::Result<Arc<LlamaModel>>> = {
             let backend = Arc::clone(&backend_arc);
             spawn_blocking(move || {

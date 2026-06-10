@@ -17,17 +17,8 @@ use tokio::task::spawn_blocking;
 
 use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, services::llama_cpp::LlamaCppService};
 
-/// Safety cap on a single generation's reasoning: if the model hasn't closed its `<think>` block
-/// within this many generated tokens, we force it shut (see [`THINKING_FORCE_CLOSE`]) so it commits
-/// to an answer instead of looping. Generous on purpose — a net for runaway loops, not a routine
-/// limiter (the overall cap is `LlamaCppService::get_max_generation_tokens`).
 const MAX_THINKING_TOKENS: usize = 2048;
 
-/// Injected verbatim (tokenized, then fed through the decode loop) to force-close a runaway
-/// `<think>` block: a short first-person "stop and answer" stitch in the model's own voice, then the
-/// closing tag. Reading as the model's own decision to wrap up yields a cleaner answer than a bare
-/// `</think>`. It sits before `</think>`, so it lands in `reasoning_content` and the user never
-/// sees it.
 const THINKING_FORCE_CLOSE: &str =
     "\n\nWait — I'm going in circles. I have enough to answer the user now, so I'll stop thinking and respond.\n</think>\n\n";
 
@@ -41,7 +32,6 @@ fn run_generation(
 ) -> anyhow::Result<String> {
     let mut ctx = model.new_context(backend, ctx_params)?;
 
-    // ChatML has no BOS — the prompt already starts at `<|im_start|>`.
     let tokens = model.str_to_token(prompt, AddBos::Never)?;
 
     let mut batch = LlamaCppService::new_batch();
@@ -61,7 +51,6 @@ fn run_generation(
     }
     let mut n_cur = tokens.len() as i32;
 
-    // Qwen3 sampler: temp / top_k 20 / top_p 0.95, no repeat penalty.
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::temp(temperature),
         LlamaSampler::top_k(20),
@@ -69,20 +58,12 @@ fn run_generation(
         LlamaSampler::dist(0),
     ]);
 
-    // Accumulate RAW token bytes, not per-token `token_to_piece` strings: a multi-byte char (e.g.
-    // an emoji) can straddle token boundaries as byte-fallback tokens, and the per-token+decoder
-    // path drops the incomplete pieces (see #96). We decode the complete byte buffer at the end.
     let mut out_bytes: Vec<u8> = Vec::new();
-    let mut printed = 0usize; // bytes of out_bytes already streamed to stdout under DEBUG
+    let mut printed = 0usize;
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
 
-    // Generation starts inside the <think> block (the template ends the prompt with
-    // `<|im_start|>assistant\n<think>`), so track whether the model closes it. If it hasn't by
-    // MAX_THINKING_TOKENS, force it shut to break reasoning loops.
     let mut thinking_closed = false;
 
-    // Feed a token to the context, append its raw bytes, and stream any newly-completed UTF-8 to
-    // stdout (DEBUG). Inline (macro, not closure) to avoid holding a borrow of ctx across the loop.
     macro_rules! emit_token {
         ($tok:expr) => {{
             let tok = $tok;
@@ -108,8 +89,6 @@ fn run_generation(
 
     for i in 0..max_generation_tokens {
         if !thinking_closed && i >= MAX_THINKING_TOKENS {
-            // Inject the "stop and answer" stitch + </think>, then resume sampling so the model
-            // produces the answer instead of looping.
             for forced in model.str_to_token(THINKING_FORCE_CLOSE, AddBos::Never)? {
                 emit_token!(forced);
             }
@@ -139,11 +118,6 @@ fn respond_blocking(
     conversation: serde_json::Value,
     allow_tools: bool,
 ) -> anyhow::Result<serde_json::Value> {
-    // Prepend the static system turn, then render with the model's template. The per-conversation
-    // SESSION CONTEXT block is already the first element of `conversation` (built upstream), so it
-    // lands right after this system turn. At the budget cap, advertise no tools so the model
-    // physically cannot emit another tool call (the synthesis nudge itself rides the message
-    // stream, not this stable system turn).
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": agent.system_content(),
@@ -169,9 +143,6 @@ fn respond_blocking(
         chat_template_kwargs: None,
         add_generation_prompt: true,
         use_jinja: true,
-        // The model may emit multiple <tool_call> blocks in one turn; with this set to false,
-        // parse_response_oaicompat hard-fails (`ffi error -3`) on such output (#89). We allow it and
-        // run every call (#98) — the state machine fans them out and collects the results.
         parallel_tool_calls: true,
         enable_thinking: true,
         add_bos: false,
@@ -198,7 +169,6 @@ fn respond_blocking(
     Ok(serde_json::from_str(&parsed)?)
 }
 
-/// A conversational agent: a persona (system prompt) plus its sampling temperature.
 #[derive(Clone, Copy)]
 pub struct Agent {
     system_prompt: &'static str,
@@ -216,12 +186,7 @@ impl Agent {
         self.temperature
     }
 
-    /// The system turn: the agent's full static system prompt (persona + operational contract),
-    /// defined as a single const on the agent (see `primary_agent.rs`). It carries no
-    /// per-conversation values — those live in the SESSION CONTEXT block appended at the *end* of
-    /// the message stream (see `session_context_block` in `llama_cpp_external`), so the rendered
-    /// `[system]` prefix is byte-identical for every request and the prompt is fixed at compile time.
-    pub fn system_content(&self) -> &'static str {
+            pub fn system_content(&self) -> &'static str {
         self.system_prompt
     }
 

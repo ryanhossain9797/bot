@@ -19,7 +19,6 @@ pub trait StateMachineItem: Send + Sync + Clone {}
 
 impl<T: Send + Sync + Clone> StateMachineItem for T {}
 
-/// Extension of StateMachineItem that supports persistence via JSON serialization
 pub trait PersistedStateMachineItem: StateMachineItem + serde::Serialize {}
 
 impl<T> PersistedStateMachineItem for T where T: StateMachineItem + serde::Serialize {}
@@ -34,10 +33,6 @@ pub struct Transition<Id, State, Action, Env>(
     ) -> Pin<Box<dyn Future<Output = TransitionResult<State, Action>> + Send + '_>>,
 );
 
-/// Builds an entity's initial `State` from its `Id` and a domain-supplied `Constructor` payload.
-/// This is the *only* thing that ever produces a starting state — there is no implicit `Default`
-/// fallback — so the domain decides up front what a fresh entity looks like (e.g. carrying
-/// construction-time facts that are then persisted on the state for the entity's whole life).
 #[derive(Clone)]
 pub struct Construct<Id, State, Constructor>(pub fn(Id, Constructor) -> State);
 
@@ -56,21 +51,11 @@ pub enum Activity<Action: PersistedStateMachineItem + 'static> {
     DeleteSelf,
 }
 
-/// What the router receives for a given `Id`. `Construct` is the only path that creates an entity
-/// (idempotent — a second `Construct` for an already-live id is a no-op); `Act` delivers an action
-/// to an entity that must already exist. An `Act` for an unknown id is warned about and dropped —
-/// there is no implicit/lazy creation, so the domain is responsible for constructing before acting.
 pub enum Input<Constructor, Action> {
     Construct(Constructor),
     Act(Action),
 }
 
-/// (Re)arm the single pending timer for an entity from its current `state`: abort whatever timer
-/// was running, ask `schedule` for the soonest due action, and spawn a task that fires a
-/// `ScheduledWakeup` back into the entity at that time (immediately if it's already past). A state
-/// whose schedule is empty leaves the entity with no timer. Called both on the constructed initial
-/// state and after every transition, so a freshly-constructed (or, later, rehydrated) entity arms
-/// its timers immediately rather than only after its first action.
 fn arm_schedule<State, Action>(
     schedule: &Schedule<State, Action>,
     state: &State,
@@ -99,7 +84,6 @@ fn arm_schedule<State, Action>(
                     }
                     let _ = self_sender.send(Activity::ScheduledWakeup).await;
                 }
-                // Negative duration means the scheduled time has already passed — fire now.
                 Err(_negative_time_error) => {
                     let _ = self_sender.send(Activity::ScheduledWakeup).await;
                 }
@@ -129,9 +113,6 @@ async fn run_entity<
     let mut state = initial_state;
     let mut maybe_scheduled: Option<JoinHandle<()>> = None;
 
-    // Arm any timers implied by the constructed initial state up front, so correctness doesn't
-    // depend on the initial state happening to have an empty schedule (it does today — Idle{None} —
-    // but a rehydrated entity, #106, can start mid-flight and must time out without a first action).
     arm_schedule(&schedule, &state, Utc::now(), &self_sender, &mut maybe_scheduled);
 
     while let Some(activity) = receiver.recv().await {
@@ -182,7 +163,6 @@ async fn run_entity<
                             println!("Not Ready"); //TODO handle unexpected wakeup
                         }
                         Err(_negative_time_error) => {
-                            // Negative duration means the scheduled time has already passed
                             let _ = self_sender
                                 .send(Activity::StateMachineAction(scheduled.action))
                                 .await;
@@ -213,10 +193,6 @@ async fn start_state_machine<
 
     while let Some((id, input)) = receiver.recv().await {
         match input {
-            // The single, idempotent creation path. The router owns the existence check, so the
-            // domain can construct unconditionally (e.g. on every inbound message) without tracking
-            // a seen-set; a Construct for a live id is dropped. mpsc FIFO makes this race-free, and
-            // an Act enqueued right after its Construct can never overtake it.
             Input::Construct(constructor) => {
                 if handle_by_id.contains_key(&id) {
                     continue;
@@ -232,9 +208,6 @@ async fn start_state_machine<
                 );
                 handle_by_id.insert(id, handle);
             }
-            // No implicit creation: an action for an id we've never constructed is a bug in the
-            // caller (it should have constructed first), so warn and drop rather than silently
-            // spinning up a default entity.
             Input::Act(action) => match handle_by_id.get(&id) {
                 Some(handle) => {
                     let handle = handle.clone();

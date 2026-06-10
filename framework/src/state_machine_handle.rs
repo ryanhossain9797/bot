@@ -23,20 +23,14 @@ where
     Constructor: PersistedStateMachineItem + 'static,
     Action: PersistedStateMachineItem + 'static,
 {
-    /// Ensure the entity for `id` exists, building its initial state from `constructor` *only if it
-    /// isn't already live* — hence "maybe". Idempotent: safe to call before every action (the router
-    /// drops it when the entity already exists). Always pair an `act` with a preceding
-    /// `maybe_construct` for the same id.
-    pub async fn maybe_construct(&self, id: Id, constructor: Constructor) {
+            pub async fn maybe_construct(&self, id: Id, constructor: Constructor) {
         self.sender
             .send((id, Input::Construct(constructor)))
             .await
             .expect("Send failed");
     }
 
-    /// Deliver an action to an already-constructed entity. If `id` was never constructed the router
-    /// warns and drops it — there is no implicit creation.
-    pub async fn act(&self, id: Id, action: Action) {
+        pub async fn act(&self, id: Id, action: Action) {
         self.sender
             .send((id, Input::Act(action)))
             .await

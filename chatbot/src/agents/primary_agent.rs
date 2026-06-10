@@ -1,10 +1,5 @@
 use super::Agent;
 
-// The agent's complete system turn: persona + the operational contract (how SESSION CONTEXT works,
-// group rules, the tool protocol, [Followup] semantics). It is fully static — no per-conversation
-// values (identity, group-vs-DM, time, tool budget live in the SESSION CONTEXT block appended at the
-// end of the stream; see `session_context_block`). Being a single const, the whole prompt is fixed
-// at compile time and the rendered system prefix is byte-identical for every request.
 const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
     Just before each reply you receive a user-role message labeled \"=== SESSION CONTEXT ===\" with \
     your identity, the setting (group chat or direct message), the current time, and your tool-call \
