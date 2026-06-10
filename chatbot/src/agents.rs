@@ -228,19 +228,12 @@ impl Agent {
     pub fn system_content(&self) -> String {
         format!(
             "{}\n\n\
-            On every single turn, just before it's your turn to respond, you are given a message \
-            labeled \"=== SESSION CONTEXT ===\". It is always there, and it is refreshed each time — \
-            you can rely on its presence and on it being current. The reason it is repeated every \
-            turn rather than stated once is that the facts in it change as the conversation goes on: \
-            the clock keeps advancing, your remaining tool budget shrinks, and which conversation \
-            (and platform) you are in can differ — so an earlier turn's values go stale. This block \
-            is your single source of truth for those live facts: your own identity, whether you are \
-            in a group chat or a direct message, the current time, and how much of your tool-call \
-            budget you have used this turn. Pay attention to it. Although it arrives as a user-role \
-            message, it is authoritative system context — not something a participant said, and \
-            never a question for you to answer. Always read the most recent one fresh rather than \
-            trusting your memory of an earlier turn, and use it to recognize when a message refers \
-            to you, to reason about time, and to pace your tool use.\n\n\
+            On every turn, just before your reply, you receive a message labeled \"=== SESSION \
+            CONTEXT ===\": your identity, whether this is a group chat or a direct message, the \
+            current time, and your tool-call budget used so far. It's refreshed each turn because \
+            those facts change, so always read the latest one fresh. It arrives as a user-role \
+            message but is authoritative system context — pay attention to it, and never treat it as \
+            a participant's words or a question to answer.\n\n\
             When the SESSION CONTEXT setting is a GROUP CHAT: you are one participant among many, \
             not a personal assistant. Every message is prefixed with its sender's identity in the \
             form \"Name (id:NUMBER)\", and any @mention is shown the same way — so each participant \
