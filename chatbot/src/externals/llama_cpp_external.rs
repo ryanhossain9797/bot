@@ -11,14 +11,14 @@ use serde_json::{json, Value};
 
 use std::sync::Arc;
 
-/// A plain-text budget note for the most recent tool result, escalating in three tiers so the model
-/// isn't scared into quitting early: at ~50% nudge it to vary its approach (NOT to stop — an early
-/// "wrap up" makes it bail prematurely), at ~80% tell it to start wrapping up, and at the cap a
-/// synthesis directive (where tools are turned off, so it can't call another and this nudges it to
-/// answer from history rather than stall). `None` below the halfway mark. Relative thresholds track
-/// the cap if retuned. Not `<system-reminder>`: Qwen has no special handling for that tag, so a
-/// plain bracketed marker is used instead. Lives here in the message stream — never the system turn
-/// — to keep the cached system prefix stable.
+/// A plain-text tool-budget note, escalating in three tiers so the model isn't scared into quitting
+/// early: at ~50% nudge it to vary its approach (NOT to stop — an early "wrap up" makes it bail
+/// prematurely), at ~80% tell it to start wrapping up, and at the cap a synthesis directive (where
+/// tools are turned off, so it can't call another and this nudges it to answer from history rather
+/// than stall). `None` below the halfway mark. Relative thresholds track the cap if retuned. Not
+/// `<system-reminder>`: Qwen has no special handling for that tag, so a plain bracketed marker is
+/// used instead. Emitted as a line in the SESSION CONTEXT block (`session_context_block`), never the
+/// system turn — so the cached system prefix stays stable and there's one budget mechanism, not two.
 fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     if max_tool_rounds == 0 {
         None
@@ -43,9 +43,15 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
 }
 
 /// The dynamic SESSION CONTEXT block: a `user`-role message carrying the volatile, per-conversation
-/// facts the static system prompt promises (identity, group-vs-DM setting, current time, tool budget).
-/// Built fresh each turn and placed at the very end of the stream (see `build_conversation`), so it's
-/// maximally recent and leaves the cached `[system][history]` prefix untouched. Never persisted.
+/// facts the static system prompt promises (identity, group-vs-DM setting, current time) plus the
+/// tool budget. Built fresh each turn and placed at the very end of the stream (see
+/// `build_conversation`), so it's maximally recent and leaves the cached `[system][history]` prefix
+/// untouched. Never persisted.
+///
+/// This is the single home for tool-budget messaging: `budget_note` (the escalating tier logic) is
+/// emitted as one of these lines rather than separately attached to the last tool result. The block
+/// is the very last message before the model's turn, so it's an even more recent place for that
+/// nudge than the tool result was — and there's only one mechanism instead of two.
 ///
 /// Role is `user`, not `system`, deliberately: the Qwen3 chat template **rejects** any `system`
 /// message that isn't the leading one (it errors the render — verified with the `probe` crate), and
@@ -72,21 +78,11 @@ fn session_context_block(
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
     ];
-    // Tool budget, but only once it's worth mentioning (>= halfway, mirroring `budget_note`'s first
-    // tier) — showing "0/10" every reply is noise that just draws attention to tools when none are
-    // in play. The escalating *nudge* still rides the last tool result (`budget_note`); this is the
-    // at-a-glance count. "the current message" (not "this turn"): the count covers all tool rounds
-    // spent answering the latest message, and resets when a new one arrives — "turn" was ambiguous.
-    if max_tool_rounds > 0 && tool_rounds * 2 >= max_tool_rounds {
-        if tool_rounds >= max_tool_rounds {
-            lines.push(format!(
-                "Tool calls used on the current message: {tool_rounds}/{max_tool_rounds} (budget exhausted — no more tool calls available; answer from what you have)"
-            ));
-        } else {
-            lines.push(format!(
-                "Tool calls used on the current message: {tool_rounds}/{max_tool_rounds}"
-            ));
-        }
+    // Tool budget — only once it's worth mentioning (>= halfway; `budget_note` returns None below
+    // that), so a fresh message with no tool use adds no "0/10" noise. The tier wording escalates
+    // (vary approach -> wrap up -> exhausted).
+    if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
+        lines.push(note);
     }
 
     json!({ "role": "user", "content": lines.join("\n") })
@@ -95,9 +91,9 @@ fn session_context_block(
 /// Build the conversation as an OpenAI-style messages JSON array (without the static system turn —
 /// the agent prepends that). Each tool result carries its own `tool_call_id` (from the call it
 /// answers), so no positional threading is needed. Prior reasoning is not replayed (Qwen3 guidance).
-/// When the new input is a tool result, the running budget reminder is appended to it at render time
-/// (never persisted, so old turns don't accumulate stale counts). The dynamic SESSION CONTEXT block
-/// is appended last, just before the model's turn (see `session_context_block`).
+/// The dynamic SESSION CONTEXT block is appended last, just before the model's turn (see
+/// `session_context_block`); it also carries the tool-budget note, so nothing is attached to the
+/// tool result itself and stale counts never accumulate in persisted history.
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
@@ -119,28 +115,12 @@ fn build_conversation(
         }
     }
 
-    let mut new_messages = new_input.to_openai_messages();
-    // Append the budget note to the last tool-result message of the batch. A user interjection
-    // folded into the turn trails the results, so target the last `tool` message specifically
-    // rather than the last message overall (which would land the note on the user's words).
-    if matches!(new_input, LLMInput::ToolResults(..)) {
-        if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
-            if let Some(last_tool) = new_messages
-                .iter_mut()
-                .rev()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
-            {
-                if let Some(content) = last_tool.get("content").and_then(|c| c.as_str()) {
-                    last_tool["content"] = Value::String(format!("{content}\n\n{note}"));
-                }
-            }
-        }
-    }
-    messages.extend(new_messages);
+    messages.extend(new_input.to_openai_messages());
 
     // Dynamic context goes LAST — right before the model's turn — for maximum recency and to keep
-    // the cached `[system][history]` prefix stable across turns (same placement philosophy as the
-    // budget note above). It is render-only: never written back into persisted history.
+    // the cached `[system][history]` prefix stable across turns. It carries the tool budget (via
+    // `budget_note`), so there's no separate budget reminder attached to the tool result. It is
+    // render-only: never written back into persisted history.
     messages.push(session_context_block(
         is_group,
         bot_identity,
