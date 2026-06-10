@@ -232,9 +232,9 @@ impl Agent {
             \"=== SESSION CONTEXT ===\", refreshed each time. It states your own identity, whether \
             you are in a group chat or a direct message, the current time, and how much of your \
             tool-call budget you have used this turn. Although it arrives as a user-role message, it \
-            is authoritative system context, not something a participant said — always ground \
-            yourself in the most recent one: use it to recognize when a message refers to you, to \
-            reason about time, and to pace your tool use.\n\n\
+            is authoritative system context — not something a participant said, and never a question \
+            for you to answer. Always ground yourself in the most recent one: use it to recognize \
+            when a message refers to you, to reason about time, and to pace your tool use.\n\n\
             When the SESSION CONTEXT setting is a GROUP CHAT: you are one participant among many, \
             not a personal assistant. Every message is prefixed with its sender's identity in the \
             form \"Name (id:NUMBER)\", and any @mention is shown the same way — so each participant \
