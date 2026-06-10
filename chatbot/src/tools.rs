@@ -36,8 +36,7 @@ impl ToolKind {
         }
     }
 
-    /// OpenAI tool entry, or `None` if this variant isn't advertised yet (still executable).
-    fn definition(&self) -> Option<Value> {
+        fn definition(&self) -> Option<Value> {
         match self {
             ToolKind::GetWeather => Some(json!({
                 "type": "function",
@@ -96,8 +95,7 @@ impl ToolType {
         ToolKind::from(self).wire_name()
     }
 
-    /// JSON arguments to replay this call into history — the inverse of `bind`.
-    pub fn wire_arguments(&self) -> String {
+        pub fn wire_arguments(&self) -> String {
         match self {
             ToolType::GetWeather { location } => json!({ "city": location }),
             ToolType::MathCalculation { operations } => json!({ "operations": operations }),
@@ -109,10 +107,7 @@ impl ToolType {
         .to_string()
     }
 
-    /// Bind a model-emitted call (name + raw JSON arguments) to a `ToolType`. Unknown name or
-    /// unbindable tool → runtime error; the per-variant match is exhaustive so new variants must
-    /// be handled here.
-    pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolType> {
+            pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolType> {
         let kind = ToolKind::iter()
             .find(|k| k.wire_name() == name)
             .ok_or_else(|| anyhow::anyhow!("model called an unknown tool: {name}"))?;

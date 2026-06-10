@@ -1,6 +1,3 @@
-// Local probe: actually prompt the model across a 3-turn conversation and assert on each turn.
-// `Probe::respond(history)` takes the conversation history (OpenAI messages JSON array) and returns
-// the parsed assistant message (OpenAI JSON). We feed each response (and a fake tool result) back in.
 use llama_cpp_2::{
     context::params::LlamaContextParams,
     llama_backend::LlamaBackend,
@@ -15,7 +12,7 @@ use std::{io::Write, num::NonZero};
 const MODEL: &str = "/home/zireael9797/Repos/bot/chatbot/models/Qwen3.6-27B-Q4_K_M.gguf";
 const N_CTX: u32 = 8192;
 const MAX_TOKENS: usize = 1024;
-const REASONING_FORMAT: &str = "auto"; // "auto" | "deepseek" | "deepseek-legacy" | "none"
+const REASONING_FORMAT: &str = "auto"; 
 
 const TOOLS: &str = r#"[{"type":"function","function":{
   "name":"get_weather",
@@ -43,9 +40,7 @@ impl Probe {
         Ok(Self { backend, model, template })
     }
 
-    /// Render `history` (OpenAI messages JSON array), generate, and parse the reply.
-    /// Input: conversation history. Output: the assistant message as OpenAI-style JSON.
-    fn respond(&self, history: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+        fn respond(&self, history: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let messages_json = history.to_string();
         let params = OpenAIChatTemplateParams {
             messages_json: &messages_json,
@@ -64,8 +59,6 @@ impl Probe {
             parse_tool_calls: true,
         };
         let rendered = self.model.apply_chat_template_oaicompat(&self.template, &params)?;
-        // Print the rendered prompt and the generation back-to-back as one continuous transcript,
-        // with a marker line where the model takes over.
         print!("{}\n<Prompt / Output>\n\n", rendered.prompt);
         std::io::stdout().flush()?;
         let raw = self.generate(&rendered.prompt)?;
@@ -73,8 +66,7 @@ impl Probe {
         Ok(serde_json::from_str(&parsed)?)
     }
 
-    /// Stream a generation from a rendered prompt; returns the full raw output text.
-    fn generate(&self, prompt: &str) -> anyhow::Result<String> {
+        fn generate(&self, prompt: &str) -> anyhow::Result<String> {
         let mut ctx = self.model.new_context(
             &self.backend,
             LlamaContextParams::default().with_n_ctx(Some(NonZero::new(N_CTX).unwrap())),
@@ -94,8 +86,6 @@ impl Probe {
             LlamaSampler::dist(0),
         ]);
 
-        // Stateful UTF-8 decoder, held across the whole generation so multi-byte chars that span
-        // two tokens decode correctly (the reason token_to_str is deprecated).
         let mut decoder = encoding_rs::UTF_8.new_decoder();
 
         let mut out = String::new();
@@ -124,10 +114,6 @@ fn push(history: &mut serde_json::Value, msg: serde_json::Value) {
     history.as_array_mut().expect("history is an array").push(msg);
 }
 
-/// Trim a parsed assistant reply down to what should live in history: keep `role` / `content` /
-/// `tool_calls`, drop `reasoning_content`, and scrub any `<think>…</think>` that leaked into
-/// `content`. Per Qwen3 guidance, prior turns' thinking must NOT be fed back — only the final
-/// output (+ any tool calls, which the tool result must follow).
 fn for_history(mut assistant: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = assistant.as_object_mut() {
         obj.remove("reasoning_content");
@@ -139,8 +125,6 @@ fn for_history(mut assistant: serde_json::Value) -> serde_json::Value {
     assistant
 }
 
-/// Remove a `<think>…</think>` span from text. Also handles a stray closing `</think>` with no
-/// opening tag (the prompt opens `<think>`, so it may not appear in the generated content).
 fn strip_think(s: &str) -> String {
     match (s.find("<think>"), s.find("</think>")) {
         (Some(a), Some(b)) if b >= a => {
@@ -159,13 +143,10 @@ fn content_lower(msg: &serde_json::Value) -> String {
 fn main() -> anyhow::Result<()> {
     let probe = Probe::load()?;
 
-    // Start the conversation. Only the first user message is given; every assistant turn is
-    // actually generated, fed back into history, and asserted on.
     let mut history = serde_json::json!([
         {"role": "user", "content": "What's the capital of France"}
     ]);
 
-    // ---------------- TURN 1: capital of France ----------------
     println!("\n################ TURN 1 ################\n");
     let r1 = probe.respond(&history)?;
     println!("\n--- parsed ---\n{r1}");
@@ -173,7 +154,6 @@ fn main() -> anyhow::Result<()> {
     println!("\n✓ turn 1 response contains \"paris\"");
     push(&mut history, for_history(r1));
 
-    // ---------------- TURN 2: temperature there -> expect a get_weather tool call ----------------
     println!("\n################ TURN 2 ################\n");
     push(&mut history, serde_json::json!(
         {"role": "user", "content": "What's the temparature there? say it like \"20 degree celsius\""}
@@ -189,12 +169,10 @@ fn main() -> anyhow::Result<()> {
     let tool_id = calls[0].get("id").and_then(|v| v.as_str()).unwrap_or("call_0").to_string();
     push(&mut history, for_history(r2));
 
-    // ---- pass in the tool result ----
     push(&mut history, serde_json::json!(
         {"role": "tool", "tool_call_id": tool_id, "content": "{\"temperature_celsius\": 25}"}
     ));
 
-    // ---------------- TURN 3: final phrased answer -> expect "degree celsius" ----------------
     println!("\n################ TURN 3 ################\n");
     let r3 = probe.respond(&history)?;
     println!("\n--- parsed ---\n{r3}");

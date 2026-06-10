@@ -13,7 +13,6 @@ use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use services::llama_cpp::LlamaCppService;
-// use services::ollama::OllamaService;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -25,14 +24,10 @@ struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
     lance_service: Arc<LanceService>,
-    llama_cpp: Arc<LlamaCppService>, // Disconnected - base image doesn't have GGUF
-    // ollama: Arc<OllamaService>,
-    /// Feature flag (from `configuration::features`): announce each tool batch to the user with a
-    /// fixed "Using tool: <name>" notice. Read via `env.announce_tool_use`, never the const inline.
+    llama_cpp: Arc<LlamaCppService>,
     announce_tool_use: bool,
 }
 
-// ENV needs to be initialized asynchronously, so we use OnceCell
 static ENV: OnceCell<Arc<Env>> = OnceCell::new();
 
 async fn init_env() -> anyhow::Result<Arc<Env>> {
@@ -41,7 +36,6 @@ async fn init_env() -> anyhow::Result<Arc<Env>> {
     let llama_cpp_service = LlamaCppService::new().await?;
     let lance_service = LanceService::new().await;
 
-    // let ollama_service = OllamaService::new().await?;
 
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
@@ -50,14 +44,12 @@ async fn init_env() -> anyhow::Result<Arc<Env>> {
         bot_singleton_handle: BotHandle::new(),
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),
-        // ollama: Arc::new(ollama_service),
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
     }))
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
-    // Initialize ENV asynchronously
     let env = init_env().await?;
     if ENV.set(env.clone()).is_err() {
         panic!("ENV should only be initialized once");

@@ -5,13 +5,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use strum::{EnumDiscriminants, EnumIter};
 
-/// Per-result snippet cap in web search output. Generous — SearxNG snippets rarely exceed a few
-/// hundred chars, so this is effectively "don't truncate" with a safety net (was 20, far too tight
-/// for the current model/context).
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
 
-/// Max tool calls the model may make in a single user turn before the loop is cut short. Single
-/// source of truth: the state machine enforces it; the system prompt discloses it.
 pub const MAX_TOOL_ROUNDS: usize = 10;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -68,24 +63,18 @@ pub enum ConversationState {
     AwaitingLLMDecision {
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
-        /// Tool calls made so far in this turn (resets to 0 on a new user turn).
-        tool_rounds: usize,
+                tool_rounds: usize,
     },
     SendingMessage {
         outcome: LLMResponse,
         recent_conversation: RecentConversation,
-        /// Tool rounds so far this turn, carried through so that if `outcome` holds tool calls
-        /// (a preamble + tools), the subsequent `handle_outcome` dispatch keeps the real count
-        /// instead of resetting the `MAX_TOOL_ROUNDS` budget.
         tool_rounds: usize,
     },
     RunningTools {
         recent_conversation: RecentConversation,
         tool_rounds: usize,
-        /// Calls still in flight this batch, keyed by id (id duplicated as the key).
-        pending_tools: HashMap<String, ToolCall>,
-        /// Calls that have returned, paired with their (error-folded) result.
-        completed_tools: Vec<(ToolCall, ToolResultData)>,
+                pending_tools: HashMap<String, ToolCall>,
+                completed_tools: Vec<(ToolCall, ToolResultData)>,
     },
 }
 impl Default for ConversationState {
@@ -96,42 +85,22 @@ impl Default for ConversationState {
     }
 }
 
-/// One inbound message in a conversation. `text` already carries the sender's name prefix
-/// (`"Alice: hello"`) — the Discord adapter prepends it for every message, DM or group, so the
-/// model always knows who is speaking (in a group, every human still maps to OpenAI `role: "user"`,
-/// so the name in the text is the only speaker signal). `name`/`user_id` keep the same identity in
-/// structured form. `queued` is true when it was buffered into `pending` while the bot was busy, so
-/// it crossed an in-flight response — surfaced as `[Followup]` at render.
-///
-/// The DM-vs-group context and the bot's own identity used to ride each message; they now live on
-/// the [`Conversation`], set once at construction (see [`ConversationConstructor`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
     pub text: String,
     pub queued: bool,
-    /// Sender's platform user id (stable identity); empty for synthetic/system messages.
-    pub user_id: String,
-    /// Sender's display name; empty for synthetic/system messages. Already baked into `text`.
-    pub name: String,
+        pub user_id: String,
+        pub name: String,
 }
 
-/// The construction-time facts for a conversation, supplied by the adapter on first contact and
-/// baked into the [`Conversation`] state once (never per-message). Both are platform-specific facts
-/// the adapter knows — the domain layer must not assume one global bot identity, since different
-/// conversations can be on different platforms.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConstructor {
-    /// Whether this conversation is a group chat (vs a 1:1 DM). Drives system-prompt selection.
-    pub is_group: bool,
-    /// The bot's own identity (`Name (id:N)`) on the platform this conversation lives on. Fed to the
-    /// system prompt so the model can recognize when it's addressed.
-    pub bot_identity: String,
+        pub is_group: bool,
+        pub bot_identity: String,
 }
 
 impl ConversationMessage {
-    /// Prompt content: the text (which already includes the `name:` prefix), tagged with
-    /// `[Followup]` when it was queued mid-response so the model knows it may already be addressed.
-    pub fn to_content(&self) -> String {
+        pub fn to_content(&self) -> String {
         if self.queued {
             format!("[Followup] {}", self.text)
         } else {
@@ -140,38 +109,22 @@ impl ConversationMessage {
     }
 }
 
-/// The per-conversation entity the state machine drives: its current `state`, any `pending`
-/// updates buffered while busy, and when it last transitioned. Keyed by [`ConversationId`] (a
-/// channel/DM on some [`Platform`]) — one independent instance per conversation.
-///
-/// `is_group` and `bot_identity` are set once at construction (from [`ConversationConstructor`]) and
-/// persisted for the conversation's whole life — they're properties of the conversation/channel, not
-/// of individual messages. There is no `Default`: a `Conversation` is only ever produced by
-/// `construct_conversation`, never conjured implicitly.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
-    /// Whether this conversation is a group chat (vs a 1:1 DM). Drives system-prompt selection.
-    pub is_group: bool,
-    /// The bot's own `Name (id:N)` identity on this conversation's platform.
-    pub bot_identity: String,
+        pub is_group: bool,
+        pub bot_identity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
-    /// One turn's batch of tool results (id order), each tagged with the call it answers.
-    /// The optional trailing `ConversationMessage` is input that arrived mid-tool-run, folded into this
-    /// same turn *after* the results — OpenAI requires tool responses to immediately follow the
-    /// assistant's `tool_calls`, so the user message comes last.
-    ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
+                ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
 impl LLMInput {
-    /// Render to OpenAI messages: a user message is one message; a tool-result batch is one `tool`
-    /// message per result (the template groups them into a single tool-response turn).
     pub fn to_openai_messages(&self) -> Vec<Value> {
         match self {
             LLMInput::ConversationMessage(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
@@ -180,7 +133,6 @@ impl LLMInput {
                     .iter()
                     .map(|r| json!({ "role": "tool", "tool_call_id": r.id, "content": r.data.actual }))
                     .collect();
-                // A user interjection that arrived mid-tool-run trails the results (protocol order).
                 if let Some(msg) = user_msg {
                     messages.push(json!({ "role": "user", "content": msg.to_content() }));
                 }
@@ -199,9 +151,6 @@ pub enum MathOperation {
     Exp(f32, f32),
 }
 
-/// A tool and its arguments. `ToolKind` (via `EnumDiscriminants`) is the fieldless companion used
-/// to build the advertised registry and look tools up by wire name — see `crate::tools`. Pair it
-/// with the parser-assigned id via [`ToolCall`] for a concrete invocation.
 #[derive(Debug, Clone, Serialize, Deserialize, EnumDiscriminants)]
 #[strum_discriminants(name(ToolKind))]
 #[strum_discriminants(derive(EnumIter))]
@@ -215,49 +164,31 @@ pub enum ToolType {
     RecallLongTerm { search_term: String },
 }
 
-/// A concrete tool invocation: a [`ToolType`] tagged with the id the parser assigned, so a result
-/// can be paired back to the call that produced it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub tool_type: ToolType,
 }
 
-/// A concrete tool result: the data tagged with the id of the call it answers (symmetric to
-/// [`ToolCall`]). One per call in a batch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub id: String,
     pub data: ToolResultData,
 }
 
-/// One decision from the model. `message` and `tool_calls` are independent: a turn may carry a
-/// user-facing message, a batch of tool calls, or both (e.g. "Let me look that up…" + the calls).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
-    /// Reasoning (`<think>`); kept for logging but never replayed into the next prompt.
-    pub thoughts: String,
-    /// Conversation-facing text, if the model produced any.
-    pub message: Option<String>,
-    /// Tool calls to dispatch this turn; empty if none.
-    pub tool_calls: Vec<ToolCall>,
+        pub thoughts: String,
+        pub message: Option<String>,
+        pub tool_calls: Vec<ToolCall>,
 }
 
 impl LLMResponse {
-    /// A degenerate decision: no user-facing message and no tool calls — i.e. the model chose to
-    /// stay silent. Used to render an explicit silent marker (see `to_openai_message`).
-    pub fn is_empty(&self) -> bool {
+        pub fn is_empty(&self) -> bool {
         self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
     }
 
     pub fn to_openai_message(&self) -> Value {
-        // Assistant turn: the message (if any) as content, plus a native tool_calls array when
-        // present. name/arguments are derived back from each bound ToolType (the inverse of `bind`).
-        //
-        // A silent turn (empty message, no tools — the model chose not to reply, common in groups)
-        // is stored faithfully as `message: None`, but rendered here with an explicit marker so the
-        // model can see in later turns that it deliberately passed (matters for [Followup] context).
-        // The marker is render-time only — it is NEVER written back into stored history.
         let content = if self.is_empty() {
             "(stayed silent — chose not to reply)"
         } else {
@@ -304,7 +235,6 @@ impl HistoryEntry {
                         .collect::<Vec<_>>()
                         .join("\n");
                     let assistant = format!("Assistant:\n{joined}");
-                    // Surface the folded-in interjection so recall/memory text stays faithful.
                     match user_msg {
                         Some(msg) => format!("{assistant}\nUser:\n{}", msg.text),
                         None => assistant,
@@ -312,7 +242,6 @@ impl HistoryEntry {
                 }
             },
             HistoryEntry::Output(LLMResponse { message, tool_calls, .. }) => {
-                // Surface message and any calls so recall/memory stays faithful.
                 let mut parts = Vec::new();
                 if let Some(msg) = message {
                     parts.push(msg.clone());
@@ -330,9 +259,7 @@ impl HistoryEntry {
 pub enum ConversationAction {
     ForceReset,
     NewMessage {
-        /// Message text with the sender's name already prefixed (`"Alice: hello"`).
-        msg: String,
-        /// Sender's platform user id and display name (for the structured `ConversationMessage`).
+                msg: String,
         user_id: String,
         name: String,
     },
@@ -340,8 +267,7 @@ pub enum ConversationAction {
     CommitResult(Result<(), String>),
     LLMDecisionResult(Result<LLMResponse, String>),
     MessageSent(Result<(), String>),
-    /// One tool's result, tagged with the id of the call it answers (one action per dispatched call).
-    ToolResult {
+        ToolResult {
         id: String,
         result: Result<ToolResultData, String>,
     },

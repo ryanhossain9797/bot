@@ -11,14 +11,6 @@ use serde_json::{json, Value};
 
 use std::sync::Arc;
 
-/// A plain-text budget note for the most recent tool result, escalating in three tiers so the model
-/// isn't scared into quitting early: at ~50% nudge it to vary its approach (NOT to stop — an early
-/// "wrap up" makes it bail prematurely), at ~80% tell it to start wrapping up, and at the cap a
-/// synthesis directive (where tools are turned off, so it can't call another and this nudges it to
-/// answer from history rather than stall). `None` below the halfway mark. Relative thresholds track
-/// the cap if retuned. Not `<system-reminder>`: Qwen has no special handling for that tag, so a
-/// plain bracketed marker is used instead. Lives here in the message stream — never the system turn
-/// — to keep the cached system prefix stable.
 fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     if max_tool_rounds == 0 {
         None
@@ -42,17 +34,6 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     }
 }
 
-/// The dynamic SESSION CONTEXT block: a `user`-role message carrying the volatile, per-conversation
-/// facts the static system prompt promises (identity, group-vs-DM setting, current time, tool budget).
-/// Built fresh each turn and placed at the very end of the stream (see `build_conversation`), so it's
-/// maximally recent and leaves the cached `[system][history]` prefix untouched. Never persisted.
-///
-/// Role is `user`, not `system`, deliberately: the Qwen3 chat template **rejects** any `system`
-/// message that isn't the leading one (it errors the render — verified with the `probe` crate), and
-/// a trailing `system` turn isn't representable. A trailing `user` turn renders cleanly right before
-/// the assistant turn and the model honors it (its reasoning cites "the session context"). The
-/// `=== SESSION CONTEXT ===` header plus the static system prompt's description carry the authority;
-/// the header also keeps it distinct from real participant turns (which are prefixed `Name (id:N):`).
 fn session_context_block(
     is_group: bool,
     bot_identity: &str,
@@ -67,32 +48,18 @@ fn session_context_block(
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
 
     let mut lines = vec![
-        "=== SESSION CONTEXT (authoritative; current as of this turn) ===".to_string(),
+        "=== SESSION CONTEXT (authoritative; current as of now) ===".to_string(),
         format!("Your identity: {bot_identity}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
     ];
-    // Tool budget as a plain factual status. The escalating *nudge* still rides the last tool
-    // result (`budget_note`) for recency at the decision point; this is the at-a-glance count.
-    if max_tool_rounds > 0 {
-        if tool_rounds >= max_tool_rounds {
-            lines.push(format!(
-                "Tool calls used this turn: {tool_rounds}/{max_tool_rounds} (budget exhausted — no more tool calls available this turn; answer from what you have)"
-            ));
-        } else {
-            lines.push(format!("Tool calls used this turn: {tool_rounds}/{max_tool_rounds}"));
-        }
+    if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
+        lines.push(note);
     }
 
     json!({ "role": "user", "content": lines.join("\n") })
 }
 
-/// Build the conversation as an OpenAI-style messages JSON array (without the static system turn —
-/// the agent prepends that). Each tool result carries its own `tool_call_id` (from the call it
-/// answers), so no positional threading is needed. Prior reasoning is not replayed (Qwen3 guidance).
-/// When the new input is a tool result, the running budget reminder is appended to it at render time
-/// (never persisted, so old turns don't accumulate stale counts). The dynamic SESSION CONTEXT block
-/// is appended last, just before the model's turn (see `session_context_block`).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
@@ -114,28 +81,8 @@ fn build_conversation(
         }
     }
 
-    let mut new_messages = new_input.to_openai_messages();
-    // Append the budget note to the last tool-result message of the batch. A user interjection
-    // folded into the turn trails the results, so target the last `tool` message specifically
-    // rather than the last message overall (which would land the note on the user's words).
-    if matches!(new_input, LLMInput::ToolResults(..)) {
-        if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
-            if let Some(last_tool) = new_messages
-                .iter_mut()
-                .rev()
-                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("tool"))
-            {
-                if let Some(content) = last_tool.get("content").and_then(|c| c.as_str()) {
-                    last_tool["content"] = Value::String(format!("{content}\n\n{note}"));
-                }
-            }
-        }
-    }
-    messages.extend(new_messages);
+    messages.extend(new_input.to_openai_messages());
 
-    // Dynamic context goes LAST — right before the model's turn — for maximum recency and to keep
-    // the cached `[system][history]` prefix stable across turns (same placement philosophy as the
-    // budget note above). It is render-only: never written back into persisted history.
     messages.push(session_context_block(
         is_group,
         bot_identity,
@@ -146,8 +93,6 @@ fn build_conversation(
     Value::Array(messages)
 }
 
-/// Every tool call from a parsed assistant message, as `(id, name, arguments_json_string)` each.
-/// The model may batch several calls in one turn; we run them all.
 fn all_tool_calls(parsed: &Value) -> Vec<(String, String, String)> {
     let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) else {
         return Vec::new();
@@ -182,9 +127,6 @@ async fn get_response_from_llm(
     is_group: bool,
     bot_identity: &str,
 ) -> anyhow::Result<LLMResponse> {
-    // DM-vs-group flag and the bot's own identity on this conversation's platform are conversation
-    // facts (set once at construction, persisted on the state). They feed the dynamic SESSION
-    // CONTEXT block that `build_conversation` appends at the tail of the stream.
     let conversation = build_conversation(
         current_input,
         maybe_recent_conversation,
@@ -210,9 +152,6 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    // Straight from JSON to Option — absent / null / blank content is None, never a "" round-trip.
-    // The model also emits the literal "<empty>" to deliberately stay silent (easier for it than
-    // producing nothing at all); map that to None too, so it flows into the silent path.
     let message = parsed
         .get("content")
         .and_then(|v| v.as_str())
@@ -220,9 +159,6 @@ async fn get_response_from_llm(
         .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("<empty>"))
         .map(String::from);
 
-    // message and tool calls are independent — a turn may carry either or both. Binding failures
-    // surface as a failed decision. Sort calls by id so the assistant calls and (later) their
-    // results share one canonical order in history, keeping the positional render aligned.
     let calls = all_tool_calls(&parsed);
     let mut tool_calls = Vec::with_capacity(calls.len());
     for (id, name, arguments) in calls {
@@ -247,9 +183,6 @@ pub async fn get_llm_decision(
     is_group: bool,
     bot_identity: String,
 ) -> ConversationAction {
-    // Budget spent → final call with tools off, so the model can't emit another tool call; the
-    // matching synthesis directive on the last tool result (see `budget_note`) nudges it to answer
-    // from what it already gathered.
     let allow_tools = tool_rounds < max_tool_rounds;
     println!(
         "[tool budget] {tool_rounds}/{max_tool_rounds} tool calls this turn (tools {})",

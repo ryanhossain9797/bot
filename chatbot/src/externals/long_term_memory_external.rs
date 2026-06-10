@@ -16,7 +16,6 @@ use lancedb::{
 use std::sync::Arc;
 
 pub async fn ensure_embedding_index(table: &Table, column: &str) -> Result<(), String> {
-    // Check if index already exists
     let existing_indexes = table.list_indices().await.map_err(|e| e.to_string())?;
 
     let index_exists = existing_indexes
@@ -26,7 +25,6 @@ pub async fn ensure_embedding_index(table: &Table, column: &str) -> Result<(), S
     if !index_exists {
         println!("Creating vector index on column '{}'", column);
 
-        // Build HNSW index (fast and accurate for small-to-medium datasets)
         table
             .create_index(&[column], Index::IvfFlat(IvfFlatIndexBuilder::default()))
             .execute()
@@ -60,7 +58,6 @@ async fn commit(
                 message: Some(response),
                 ..
             }) => Some(format!("MESSAGE USER: {response}")),
-            // ... other mappings
             _ => None,
         })
         .collect();
@@ -82,7 +79,7 @@ async fn commit(
         .embed(filtered.clone(), None)
         .map_err(|e| e.to_string())?;
 
-    let vector_dim = embeddings[0].len(); // Usually 384 for BGE-Small
+    let vector_dim = embeddings[0].len();
     let flat_embeddings: Vec<f32> = embeddings.into_iter().flatten().collect();
 
     let values = Float32Array::from_iter_values(flat_embeddings);
@@ -91,19 +88,18 @@ async fn commit(
         Arc::new(Field::new("item", DataType::Float32, false)),
         vector_dim as i32,
         Arc::new(values),
-        None, // No null bitmap
+        None,
     )
     .map_err(|e| e.to_string())?;
 
     let conversation_ids: Vec<String> = vec![conversation_id.clone(); filtered.len()];
 
-    // 4. Build RecordBatch (Ensure your schema matches these 3 columns)
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
         vec![
             Arc::new(StringArray::from(conversation_ids)),
             Arc::new(StringArray::from(filtered)),
-            Arc::new(vector_array), // The new vector column
+            Arc::new(vector_array),
         ],
     )
     .map_err(|e| e.to_string())?;

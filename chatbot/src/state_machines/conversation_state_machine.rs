@@ -37,9 +37,7 @@ fn handle_outcome(
     is_group: bool,
     bot_identity: String,
 ) -> ConversationTransitionResult {
-    // Any `message` was already sent on the way into SendingMessage; here we act on the tool calls.
     if response.tool_calls.is_empty() {
-        // No tools to run — settle back into Idle, holding the conversation for the idle window.
         Ok((
             Conversation {
                 state: ConversationState::Idle {
@@ -53,8 +51,6 @@ fn handle_outcome(
             Vec::new(),
         ))
     } else {
-        // Dispatch every call as its own external op and seed pending_tools, so each returning
-        // result can be moved to completed_tools by id (one round per batch).
         let mut external = Vec::<ConversationExternalOperation>::new();
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
@@ -98,8 +94,6 @@ pub fn conversation_transition(
                     pending: Vec::new(),
                     state: ConversationState::default(),
                     last_transition: Utc::now(),
-                    // is_group/bot_identity persist across a reset — they're conversation identity,
-                    // set once at construction, not turn state.
                     ..conversation
                 },
                 Vec::new(),
@@ -112,10 +106,6 @@ pub fn conversation_transition(
                     name,
                 },
             ) => {
-                // Every message is accepted and buffered (the old `start_conversation` mention-gate
-                // is gone — in a group the model itself decides whether to reply; see the group
-                // system prompt). Queued iff it arrived while the bot was busy (any non-Idle state),
-                // so it crossed an in-flight response; an Idle arrival drains immediately and isn't.
                 let mut pending = conversation.pending;
                 let queued = !matches!(&user_state, ConversationState::Idle { .. });
                 pending.push(ConversationMessage {
@@ -143,8 +133,6 @@ pub fn conversation_transition(
                 ConversationAction::LLMDecisionResult(res),
             ) => match res {
                 Ok(response) => {
-                    // Add the input and output to history. An empty decision (no message, no tool
-                    // calls) is still recorded; it renders as `content: ""` via to_openai_message.
                     let mut updated_history = history;
                     updated_history.push(HistoryEntry::Input(current_input));
                     updated_history.push(HistoryEntry::Output(response.clone()));
@@ -154,16 +142,8 @@ pub fn conversation_transition(
                         history: updated_history,
                     };
 
-                    // What to send this turn: the model's message if it produced one; otherwise,
-                    // when the turn dispatches tools and the feature is on, a fixed "Using tool:
-                    // <name>" notice so the user isn't left in silence. None → nothing to send
-                    // (silent tool turn, or a do-nothing turn). Either way, if the held `outcome`
-                    // carries tool calls they're dispatched after MessageSent via handle_outcome.
                     let message_to_send = response.message.clone().or_else(|| {
                         (!response.tool_calls.is_empty() && env.announce_tool_use).then(|| {
-                            // Discord subtext (`-# `) + italic so it reads as a small, greyed
-                            // status line, not a real bot message. One tool → singular; several →
-                            // a single combined line.
                             let names: Vec<&str> = response
                                 .tool_calls
                                 .iter()
@@ -178,7 +158,6 @@ pub fn conversation_transition(
 
                     match message_to_send {
                         Some(message) => {
-                            // Transition to SendingMessage state and trigger message sending
                             let mut external = Vec::<ConversationExternalOperation>::new();
                             external.push(Box::pin(send_message(
                                 env.clone(),
@@ -248,7 +227,6 @@ pub fn conversation_transition(
                 },
                 ConversationAction::ToolResult { id, result },
             ) => {
-                // Move this tool from pending to completed, folding any error into the result data.
                 if let Some(tool_call) = pending_tools.remove(id) {
                     let data = match result {
                         Ok(data) => data.clone(),
@@ -266,8 +244,6 @@ pub fn conversation_transition(
                 }
 
                 if pending_tools.is_empty() {
-                    // Whole batch done: sort by id so calls and results align positionally, then
-                    // hand the results back to the model as one tool-result turn.
                     completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
                     let results = completed_tools
                         .into_iter()
@@ -276,9 +252,6 @@ pub fn conversation_transition(
                             data,
                         })
                         .collect();
-                    // Fold any messages the user sent mid-tool-run into this same turn (after the
-                    // results, per the OpenAI protocol). Clearing pending here is required — else
-                    // post_transition drains it again at Idle and the message is sent twice.
                     let mut pending = conversation.pending;
                     let current_input = LLMInput::ToolResults(results, take_pending(&mut pending));
                     let is_group = conversation.is_group;
@@ -311,7 +284,6 @@ pub fn conversation_transition(
                         external,
                     ))
                 } else {
-                    // Still waiting on other tools in the batch — stay put, dispatch nothing new.
                     Ok((
                         Conversation {
                             state: ConversationState::RunningTools {
@@ -360,8 +332,6 @@ pub fn conversation_transition(
             ) => {
                 println!("Commited to Memory");
 
-                // History has been committed to long-term memory; drop it and return to a fresh
-                // Idle. (No goodbye turn — we don't send a parting message.)
                 Ok((
                     Conversation {
                         state: ConversationState::Idle {
@@ -380,16 +350,9 @@ pub fn conversation_transition(
     })
 }
 
-/// Drain buffered user messages into a single newline-joined string, clearing `pending`. Returns
-/// `None` if there was nothing buffered. Single source of truth for both pending drain points (the
-/// Idle drain below and the mid-tool-loop fold in the RunningTools branch), so they stay identical.
 fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
     (!pending.is_empty()).then(|| {
         let drained = std::mem::take(pending);
-        // Messages drained together are homogeneous (all queued during a busy turn, or a single
-        // Idle arrival); mark the merged message queued if any were. Each member's `text` already
-        // carries its own name prefix, so joining keeps per-speaker attribution even when a group
-        // batch mixes senders. Identity fields take the last message's (best-effort for the merge).
         let queued = drained.iter().any(|m| m.queued);
         let user_id = drained.last().map(|m| m.user_id.clone()).unwrap_or_default();
         let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
@@ -414,8 +377,6 @@ fn post_transition(
 ) -> ConversationTransitionResult {
     let (mut conversation, mut external) = result?;
 
-    // Never rest in Idle with buffered input: drain it into a fresh user turn. (Mirrors the
-    // mid-tool-loop fold in the RunningTools branch, which folds into a tool-result turn instead.)
     let recent_conversation = match &conversation.state {
         ConversationState::Idle {
             recent_conversation,
@@ -485,10 +446,6 @@ pub fn schedule(conversation: &Conversation) -> Vec<Scheduled<ConversationAction
     schedules
 }
 
-/// The one and only path that produces a fresh [`Conversation`]: bake the adapter-supplied
-/// construction facts onto an otherwise-empty `Idle` conversation. The framework calls this exactly
-/// once per id (idempotent construct), so `is_group`/`bot_identity` are set once and then persisted
-/// for the conversation's whole life.
 fn construct_conversation(
     _id: ConversationId,
     constructor: ConversationConstructor,
