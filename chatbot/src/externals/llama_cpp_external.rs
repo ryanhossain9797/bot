@@ -42,10 +42,17 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     }
 }
 
-/// The dynamic SESSION CONTEXT block: a `system`-role message carrying the volatile, per-conversation
+/// The dynamic SESSION CONTEXT block: a `user`-role message carrying the volatile, per-conversation
 /// facts the static system prompt promises (identity, group-vs-DM setting, current time, tool budget).
 /// Built fresh each turn and placed at the very end of the stream (see `build_conversation`), so it's
 /// maximally recent and leaves the cached `[system][history]` prefix untouched. Never persisted.
+///
+/// Role is `user`, not `system`, deliberately: the Qwen3 chat template **rejects** any `system`
+/// message that isn't the leading one (it errors the render — verified with the `probe` crate), and
+/// a trailing `system` turn isn't representable. A trailing `user` turn renders cleanly right before
+/// the assistant turn and the model honors it (its reasoning cites "the session context"). The
+/// `=== SESSION CONTEXT ===` header plus the static system prompt's description carry the authority;
+/// the header also keeps it distinct from real participant turns (which are prefixed `Name (id:N):`).
 fn session_context_block(
     is_group: bool,
     bot_identity: &str,
@@ -77,7 +84,7 @@ fn session_context_block(
         }
     }
 
-    json!({ "role": "system", "content": lines.join("\n") })
+    json!({ "role": "user", "content": lines.join("\n") })
 }
 
 /// Build the conversation as an OpenAI-style messages JSON array (without the static system turn —

@@ -222,17 +222,19 @@ impl Agent {
     /// time, tool budget) live in a separate SESSION CONTEXT block injected at the *end* of the
     /// message stream, just before the model's turn (see `session_context_block` in
     /// `llama_cpp_external`) — placed there so the cached `[system][history]` prefix stays stable
-    /// turn-to-turn. This prompt only describes that block's schema and tells the model to treat it
-    /// as authoritative — values never appear here.
+    /// turn-to-turn. That block is a `user`-role message (the Qwen template only allows a leading
+    /// `system`), labeled `=== SESSION CONTEXT ===`. This prompt only describes its schema and tells
+    /// the model to treat it as authoritative — values never appear here.
     pub fn system_content(&self) -> String {
         format!(
             "{}\n\n\
-            On every turn, just before it's your turn to respond, you are given a SESSION CONTEXT \
-            block (a system message), refreshed each time. It states your own identity, whether you \
-            are in a group chat or a direct message, the current time, and how much of your \
-            tool-call budget you have used this turn. It is authoritative and current — always \
-            ground yourself in the most recent one: use it to recognize when a message refers to \
-            you, to reason about time, and to pace your tool use.\n\n\
+            On every turn, just before it's your turn to respond, you are given a message labeled \
+            \"=== SESSION CONTEXT ===\", refreshed each time. It states your own identity, whether \
+            you are in a group chat or a direct message, the current time, and how much of your \
+            tool-call budget you have used this turn. Although it arrives as a user-role message, it \
+            is authoritative system context, not something a participant said — always ground \
+            yourself in the most recent one: use it to recognize when a message refers to you, to \
+            reason about time, and to pace your tool use.\n\n\
             When the SESSION CONTEXT setting is a GROUP CHAT: you are one participant among many, \
             not a personal assistant. Every message is prefixed with its sender's identity in the \
             form \"Name (id:NUMBER)\", and any @mention is shown the same way — so each participant \
