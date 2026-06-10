@@ -1,76 +1,69 @@
-// Converged shape: generic logic (StateMachine trait) + generic routing, but the kameo actor TYPE
-// is concrete per state machine (hand-written with kameo's own macros — remote macros can't be
-// generic). No custom macro of ours.
-use kameo::actor::{RemoteActorRef, Spawn};
+// Concrete kameo-remote entities driven by a generic lifecycle. Each entity embeds a shared
+// concrete `Core` (framework bookkeeping) — no generic wrapper needed.
+mod counter;
+mod lifecycle;
+
+use counter::{Counter, CounterAction, CounterId, CounterInit};
 use kameo::message::{Context, Message};
-use kameo::remote::{self, RemoteMessage};
+use kameo::remote;
 use kameo::{Actor, RemoteActor};
+use lifecycle::{Core, Entity, EntityId};
 use serde::{Deserialize, Serialize};
 
-// Generic, reused across state machines.
-trait StateMachine: 'static {
-    type State: Default + Send + 'static;
-    type Msg: Send + 'static;
-    fn transition(id: &str, state: &mut Self::State, msg: Self::Msg);
-}
+pub struct ConvoId(pub String);
 
-// Generic routing — works for ANY concrete entity/message pair.
-async fn construct<E>(id: &str, entity: E) -> anyhow::Result<()>
-where
-    E: Actor<Args = E> + kameo::remote::RemoteActor,
-{
-    E::spawn(entity).register(id).await?;
-    Ok(())
-}
-
-async fn act<E, M>(id: &str, msg: M) -> anyhow::Result<()>
-where
-    E: Actor + kameo::remote::RemoteActor + Message<M> + RemoteMessage<M>,
-    M: Serialize + Send + 'static,
-{
-    if let Some(entity) = RemoteActorRef::<E>::lookup(id).await? {
-        entity.tell(&msg).send()?;
-    } else {
-        println!("[router] no actor for {id}; dropping");
+impl EntityId for ConvoId {
+    fn id_string(&self) -> String {
+        self.0.clone()
     }
-    Ok(())
 }
 
-// ---- one state machine: generic logic ----
-struct Convo;
-#[derive(Default)]
-struct ConvoState {
-    count: i64,
+#[derive(Actor, RemoteActor)]
+pub struct Convo {
+    pub id: ConvoId,
+    pub count: i64,
+    pub core: Core,
 }
+
 #[derive(Serialize, Deserialize)]
-enum ConvoMsg {
+pub enum Action {
     Say(String),
 }
-impl StateMachine for Convo {
-    type State = ConvoState;
-    type Msg = ConvoMsg;
-    fn transition(id: &str, state: &mut ConvoState, msg: ConvoMsg) {
-        match msg {
-            ConvoMsg::Say(s) => {
-                state.count += 1;
-                println!("[{id}] '{s}' -> count={}", state.count);
+
+pub struct ConvoConstruction;
+
+impl Entity for Convo {
+    type Id = ConvoId;
+    type Action = Action;
+    type Construction = ConvoConstruction;
+    fn construct(id: ConvoId, _construction: ConvoConstruction) -> Self {
+        Convo {
+            id,
+            count: 0,
+            core: Core::default(),
+        }
+    }
+    fn get_core(&self) -> &Core {
+        &self.core
+    }
+    fn with_core(&mut self) -> &mut Core {
+        &mut self.core
+    }
+    fn transition(&mut self, action: Action) {
+        match action {
+            Action::Say(s) => {
+                self.count += 1;
+                println!("[{}] '{s}' -> count={}", self.id.id_string(), self.count);
             }
         }
     }
 }
 
-// ---- the concrete entity for `Convo` (the only hand-written boilerplate; kameo macros) ----
-#[derive(Actor, RemoteActor)]
-struct ConvoEntity {
-    id: String,
-    state: ConvoState,
-}
-
-#[kameo::remote_message("convo-msg")]
-impl Message<ConvoMsg> for ConvoEntity {
+#[kameo::remote_message("convo-action")]
+impl Message<Action> for Convo {
     type Reply = ();
-    async fn handle(&mut self, msg: ConvoMsg, _ctx: &mut Context<Self, ()>) {
-        Convo::transition(&self.id, &mut self.state, msg);
+    async fn handle(&mut self, action: Action, _ctx: &mut Context<Self, ()>) {
+        lifecycle::run(self, action);
     }
 }
 
@@ -78,17 +71,15 @@ impl Message<ConvoMsg> for ConvoEntity {
 async fn main() -> anyhow::Result<()> {
     remote::bootstrap().map_err(|e| anyhow::anyhow!("bootstrap: {e}"))?;
 
-    let id = "convo:1";
-    construct(
-        id,
-        ConvoEntity {
-            id: id.to_string(),
-            state: ConvoState::default(),
-        },
-    )
-    .await?;
-    act::<ConvoEntity, _>(id, ConvoMsg::Say("hello".to_string())).await?;
-    act::<ConvoEntity, _>(id, ConvoMsg::Say("again".to_string())).await?;
+    lifecycle::construct::<Convo>(ConvoId("convo:1".to_string()), ConvoConstruction).await?;
+    lifecycle::act::<Convo>("convo:1", Action::Say("hello".to_string())).await?;
+    lifecycle::act::<Convo>("convo:1", Action::Say("again".to_string())).await?;
+
+    lifecycle::construct::<Counter>(CounterId("counter:1".to_string()), CounterInit { start: 10 })
+        .await?;
+    lifecycle::act::<Counter>("counter:1", CounterAction::Add(5)).await?;
+    lifecycle::act::<Counter>("counter:1", CounterAction::Reset).await?;
+
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     Ok(())
 }
