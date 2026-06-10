@@ -6,7 +6,8 @@ use crate::{
     services::llama_cpp::LlamaCppService,
     Env,
 };
-use serde_json::Value;
+use chrono::Utc;
+use serde_json::{json, Value};
 
 use std::sync::Arc;
 
@@ -41,16 +42,57 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     }
 }
 
-/// Build the conversation as an OpenAI-style messages JSON array (without the system turn — the
-/// agent prepends that). Each tool result carries its own `tool_call_id` (from the call it answers),
-/// so no positional threading is needed. Prior reasoning is not replayed (Qwen3 guidance). When the
-/// new input is a tool result, the running budget reminder is appended to it at render time (never
-/// persisted, so old turns don't accumulate stale counts).
+/// The dynamic SESSION CONTEXT block: a `system`-role message carrying the volatile, per-conversation
+/// facts the static system prompt promises (identity, group-vs-DM setting, current time, tool budget).
+/// Built fresh each turn and placed at the very end of the stream (see `build_conversation`), so it's
+/// maximally recent and leaves the cached `[system][history]` prefix untouched. Never persisted.
+fn session_context_block(
+    is_group: bool,
+    bot_identity: &str,
+    tool_rounds: usize,
+    max_tool_rounds: usize,
+) -> Value {
+    let setting = if is_group {
+        "GROUP CHAT (multiple participants)"
+    } else {
+        "DIRECT MESSAGE (one-to-one with the user)"
+    };
+    let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+
+    let mut lines = vec![
+        "=== SESSION CONTEXT (authoritative; current as of this turn) ===".to_string(),
+        format!("Your identity: {bot_identity}"),
+        format!("Setting: {setting}"),
+        format!("Current time: {now}"),
+    ];
+    // Tool budget as a plain factual status. The escalating *nudge* still rides the last tool
+    // result (`budget_note`) for recency at the decision point; this is the at-a-glance count.
+    if max_tool_rounds > 0 {
+        if tool_rounds >= max_tool_rounds {
+            lines.push(format!(
+                "Tool calls used this turn: {tool_rounds}/{max_tool_rounds} (budget exhausted — no more tool calls available this turn; answer from what you have)"
+            ));
+        } else {
+            lines.push(format!("Tool calls used this turn: {tool_rounds}/{max_tool_rounds}"));
+        }
+    }
+
+    json!({ "role": "system", "content": lines.join("\n") })
+}
+
+/// Build the conversation as an OpenAI-style messages JSON array (without the static system turn —
+/// the agent prepends that). Each tool result carries its own `tool_call_id` (from the call it
+/// answers), so no positional threading is needed. Prior reasoning is not replayed (Qwen3 guidance).
+/// When the new input is a tool result, the running budget reminder is appended to it at render time
+/// (never persisted, so old turns don't accumulate stale counts). The dynamic SESSION CONTEXT block
+/// is appended last, just before the model's turn (see `session_context_block`).
 fn build_conversation(
     new_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
     max_tool_rounds: usize,
+    is_group: bool,
+    bot_identity: &str,
 ) -> Value {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
@@ -83,6 +125,16 @@ fn build_conversation(
         }
     }
     messages.extend(new_messages);
+
+    // Dynamic context goes LAST — right before the model's turn — for maximum recency and to keep
+    // the cached `[system][history]` prefix stable across turns (same placement philosophy as the
+    // budget note above). It is render-only: never written back into persisted history.
+    messages.push(session_context_block(
+        is_group,
+        bot_identity,
+        tool_rounds,
+        max_tool_rounds,
+    ));
 
     Value::Array(messages)
 }
@@ -124,13 +176,15 @@ async fn get_response_from_llm(
     bot_identity: &str,
 ) -> anyhow::Result<LLMResponse> {
     // DM-vs-group flag and the bot's own identity on this conversation's platform are conversation
-    // facts (set once at construction, persisted on the state) — they're passed straight in now,
-    // no longer reconstructed per message from history.
+    // facts (set once at construction, persisted on the state). They feed the dynamic SESSION
+    // CONTEXT block that `build_conversation` appends at the tail of the stream.
     let conversation = build_conversation(
         current_input,
         maybe_recent_conversation,
         tool_rounds,
         max_tool_rounds,
+        is_group,
+        bot_identity,
     );
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
@@ -140,7 +194,7 @@ async fn get_response_from_llm(
     );
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools, is_group, bot_identity)
+        .get_primary_response(conversation, allow_tools)
         .await?;
 
     let thoughts = parsed
