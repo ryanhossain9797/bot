@@ -67,20 +67,25 @@ fn session_context_block(
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
 
     let mut lines = vec![
-        "=== SESSION CONTEXT (authoritative; current as of this turn) ===".to_string(),
+        "=== SESSION CONTEXT (authoritative; current as of now) ===".to_string(),
         format!("Your identity: {bot_identity}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
     ];
-    // Tool budget as a plain factual status. The escalating *nudge* still rides the last tool
-    // result (`budget_note`) for recency at the decision point; this is the at-a-glance count.
-    if max_tool_rounds > 0 {
+    // Tool budget, but only once it's worth mentioning (>= halfway, mirroring `budget_note`'s first
+    // tier) — showing "0/10" every reply is noise that just draws attention to tools when none are
+    // in play. The escalating *nudge* still rides the last tool result (`budget_note`); this is the
+    // at-a-glance count. "the current message" (not "this turn"): the count covers all tool rounds
+    // spent answering the latest message, and resets when a new one arrives — "turn" was ambiguous.
+    if max_tool_rounds > 0 && tool_rounds * 2 >= max_tool_rounds {
         if tool_rounds >= max_tool_rounds {
             lines.push(format!(
-                "Tool calls used this turn: {tool_rounds}/{max_tool_rounds} (budget exhausted — no more tool calls available this turn; answer from what you have)"
+                "Tool calls used on the current message: {tool_rounds}/{max_tool_rounds} (budget exhausted — no more tool calls available; answer from what you have)"
             ));
         } else {
-            lines.push(format!("Tool calls used this turn: {tool_rounds}/{max_tool_rounds}"));
+            lines.push(format!(
+                "Tool calls used on the current message: {tool_rounds}/{max_tool_rounds}"
+            ));
         }
     }
 
