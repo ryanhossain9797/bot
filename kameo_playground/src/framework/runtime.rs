@@ -26,25 +26,20 @@ pub fn env<S: StateMachine>() -> Arc<dyn Env> {
         .expect("env not registered — call <StateMachine>::bootstrap() at startup")
 }
 
-#[derive(Default)]
-struct Core {
-    acts: u64,
+pub struct StateWrapper<S> {
+    state: S,
     // Bumped on every arm. Stamped onto the Wakeup the timer fires; a wakeup whose generation no
     // longer matches is from a superseded arm and is ignored.
     generation: u64,
     timer: Option<tokio::task::JoinHandle<()>>,
 }
 
-pub struct StateWrapper<S> {
-    state: S,
-    core: Core,
-}
-
 impl<S: StateMachine> StateWrapper<S> {
     pub fn new(state: S) -> Self {
         StateWrapper {
             state,
-            core: Core::default(),
+            generation: 0,
+            timer: None,
         }
     }
     pub fn id_string(&self) -> String {
@@ -52,7 +47,6 @@ impl<S: StateMachine> StateWrapper<S> {
     }
     pub fn dispatch(&mut self, action: S::Action) {
         let env = env::<S>();
-        self.core.acts += 1;
         let effects = self.state.transition(env.as_ref(), action);
 
         // Post-transition tasks: spawned detached, so they run AFTER this returns. Their results
@@ -77,7 +71,7 @@ impl<S: StateMachine> StateWrapper<S> {
     // Framework teardown before the actor stops: kill the timer and remove the DHT name so later
     // lookups miss cleanly instead of resolving to a dead actor.
     pub async fn teardown(&mut self) {
-        if let Some(handle) = self.core.timer.take() {
+        if let Some(handle) = self.timer.take() {
             handle.abort();
         }
         let _ = kameo::remote::unregister(self.state.id().id_string()).await;
@@ -87,7 +81,12 @@ impl<S: StateMachine> StateWrapper<S> {
     // schedule against CURRENT state and fire the fresh action only if its deadline is overdue. If
     // the deadline moved out (state changed), just re-arm; if nothing is scheduled, stop.
     pub fn on_wakeup(&mut self, generation: u64) {
-        if generation != self.core.generation {
+        if generation != self.generation {
+            println!(
+                "[{}] rejected stale wakeup gen={generation} (current={})",
+                self.id_string(),
+                self.generation
+            );
             return;
         }
         match self.state.schedule() {
@@ -99,20 +98,20 @@ impl<S: StateMachine> StateWrapper<S> {
 
     // (Re)arm the single timer from the current state: abort any running one, bump the generation,
     // then if the state schedules a self-action, spawn a task that sleeps until the deadline and
-    // fires a content-free Wakeup(generation) back. The JoinHandle lives in Core (live-only, never
-    // serialized); the action itself is NOT captured — it is re-derived when the wakeup lands.
+    // fires a content-free Wakeup(generation) back. The JoinHandle is live-only (never serialized);
+    // the action itself is NOT captured — it is re-derived when the wakeup lands.
     fn arm(&mut self) {
-        if let Some(handle) = self.core.timer.take() {
+        if let Some(handle) = self.timer.take() {
             handle.abort();
         }
-        self.core.generation += 1;
-        let generation = self.core.generation;
+        self.generation += 1;
+        let generation = self.generation;
         if let Some(scheduled) = self.state.schedule() {
             let id = self.state.id().id_string();
             let delay = (scheduled.at - chrono::Utc::now())
                 .to_std()
                 .unwrap_or(std::time::Duration::ZERO);
-            self.core.timer = Some(tokio::spawn(async move {
+            self.timer = Some(tokio::spawn(async move {
                 tokio::time::sleep(delay).await;
                 let _ = wake::<S>(&id, generation).await;
             }));
