@@ -1,32 +1,42 @@
 use super::envelope::Envelope;
-use super::traits::{Entity, EntityId, Env, StateMachine};
-use kameo::actor::{RemoteActorRef, Spawn};
-use std::any::TypeId;
+use super::traits::{EntityId, StateMachine};
+use kameo::actor::{ActorRef, Spawn};
+use kameo::error::{Infallible, RegistryError};
+use kameo::message::{Context, Message};
+use kameo::registry::ACTOR_REGISTRY;
+use kameo::Actor;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
-// One env per state-machine type, keyed by TypeId, held as a trait object (no Any, no downcast).
-static ENVS: OnceLock<RwLock<HashMap<TypeId, Arc<dyn Env>>>> = OnceLock::new();
+// One env per state-machine type, keyed by TypeId. Stored as the concrete `Arc<S::Env>` behind `Any`
+// so transition can be handed the concrete env (it needs to read real fields, not a `dyn`).
+type EnvMap = HashMap<TypeId, Box<dyn Any + Send + Sync>>;
+static ENVS: OnceLock<RwLock<EnvMap>> = OnceLock::new();
 
-fn envs() -> &'static RwLock<HashMap<TypeId, Arc<dyn Env>>> {
+fn envs() -> &'static RwLock<EnvMap> {
     ENVS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 pub fn register_env<S: StateMachine>(env: S::Env) {
-    let env: Arc<dyn Env> = Arc::new(env);
-    envs().write().unwrap().insert(TypeId::of::<S>(), env);
+    let boxed: Box<dyn Any + Send + Sync> = Box::new(Arc::new(env));
+    envs().write().unwrap().insert(TypeId::of::<S>(), boxed);
 }
 
-pub fn env<S: StateMachine>() -> Arc<dyn Env> {
+fn env<S: StateMachine>() -> Arc<S::Env> {
     envs()
         .read()
         .unwrap()
         .get(&TypeId::of::<S>())
+        .and_then(|boxed| boxed.downcast_ref::<Arc<S::Env>>())
         .cloned()
         .expect("env not registered — call <StateMachine>::bootstrap() at startup")
 }
 
-pub struct StateWrapper<S> {
+// The single generic actor. Wraps the pure domain state with the framework's per-entity runtime
+// bookkeeping. There is no per-entity concrete type and no macro: this one type is the kameo actor
+// for every state machine.
+pub struct StateWrapper<S: StateMachine> {
     state: S,
     // Bumped on every arm. Stamped onto the Wakeup the timer fires; a wakeup whose generation no
     // longer matches is from a superseded arm and is ignored.
@@ -34,53 +44,82 @@ pub struct StateWrapper<S> {
     timer: Option<tokio::task::JoinHandle<()>>,
 }
 
+impl<S: StateMachine> Actor for StateWrapper<S> {
+    type Args = Self;
+    type Error = Infallible;
+    async fn on_start(args: Self, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+        Ok(args)
+    }
+}
+
+impl<S: StateMachine> Message<Envelope<S::Action>> for StateWrapper<S> {
+    type Reply = ();
+    async fn handle(&mut self, envelope: Envelope<S::Action>, ctx: &mut Context<Self, ()>) {
+        match envelope {
+            Envelope::Act(action) => self.dispatch(action),
+            Envelope::Wakeup(generation) => self.on_wakeup(generation),
+            Envelope::Delete => {
+                self.teardown();
+                ctx.stop();
+            }
+        }
+    }
+}
+
 impl<S: StateMachine> StateWrapper<S> {
-    pub fn new(state: S) -> Self {
+    fn new(state: S) -> Self {
         StateWrapper {
             state,
             generation: 0,
             timer: None,
         }
     }
-    pub fn id_string(&self) -> String {
+
+    fn id_string(&self) -> String {
         self.state.id().id_string()
     }
-    pub fn dispatch(&mut self, action: S::Action) {
-        let env = env::<S>();
-        let effects = self.state.transition(env.as_ref(), action);
 
-        // Post-transition tasks: spawned detached, so they run AFTER this returns. Their results
-        // loop back in as new messages.
-        let id = self.state.id().id_string();
-        for fut in effects.self_actions {
-            let id = id.clone();
-            tokio::spawn(async move {
-                let next = fut.await;
-                let _ = act::<S>(&id, next).await; // loop back to this entity
-            });
-        }
-        for out in effects.outbound {
-            tokio::spawn(async move {
-                let _ = out.deliver().await; // route to its target entity
-            });
-        }
+    // Value-in / value-out: run the transition on a CLONE, and commit + fire effects ONLY on a valid
+    // new state. An Err leaves the live state untouched — no commit, no effects, no re-arm.
+    fn dispatch(&mut self, action: S::Action) {
+        match self.state.clone().transition(env::<S>(), &action) {
+            Ok((next, effects)) => {
+                self.state = next;
 
-        self.arm();
+                let id = self.state.id().id_string();
+                for fut in effects.self_actions {
+                    let id = id.clone();
+                    tokio::spawn(async move {
+                        let next = fut.await;
+                        let _ = act::<S>(&id, next).await; // loop back to this entity
+                    });
+                }
+                for out in effects.outbound {
+                    tokio::spawn(async move {
+                        let _ = out.deliver().await; // route to its target entity
+                    });
+                }
+
+                self.arm();
+            }
+            Err(e) => {
+                println!("[{}] invalid transition, no commit: {e}", self.id_string());
+            }
+        }
     }
 
-    // Framework teardown before the actor stops: kill the timer and remove the DHT name so later
+    // Framework teardown before the actor stops: kill the timer and remove the registry name so later
     // lookups miss cleanly instead of resolving to a dead actor.
-    pub async fn teardown(&mut self) {
+    fn teardown(&mut self) {
         if let Some(handle) = self.timer.take() {
             handle.abort();
         }
-        let _ = kameo::remote::unregister(self.state.id().id_string()).await;
+        ACTOR_REGISTRY.lock().unwrap().remove(self.id_string().as_str());
     }
 
-    // A timer fired. If the wakeup is from a superseded arm, drop it; otherwise re-evaluate the
-    // schedule against CURRENT state and fire the fresh action only if its deadline is overdue. If
-    // the deadline moved out (state changed), just re-arm; if nothing is scheduled, stop.
-    pub fn on_wakeup(&mut self, generation: u64) {
+    // A timer fired. Drop it if from a superseded arm; otherwise re-evaluate the schedule against
+    // CURRENT state and fire the fresh action only if overdue, else re-arm.
+    fn on_wakeup(&mut self, generation: u64) {
         if generation != self.generation {
             println!(
                 "[{}] rejected stale wakeup gen={generation} (current={})",
@@ -96,10 +135,9 @@ impl<S: StateMachine> StateWrapper<S> {
         }
     }
 
-    // (Re)arm the single timer from the current state: abort any running one, bump the generation,
-    // then if the state schedules a self-action, spawn a task that sleeps until the deadline and
-    // fires a content-free Wakeup(generation) back. The JoinHandle is live-only (never serialized);
-    // the action itself is NOT captured — it is re-derived when the wakeup lands.
+    // (Re)arm the single timer from current state: abort any running one, bump the generation, then
+    // if the state schedules a self-action, spawn a task that sleeps to the deadline and fires a
+    // content-free Wakeup(generation) back. The action is NOT captured — it is re-derived on wake.
     fn arm(&mut self) {
         if let Some(handle) = self.timer.take() {
             handle.abort();
@@ -119,44 +157,67 @@ impl<S: StateMachine> StateWrapper<S> {
     }
 }
 
-// Boot the actor runtime (swarm). Per-state-machine env is registered via <SM>::bootstrap().
-pub fn bootstrap() -> anyhow::Result<()> {
-    kameo::remote::bootstrap().map_err(|e| anyhow::anyhow!("bootstrap failed: {e}"))?;
-    Ok(())
-}
-
-pub async fn construct<S: StateMachine>(
-    id: S::Id,
-    construction: S::Construction,
-) -> anyhow::Result<()> {
-    let entity = S::Wrapped::build(id, construction);
-    let key = entity.id_string();
-    S::Wrapped::spawn(entity).register(key).await?;
-    Ok(())
+// Construct an entity and register it under its id. Idempotent: a lost race (the name got registered
+// between our check and ours) surfaces as NameAlreadyRegistered, which we treat as success — the
+// just-spawned loser drops here and self-stops, and the existing entity stays live.
+pub fn construct<S: StateMachine>(id: S::Id, construction: S::Construction) -> anyhow::Result<()> {
+    let key = id.id_string();
+    let state = S::construct(id, construction);
+    let actor = StateWrapper::<S>::spawn(StateWrapper::new(state));
+    match actor.register(key) {
+        Ok(()) => Ok(()),
+        Err(RegistryError::NameAlreadyRegistered) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub async fn act<S: StateMachine>(id: &str, action: S::Action) -> anyhow::Result<()> {
-    match RemoteActorRef::<S::Wrapped>::lookup(id).await? {
-        Some(entity) => entity.tell(&Envelope::Act(action)).send_ack().await?,
+    match ActorRef::<StateWrapper<S>>::lookup(id)? {
+        Some(actor) => actor
+            .tell(Envelope::Act(action))
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("tell failed for {id}"))?,
         None => println!("[framework] no actor for {id}; dropping"),
     }
     Ok(())
 }
 
+// Get-or-create then act, in one step: look up by id; if absent, construct (idempotent); then act on
+// whichever entity exists. This is the only ingestion entry point — it removes the construct→act
+// window entirely, since the action always rides along with the create.
+pub async fn act_maybe_construct<S: StateMachine>(
+    id: S::Id,
+    construction: S::Construction,
+    action: S::Action,
+) -> anyhow::Result<()> {
+    let key = id.id_string();
+    if ActorRef::<StateWrapper<S>>::lookup(key.as_str())?.is_none() {
+        construct::<S>(id, construction)?;
+    }
+    act::<S>(key.as_str(), action).await
+}
+
 async fn wake<S: StateMachine>(id: &str, generation: u64) -> anyhow::Result<()> {
-    if let Some(entity) = RemoteActorRef::<S::Wrapped>::lookup(id).await? {
-        entity
-            .tell(&Envelope::<S::Action>::Wakeup(generation))
-            .send_ack()
-            .await?;
+    if let Some(actor) = ActorRef::<StateWrapper<S>>::lookup(id)? {
+        actor
+            .tell(Envelope::<S::Action>::Wakeup(generation))
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("wake tell failed for {id}"))?;
     }
     Ok(())
 }
 
 pub async fn delete<S: StateMachine>(id: &str) -> anyhow::Result<()> {
-    match RemoteActorRef::<S::Wrapped>::lookup(id).await? {
-        Some(entity) => entity.tell(&Envelope::<S::Action>::Delete).send_ack().await?,
-        None => println!("[framework] no actor for {id}; nothing to delete"),
+    if let Some(actor) = ActorRef::<StateWrapper<S>>::lookup(id)? {
+        actor
+            .tell(Envelope::<S::Action>::Delete)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("delete tell failed for {id}"))?;
+    } else {
+        println!("[framework] no actor for {id}; nothing to delete");
     }
     Ok(())
 }

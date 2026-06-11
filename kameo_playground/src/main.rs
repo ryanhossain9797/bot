@@ -1,16 +1,17 @@
-// What a domain user of the framework writes: pure state types, each with its OWN Env type, a
-// StateMachine impl, one `entity!` line, and calls to construct/act. The framework never names or
-// provides Env — each state machine declares its own associated Env.
+// What a domain user of the framework writes: pure state types (each with its OWN Env), a
+// StateMachine impl, and calls to act_maybe_construct / act / delete. No macros, no concrete entity
+// types — the framework's single generic wrapper is the actor for every state machine.
 mod framework;
 
-use framework::{
-    act, bootstrap, construct, delete, Effects, Env, EntityId, Scheduled, StateMachine,
-};
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use framework::{act, act_maybe_construct, construct, delete, Effects, EntityId, Scheduled, StateMachine};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::Duration;
 
 // ===================== entity: Convo =====================
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ConvoId(pub String);
 
 impl EntityId for ConvoId {
@@ -19,11 +20,11 @@ impl EntityId for ConvoId {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Convo {
     id: ConvoId,
     count: i64,
-    // The absolute deadline for the next tick, stored in state so schedule() returns a stable
-    // instant. None = no tick pending.
+    // Absolute deadline for the next tick, stored in state so schedule() returns a stable instant.
     tick_at: Option<DateTime<Utc>>,
 }
 
@@ -35,15 +36,9 @@ pub enum ConvoAction {
 
 pub struct ConvoConstruction;
 
-// Convo's own env — implements the framework's Env trait; the framework never names this type.
+// Convo's own env — a plain type; the framework only needs Send + Sync + 'static to store it.
 pub struct ConvoEnv {
     greeting: String,
-}
-
-impl Env for ConvoEnv {
-    fn get_config(&self) {
-        println!("[env] greeting={}", self.greeting);
-    }
 }
 
 impl StateMachine for Convo {
@@ -51,7 +46,6 @@ impl StateMachine for Convo {
     type Action = ConvoAction;
     type Construction = ConvoConstruction;
     type Env = ConvoEnv;
-    type Wrapped = ConvoEntity;
     fn build_env() -> anyhow::Result<ConvoEnv> {
         Ok(ConvoEnv {
             greeting: "TerminalAlphaBeta".to_string(),
@@ -67,21 +61,25 @@ impl StateMachine for Convo {
     fn id(&self) -> &ConvoId {
         &self.id
     }
-    fn transition(&mut self, env: &dyn Env, action: ConvoAction) -> Effects<Self> {
-        env.get_config();
+    fn transition(
+        mut self,
+        env: Arc<ConvoEnv>,
+        action: &ConvoAction,
+    ) -> anyhow::Result<(Self, Effects<Self>)> {
+        println!("[env] greeting={}", env.greeting);
         match action {
             ConvoAction::Say(s) => {
                 self.count += 1;
                 self.tick_at = Some(Utc::now() + chrono::Duration::milliseconds(150));
                 println!("[{}] '{s}' -> count={}", self.id.id_string(), self.count);
-                // an outbound message to the Counter entity (the Tick comes from the timer)
-                Effects::none()
-                    .send::<Counter>(CounterId("counter:1".to_string()), CounterAction::Add(1))
+                let effects = Effects::none()
+                    .send::<Counter>(CounterId("counter:1".to_string()), CounterAction::Add(1));
+                Ok((self, effects))
             }
             ConvoAction::Tick => {
-                self.tick_at = None; // schedule() now yields None — timer stops
+                self.tick_at = None;
                 println!("[{}] scheduled tick fired", self.id.id_string());
-                Effects::none()
+                Ok((self, Effects::none()))
             }
         }
     }
@@ -93,10 +91,9 @@ impl StateMachine for Convo {
     }
 }
 
-entity!(ConvoEntity, Convo, "convo-action");
-
 // ===================== entity: Counter =====================
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CounterId(pub String);
 
 impl EntityId for CounterId {
@@ -105,6 +102,7 @@ impl EntityId for CounterId {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Counter {
     id: CounterId,
     total: i64,
@@ -120,15 +118,8 @@ pub struct CounterInit {
     pub start: i64,
 }
 
-// Counter's own env — a *different* type from ConvoEnv, also implementing Env.
 pub struct CounterEnv {
     tag: String,
-}
-
-impl Env for CounterEnv {
-    fn get_config(&self) {
-        println!("[env] tag={}", self.tag);
-    }
 }
 
 impl StateMachine for Counter {
@@ -136,7 +127,6 @@ impl StateMachine for Counter {
     type Action = CounterAction;
     type Construction = CounterInit;
     type Env = CounterEnv;
-    type Wrapped = CounterEntity;
     fn build_env() -> anyhow::Result<CounterEnv> {
         Ok(CounterEnv {
             tag: "CTR".to_string(),
@@ -151,8 +141,12 @@ impl StateMachine for Counter {
     fn id(&self) -> &CounterId {
         &self.id
     }
-    fn transition(&mut self, env: &dyn Env, action: CounterAction) -> Effects<Self> {
-        env.get_config();
+    fn transition(
+        mut self,
+        env: Arc<CounterEnv>,
+        action: &CounterAction,
+    ) -> anyhow::Result<(Self, Effects<Self>)> {
+        println!("[env] tag={}", env.tag);
         match action {
             CounterAction::Add(n) => {
                 self.total += n;
@@ -163,35 +157,44 @@ impl StateMachine for Counter {
                 println!("[{}] reset -> total=0", self.id.id_string());
             }
         }
-        Effects::none()
+        Ok((self, Effects::none()))
     }
     fn schedule(&self) -> Option<Scheduled<CounterAction>> {
         None
     }
 }
 
-entity!(CounterEntity, Counter, "counter-action");
-
 // ===================== driver =====================
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    bootstrap()?; // swarm
     Convo::bootstrap()?; // register Convo's env
     Counter::bootstrap()?; // register Counter's env
 
-    // Construct the Counter first so it exists when Convo messages it.
-    construct::<Counter>(CounterId("counter:1".to_string()), CounterInit { start: 10 }).await?;
-    construct::<Convo>(ConvoId("convo:1".to_string()), ConvoConstruction).await?;
+    construct::<Counter>(CounterId("counter:1".to_string()), CounterInit { start: 10 })?;
 
-    // One Convo message → fans out: a self-action (Tick) back to Convo + an outbound Add(1) to Counter.
-    act::<Convo>("convo:1", ConvoAction::Say("hello".to_string())).await?;
+    // First message: act_maybe_construct creates convo:1, then acts (count -> 1).
+    act_maybe_construct::<Convo>(
+        ConvoId("convo:1".to_string()),
+        ConvoConstruction,
+        ConvoAction::Say("hello".to_string()),
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Second message: maybe_construct finds the existing entity and just acts (count -> 2, NOT reset
+    // to a fresh 0). This is the idempotency fix — a re-construct does not overwrite live state.
+    act_maybe_construct::<Convo>(
+        ConvoId("convo:1".to_string()),
+        ConvoConstruction,
+        ConvoAction::Say("world".to_string()),
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Framework meta-action: tear the Counter down, then prove a later domain action misses cleanly.
     delete::<Counter>("counter:1").await?;
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
     act::<Counter>("counter:1", CounterAction::Add(1)).await?;
 
     Ok(())

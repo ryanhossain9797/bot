@@ -1,20 +1,11 @@
 use super::effects::Effects;
-use super::envelope::Envelope;
-use kameo::message::Message;
-use kameo::remote::{RemoteActor, RemoteMessage};
-use kameo::Actor;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::sync::Arc;
 
 // An id type must be convertible to its registry-key string.
 pub trait EntityId {
     fn id_string(&self) -> String;
-}
-
-// The framework provides this TRAIT (the interface), not a concrete env. Each state machine's env
-// type implements it. Held as `Arc<dyn Env>` — no `Any`, no downcast. (get_config is a placeholder.)
-pub trait Env: Send + Sync + 'static {
-    fn get_config(&self);
 }
 
 // A scheduled self-action: an ABSOLUTE deadline `at` (derived from stored state, so re-evaluating
@@ -25,19 +16,27 @@ pub struct Scheduled<A> {
     pub action: A,
 }
 
-// Implemented by the PURE domain state. The env type is the DOMAIN's own (associated `type Env`,
-// bounded by the framework's `Env` trait); the framework holds it as `dyn Env` and hands transitions
-// a `&dyn Env`.
-pub trait StateMachine: Sized + 'static {
-    type Id: EntityId + Send + 'static;
-    type Action: Serialize + DeserializeOwned + Send + Sync + 'static;
-    type Construction;
-    type Env: Env;
-    type Wrapped: Entity<State = Self>;
+// Implemented by the PURE domain state. `transition` is value-in / value-out and fallible: it takes
+// the current state by value and returns the next state plus its effects, or an error. The runtime
+// runs it on a CLONE and commits (and fires effects) ONLY on Ok — an Err leaves the live state
+// untouched, so an invalid (state, action) pair is a clean no-op.
+// State, Id, and Action carry Serialize + DeserializeOwned for persistence (#106): state + the
+// outbox round-trip durable storage. NOT for transport — local messaging moves values, no wire.
+// Env is deliberately exempt: it holds live, unserializable handles rebuilt at startup, never
+// persisted. (Sync is also gone — that was a remote-only requirement.)
+pub trait StateMachine: Sized + Clone + Serialize + DeserializeOwned + Send + 'static {
+    type Id: EntityId + Clone + Serialize + DeserializeOwned + Send + 'static;
+    type Action: Serialize + DeserializeOwned + Send + 'static;
+    type Construction: Send + 'static;
+    type Env: Send + Sync + 'static;
     fn build_env() -> anyhow::Result<Self::Env>;
     fn construct(id: Self::Id, construction: Self::Construction) -> Self;
     fn id(&self) -> &Self::Id;
-    fn transition(&mut self, env: &dyn Env, action: Self::Action) -> Effects<Self>;
+    fn transition(
+        self,
+        env: Arc<Self::Env>,
+        action: &Self::Action,
+    ) -> anyhow::Result<(Self, Effects<Self>)>;
     // The next self-action to fire on a timer (pure over state; re-evaluated after each transition).
     fn schedule(&self) -> Option<Scheduled<Self::Action>>;
 
@@ -46,21 +45,4 @@ pub trait StateMachine: Sized + 'static {
         super::runtime::register_env::<Self>(Self::build_env()?);
         Ok(())
     }
-}
-
-// The kameo-facing wrapper contract — satisfied by the type the `entity!` macro generates. Carries
-// the kameo requirements as supertraits so the runtime needs only `S: StateMachine`.
-pub trait Entity:
-    Actor<Args = Self>
-    + RemoteActor
-    + Message<Envelope<<Self::State as StateMachine>::Action>>
-    + RemoteMessage<Envelope<<Self::State as StateMachine>::Action>>
-    + Sized
-{
-    type State: StateMachine;
-    fn build(
-        id: <Self::State as StateMachine>::Id,
-        construction: <Self::State as StateMachine>::Construction,
-    ) -> Self;
-    fn id_string(&self) -> String;
 }

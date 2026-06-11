@@ -46,6 +46,7 @@ impl<S: StateMachine> Effects<S> {
     }
 
     // #1: schedule a future that loops its result back as this entity's own action.
+    #[allow(dead_code)] // framework surface — the demo exercises send()/the timer, not then()
     pub fn then(mut self, fut: impl Future<Output = S::Action> + Send + 'static) -> Self {
         self.self_actions.push(Box::pin(fut));
         self
