@@ -1,7 +1,7 @@
 use super::envelope::Envelope;
 use super::traits::{EntityId, StateMachine};
-use kameo::actor::{ActorRef, Spawn};
-use kameo::error::{Infallible, RegistryError};
+use kameo::actor::{ActorRef, Spawn, WeakActorRef};
+use kameo::error::{ActorStopReason, Infallible, RegistryError};
 use kameo::message::{Context, Message};
 use kameo::registry::ACTOR_REGISTRY;
 use kameo::Actor;
@@ -47,8 +47,25 @@ pub struct StateWrapper<S: StateMachine> {
 impl<S: StateMachine> Actor for StateWrapper<S> {
     type Args = Self;
     type Error = Infallible;
+
     async fn on_start(args: Self, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
         Ok(args)
+    }
+
+    // Runs on EVERY stop — Delete, panic, or last-ref-drop (the act_maybe_construct loser). Abort the
+    // timer and deregister, but deregister BY ID, not by name: remove the entry only if it still holds
+    // our id. A blind remove(name) would clobber a successor re-created under the same name, or (for
+    // the never-registered loser) clobber the winner. remove_by_id no-ops in both cases.
+    async fn on_stop(
+        &mut self,
+        actor_ref: WeakActorRef<Self>,
+        _reason: ActorStopReason,
+    ) -> Result<(), Infallible> {
+        if let Some(handle) = self.timer.take() {
+            handle.abort();
+        }
+        ACTOR_REGISTRY.lock().unwrap().remove_by_id(&actor_ref.id());
+        Ok(())
     }
 }
 
@@ -58,10 +75,7 @@ impl<S: StateMachine> Message<Envelope<S::Action>> for StateWrapper<S> {
         match envelope {
             Envelope::Act(action) => self.dispatch(action),
             Envelope::Wakeup(generation) => self.on_wakeup(generation),
-            Envelope::Delete => {
-                self.teardown();
-                ctx.stop();
-            }
+            Envelope::Delete => ctx.stop(), // on_stop aborts the timer and deregisters by id
         }
     }
 }
@@ -106,15 +120,6 @@ impl<S: StateMachine> StateWrapper<S> {
                 println!("[{}] invalid transition, no commit: {e}", self.id_string());
             }
         }
-    }
-
-    // Framework teardown before the actor stops: kill the timer and remove the registry name so later
-    // lookups miss cleanly instead of resolving to a dead actor.
-    fn teardown(&mut self) {
-        if let Some(handle) = self.timer.take() {
-            handle.abort();
-        }
-        ACTOR_REGISTRY.lock().unwrap().remove(self.id_string().as_str());
     }
 
     // A timer fired. Drop it if from a superseded arm; otherwise re-evaluate the schedule against
