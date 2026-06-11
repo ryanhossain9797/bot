@@ -1,9 +1,11 @@
 pub mod effects;
+pub mod envelope;
 pub mod runtime;
 pub mod traits;
 
 pub use effects::Effects;
-pub use runtime::{act, bootstrap, construct, StateWrapper};
+pub use envelope::Envelope;
+pub use runtime::{act, bootstrap, construct, delete, StateWrapper};
 pub use traits::{Entity, EntityId, Env, Scheduled, StateMachine};
 
 // Generates the per-entity concrete glue from a pure domain state: the kameo actor newtype around
@@ -16,16 +18,25 @@ macro_rules! entity {
         pub struct $actor($crate::framework::StateWrapper<$state>);
 
         #[::kameo::remote_message($remote_id)]
-        impl ::kameo::message::Message<<$state as $crate::framework::StateMachine>::Action>
+        impl ::kameo::message::Message<$crate::framework::Envelope<<$state as $crate::framework::StateMachine>::Action>>
             for $actor
         {
             type Reply = ();
             async fn handle(
                 &mut self,
-                action: <$state as $crate::framework::StateMachine>::Action,
-                _ctx: &mut ::kameo::message::Context<Self, ()>,
+                envelope: $crate::framework::Envelope<<$state as $crate::framework::StateMachine>::Action>,
+                ctx: &mut ::kameo::message::Context<Self, ()>,
             ) {
-                self.0.dispatch(action);
+                match envelope {
+                    $crate::framework::Envelope::Act(action) => self.0.dispatch(action),
+                    $crate::framework::Envelope::Wakeup(generation) => {
+                        self.0.on_wakeup(generation)
+                    }
+                    $crate::framework::Envelope::Delete => {
+                        self.0.teardown().await;
+                        ctx.stop();
+                    }
+                }
             }
         }
 

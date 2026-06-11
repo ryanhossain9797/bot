@@ -3,9 +3,11 @@
 // provides Env — each state machine declares its own associated Env.
 mod framework;
 
-use framework::{act, bootstrap, construct, Effects, Env, EntityId, Scheduled, StateMachine};
+use framework::{
+    act, bootstrap, construct, delete, Effects, Env, EntityId, Scheduled, StateMachine,
+};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use chrono::{DateTime, Utc};
 
 // ===================== entity: Convo =====================
 
@@ -20,7 +22,9 @@ impl EntityId for ConvoId {
 pub struct Convo {
     id: ConvoId,
     count: i64,
-    tick_armed: bool,
+    // The absolute deadline for the next tick, stored in state so schedule() returns a stable
+    // instant. None = no tick pending.
+    tick_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -57,7 +61,7 @@ impl StateMachine for Convo {
         Convo {
             id,
             count: 0,
-            tick_armed: false,
+            tick_at: None,
         }
     }
     fn id(&self) -> &ConvoId {
@@ -68,22 +72,22 @@ impl StateMachine for Convo {
         match action {
             ConvoAction::Say(s) => {
                 self.count += 1;
-                self.tick_armed = true; // schedule() will now yield a Tick on a timer
+                self.tick_at = Some(Utc::now() + chrono::Duration::milliseconds(150));
                 println!("[{}] '{s}' -> count={}", self.id.id_string(), self.count);
                 // an outbound message to the Counter entity (the Tick comes from the timer)
                 Effects::none()
                     .send::<Counter>(CounterId("counter:1".to_string()), CounterAction::Add(1))
             }
             ConvoAction::Tick => {
-                self.tick_armed = false; // schedule() now yields None — timer stops
+                self.tick_at = None; // schedule() now yields None — timer stops
                 println!("[{}] scheduled tick fired", self.id.id_string());
                 Effects::none()
             }
         }
     }
     fn schedule(&self) -> Option<Scheduled<ConvoAction>> {
-        self.tick_armed.then(|| Scheduled {
-            after: Duration::from_millis(150),
+        self.tick_at.map(|at| Scheduled {
+            at,
             action: ConvoAction::Tick,
         })
     }
@@ -184,5 +188,11 @@ async fn main() -> anyhow::Result<()> {
     act::<Convo>("convo:1", ConvoAction::Say("hello".to_string())).await?;
 
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // Framework meta-action: tear the Counter down, then prove a later domain action misses cleanly.
+    delete::<Counter>("counter:1").await?;
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    act::<Counter>("counter:1", CounterAction::Add(1)).await?;
+
     Ok(())
 }

@@ -1,4 +1,5 @@
 use super::effects::Effects;
+use super::envelope::Envelope;
 use kameo::message::Message;
 use kameo::remote::{RemoteActor, RemoteMessage};
 use kameo::Actor;
@@ -16,9 +17,11 @@ pub trait Env: Send + Sync + 'static {
     fn get_config(&self);
 }
 
-// A scheduled self-action: the framework fires `action` back to this entity after `after`.
+// A scheduled self-action: an ABSOLUTE deadline `at` (derived from stored state, so re-evaluating
+// schedule() yields the same instant rather than resetting the clock) plus the action to run once it
+// is overdue.
 pub struct Scheduled<A> {
-    pub after: std::time::Duration,
+    pub at: chrono::DateTime<chrono::Utc>,
     pub action: A,
 }
 
@@ -27,7 +30,7 @@ pub struct Scheduled<A> {
 // a `&dyn Env`.
 pub trait StateMachine: Sized + 'static {
     type Id: EntityId + Send + 'static;
-    type Action: Serialize + DeserializeOwned + Send + 'static;
+    type Action: Serialize + DeserializeOwned + Send + Sync + 'static;
     type Construction;
     type Env: Env;
     type Wrapped: Entity<State = Self>;
@@ -50,8 +53,8 @@ pub trait StateMachine: Sized + 'static {
 pub trait Entity:
     Actor<Args = Self>
     + RemoteActor
-    + Message<<Self::State as StateMachine>::Action>
-    + RemoteMessage<<Self::State as StateMachine>::Action>
+    + Message<Envelope<<Self::State as StateMachine>::Action>>
+    + RemoteMessage<Envelope<<Self::State as StateMachine>::Action>>
     + Sized
 {
     type State: StateMachine;

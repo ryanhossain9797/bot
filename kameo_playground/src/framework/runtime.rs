@@ -1,3 +1,4 @@
+use super::envelope::Envelope;
 use super::traits::{Entity, EntityId, Env, StateMachine};
 use kameo::actor::{RemoteActorRef, Spawn};
 use std::any::TypeId;
@@ -28,6 +29,9 @@ pub fn env<S: StateMachine>() -> Arc<dyn Env> {
 #[derive(Default)]
 struct Core {
     acts: u64,
+    // Bumped on every arm. Stamped onto the Wakeup the timer fires; a wakeup whose generation no
+    // longer matches is from a superseded arm and is ignored.
+    generation: u64,
     timer: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -70,18 +74,47 @@ impl<S: StateMachine> StateWrapper<S> {
         self.arm();
     }
 
-    // (Re)arm the single timer from the current state: abort any running one, then if the state
-    // schedules a self-action, spawn a task that sleeps and fires it back. The JoinHandle lives in
-    // Core (live-only, never serialized).
+    // Framework teardown before the actor stops: kill the timer and remove the DHT name so later
+    // lookups miss cleanly instead of resolving to a dead actor.
+    pub async fn teardown(&mut self) {
+        if let Some(handle) = self.core.timer.take() {
+            handle.abort();
+        }
+        let _ = kameo::remote::unregister(self.state.id().id_string()).await;
+    }
+
+    // A timer fired. If the wakeup is from a superseded arm, drop it; otherwise re-evaluate the
+    // schedule against CURRENT state and fire the fresh action only if its deadline is overdue. If
+    // the deadline moved out (state changed), just re-arm; if nothing is scheduled, stop.
+    pub fn on_wakeup(&mut self, generation: u64) {
+        if generation != self.core.generation {
+            return;
+        }
+        match self.state.schedule() {
+            Some(scheduled) if scheduled.at <= chrono::Utc::now() => self.dispatch(scheduled.action),
+            Some(_) => self.arm(),
+            None => {}
+        }
+    }
+
+    // (Re)arm the single timer from the current state: abort any running one, bump the generation,
+    // then if the state schedules a self-action, spawn a task that sleeps until the deadline and
+    // fires a content-free Wakeup(generation) back. The JoinHandle lives in Core (live-only, never
+    // serialized); the action itself is NOT captured — it is re-derived when the wakeup lands.
     fn arm(&mut self) {
         if let Some(handle) = self.core.timer.take() {
             handle.abort();
         }
+        self.core.generation += 1;
+        let generation = self.core.generation;
         if let Some(scheduled) = self.state.schedule() {
             let id = self.state.id().id_string();
+            let delay = (scheduled.at - chrono::Utc::now())
+                .to_std()
+                .unwrap_or(std::time::Duration::ZERO);
             self.core.timer = Some(tokio::spawn(async move {
-                tokio::time::sleep(scheduled.after).await;
-                let _ = act::<S>(&id, scheduled.action).await;
+                tokio::time::sleep(delay).await;
+                let _ = wake::<S>(&id, generation).await;
             }));
         }
     }
@@ -105,8 +138,26 @@ pub async fn construct<S: StateMachine>(
 
 pub async fn act<S: StateMachine>(id: &str, action: S::Action) -> anyhow::Result<()> {
     match RemoteActorRef::<S::Wrapped>::lookup(id).await? {
-        Some(entity) => entity.tell(&action).send()?,
+        Some(entity) => entity.tell(&Envelope::Act(action)).send_ack().await?,
         None => println!("[framework] no actor for {id}; dropping"),
+    }
+    Ok(())
+}
+
+async fn wake<S: StateMachine>(id: &str, generation: u64) -> anyhow::Result<()> {
+    if let Some(entity) = RemoteActorRef::<S::Wrapped>::lookup(id).await? {
+        entity
+            .tell(&Envelope::<S::Action>::Wakeup(generation))
+            .send_ack()
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn delete<S: StateMachine>(id: &str) -> anyhow::Result<()> {
+    match RemoteActorRef::<S::Wrapped>::lookup(id).await? {
+        Some(entity) => entity.tell(&Envelope::<S::Action>::Delete).send_ack().await?,
+        None => println!("[framework] no actor for {id}; nothing to delete"),
     }
     Ok(())
 }
