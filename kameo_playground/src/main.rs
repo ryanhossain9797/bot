@@ -4,7 +4,10 @@
 mod framework;
 
 use chrono::{DateTime, Utc};
-use framework::{act, act_maybe_construct, construct, delete, Effects, EntityId, Scheduled, StateMachine};
+use framework::{
+    act, act_maybe_construct, construct, delete, register_env, Effects, EntityId, Scheduled,
+    StateMachine,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,11 +49,6 @@ impl StateMachine for Convo {
     type Action = ConvoAction;
     type Construction = ConvoConstruction;
     type Env = ConvoEnv;
-    fn build_env() -> anyhow::Result<ConvoEnv> {
-        Ok(ConvoEnv {
-            greeting: "TerminalAlphaBeta".to_string(),
-        })
-    }
     fn construct(id: ConvoId, _construction: ConvoConstruction) -> Self {
         Convo {
             id,
@@ -127,11 +125,6 @@ impl StateMachine for Counter {
     type Action = CounterAction;
     type Construction = CounterInit;
     type Env = CounterEnv;
-    fn build_env() -> anyhow::Result<CounterEnv> {
-        Ok(CounterEnv {
-            tag: "CTR".to_string(),
-        })
-    }
     fn construct(id: CounterId, init: CounterInit) -> Self {
         Counter {
             id,
@@ -168,8 +161,14 @@ impl StateMachine for Counter {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    Convo::bootstrap()?; // register Convo's env
-    Counter::bootstrap()?; // register Counter's env
+    // main provides each state machine's env at startup — the framework builds none of its own.
+    // (Any async setup a real env needs — loading a model, opening a DB — happens here, in main.)
+    register_env::<Convo>(ConvoEnv {
+        greeting: "TerminalAlphaBeta".to_string(),
+    });
+    register_env::<Counter>(CounterEnv {
+        tag: "CTR".to_string(),
+    });
 
     construct::<Counter>(CounterId("counter:1".to_string()), CounterInit { start: 10 })?;
 

@@ -28,8 +28,9 @@ pub trait StateMachine: Sized + Clone + Serialize + DeserializeOwned + Send + 's
     type Id: EntityId + Clone + Serialize + DeserializeOwned + Send + 'static;
     type Action: Serialize + DeserializeOwned + Send + 'static;
     type Construction: Send + 'static;
+    // Per-state-machine env. The framework builds NO env of its own — main constructs each env
+    // (doing any async setup itself) and hands it over via register_env at startup.
     type Env: Send + Sync + 'static;
-    fn build_env() -> anyhow::Result<Self::Env>;
     fn construct(id: Self::Id, construction: Self::Construction) -> Self;
     fn id(&self) -> &Self::Id;
     fn transition(
@@ -39,10 +40,4 @@ pub trait StateMachine: Sized + Clone + Serialize + DeserializeOwned + Send + 's
     ) -> anyhow::Result<(Self, Effects<Self>)>;
     // The next self-action to fire on a timer (pure over state; re-evaluated after each transition).
     fn schedule(&self) -> Option<Scheduled<Self::Action>>;
-
-    // Build + register this state machine's env into the per-type registry. Call once at startup.
-    fn bootstrap() -> anyhow::Result<()> {
-        super::runtime::register_env::<Self>(Self::build_env()?);
-        Ok(())
-    }
 }
