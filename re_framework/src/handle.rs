@@ -36,16 +36,15 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
 
     pub async fn maybe_construct(&self, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
-        let id = construction.get_id().clone();
-        let key = id.get_id_string().to_string();
+        let key = construction.get_id().get_id_string().to_string();
         match self.entities.entry(key.clone()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let incarnation = self.next_incarnation.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = mpsc::channel(MAILBOX);
-                let state = SM::construct(id.clone(), construction);
+                let state = SM::construct(construction);
                 assert!(
-                    state.get_id() == &id,
+                    state.get_id().get_id_string() == key,
                     "construct produced a state whose id disagrees with the constructor"
                 );
                 tokio::spawn(run_entity::<SM>(
@@ -96,8 +95,7 @@ async fn run_entity<SM: StateMachine>(
     while let Some(msg) = rx.recv().await {
         match msg {
             Envelope::Act(action) => {
-                let working = state.clone();
-                match SM::transition(working, state.get_id(), env.clone(), &action) {
+                match SM::transition(&state, &env, &action) {
                     Ok((next, effects)) => {
                         state = next;
                         for fut in effects.self_actions {

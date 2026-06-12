@@ -64,18 +64,17 @@ impl StateMachine for CounterMachine {
     type Construction = CounterInit;
     type Env = CounterEnv;
 
-    fn construct(id: String, init: CounterInit) -> CounterState {
+    fn construct(init: CounterInit) -> CounterState {
         CounterState {
-            id,
+            id: init.id,
             total: init.start,
             tick_at: Some(Utc::now() + Duration::milliseconds(50)),
         }
     }
 
     fn transition(
-        mut state: CounterState,
-        _id: &String,
-        env: Arc<CounterEnv>,
+        state: &CounterState,
+        env: &Arc<CounterEnv>,
         action: &CounterAction,
     ) -> anyhow::Result<(CounterState, Effects<Self>)> {
         match action {
@@ -83,15 +82,19 @@ impl StateMachine for CounterMachine {
                 if state.total + n < 0 {
                     anyhow::bail!("would go negative");
                 }
-                state.total += n;
-                env.obs.lock().unwrap().totals.push(state.total);
-                Ok((state, Effects::none()))
+                let mut next = state.clone();
+                next.total += n;
+                env.obs.lock().unwrap().totals.push(next.total);
+                Ok((next, Effects::none()))
             }
-            CounterAction::Ping => Ok((state, Effects::none().then(async { CounterAction::Add(10) }))),
+            CounterAction::Ping => {
+                Ok((state.clone(), Effects::none().then(async { CounterAction::Add(10) })))
+            }
             CounterAction::Tick => {
-                state.tick_at = None;
+                let mut next = state.clone();
+                next.tick_at = None;
                 env.obs.lock().unwrap().ticks += 1;
-                Ok((state, Effects::none()))
+                Ok((next, Effects::none()))
             }
         }
     }
@@ -180,18 +183,17 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(id: String, _: PongerInit) -> PongerState {
-        PongerState { id }
+    fn construct(init: PongerInit) -> PongerState {
+        PongerState { id: init.id }
     }
     fn transition(
-        state: PongerState,
-        _id: &String,
-        env: Arc<RtEnv>,
+        state: &PongerState,
+        env: &Arc<RtEnv>,
         action: &PongerAction,
     ) -> anyhow::Result<(PongerState, Effects<Self>)> {
         let PongerAction::Pong(n) = action;
         env.received.lock().unwrap().push(*n);
-        Ok((state, Effects::none()))
+        Ok((state.clone(), Effects::none()))
     }
     fn schedule(_state: &PongerState) -> Option<Scheduled<PongerAction>> {
         None
@@ -232,13 +234,12 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(id: String, _: PingerInit) -> PingerState {
-        PingerState { id }
+    fn construct(init: PingerInit) -> PingerState {
+        PingerState { id: init.id }
     }
     fn transition(
-        state: PingerState,
-        _id: &String,
-        _env: Arc<RtEnv>,
+        state: &PingerState,
+        _env: &Arc<RtEnv>,
         action: &PingerAction,
     ) -> anyhow::Result<(PingerState, Effects<Self>)> {
         let PingerAction::Ping(n) = action;
@@ -246,7 +247,7 @@ impl StateMachine for PingerMachine {
             anyhow::bail!("no negative pings");
         }
         Ok((
-            state,
+            state.clone(),
             Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n)),
         ))
     }
