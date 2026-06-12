@@ -1,3 +1,4 @@
+use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
 use chrono::Utc;
 use dashmap::DashMap;
@@ -42,7 +43,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             DEntry::Vacant(slot) => {
                 let incarnation = self.next_incarnation.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = mpsc::channel(MAILBOX);
-                let state = SM::construct(construction);
+                let (state, effects) = SM::construct(construction);
                 assert!(
                     state.get_id().get_id_string() == key,
                     "construct produced a state whose id disagrees with the constructor"
@@ -55,6 +56,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                     key,
                     incarnation,
                     tx.clone(),
+                    effects,
                 ));
                 slot.insert(Entry {
                     sender: tx,
@@ -87,9 +89,11 @@ async fn run_entity<SM: StateMachine>(
     id_string: String,
     incarnation: u64,
     self_tx: mpsc::Sender<Envelope<SM::Action>>,
+    initial: Effects<SM>,
 ) {
     let mut generation: u64 = 0;
     let mut timer: Option<JoinHandle<()>> = None;
+    spawn_effects::<SM>(initial, &self_tx);
     reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
 
     while let Some(msg) = rx.recv().await {
@@ -98,16 +102,7 @@ async fn run_entity<SM: StateMachine>(
                 match SM::transition(&state, &env, &action) {
                     Ok((next, effects)) => {
                         state = next;
-                        for fut in effects.self_actions {
-                            let tx = self_tx.clone();
-                            tokio::spawn(async move {
-                                let action = fut.await;
-                                let _ = tx.send(Envelope::Act(action)).await;
-                            });
-                        }
-                        for outbound in effects.outbound {
-                            tokio::spawn(outbound);
-                        }
+                        spawn_effects::<SM>(effects, &self_tx);
                         reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
                     }
                     Err(_e) => {}
@@ -133,6 +128,22 @@ async fn run_entity<SM: StateMachine>(
         t.abort();
     }
     entities.remove_if(&id_string, |_, e| e.incarnation == incarnation);
+}
+
+fn spawn_effects<SM: StateMachine>(
+    effects: Effects<SM>,
+    self_tx: &mpsc::Sender<Envelope<SM::Action>>,
+) {
+    for fut in effects.self_actions {
+        let tx = self_tx.clone();
+        tokio::spawn(async move {
+            let action = fut.await;
+            let _ = tx.send(Envelope::Act(action)).await;
+        });
+    }
+    for outbound in effects.outbound {
+        tokio::spawn(outbound);
+    }
 }
 
 fn reschedule_timer<SM: StateMachine>(

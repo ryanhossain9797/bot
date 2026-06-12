@@ -25,7 +25,7 @@ pub trait StateMachine: Sized + 'static {
     type Construction: Identified<Id = Self::Id> + Send + 'static;
     type Env: Send + Sync + 'static;
 
-    fn construct(construction: Self::Construction) -> Self::State;
+    fn construct(construction: Self::Construction) -> (Self::State, Effects<Self>);
     fn transition(
         state: &Self::State,
         env: &Arc<Self::Env>,

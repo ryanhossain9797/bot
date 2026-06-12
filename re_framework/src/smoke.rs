@@ -64,12 +64,15 @@ impl StateMachine for CounterMachine {
     type Construction = CounterInit;
     type Env = CounterEnv;
 
-    fn construct(init: CounterInit) -> CounterState {
-        CounterState {
-            id: init.id,
-            total: init.start,
-            tick_at: Some(Utc::now() + Duration::milliseconds(50)),
-        }
+    fn construct(init: CounterInit) -> (CounterState, Effects<Self>) {
+        (
+            CounterState {
+                id: init.id,
+                total: init.start,
+                tick_at: Some(Utc::now() + Duration::milliseconds(50)),
+            },
+            Effects::none(),
+        )
     }
 
     fn transition(
@@ -183,8 +186,8 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(init: PongerInit) -> PongerState {
-        PongerState { id: init.id }
+    fn construct(init: PongerInit) -> (PongerState, Effects<Self>) {
+        (PongerState { id: init.id }, Effects::none())
     }
     fn transition(
         state: &PongerState,
@@ -234,8 +237,11 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(init: PingerInit) -> PingerState {
-        PingerState { id: init.id }
+    fn construct(init: PingerInit) -> (PingerState, Effects<Self>) {
+        (
+            PingerState { id: init.id },
+            Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0)),
+        )
     }
     fn transition(
         state: &PingerState,
@@ -282,7 +288,7 @@ async fn outbound() {
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(
         *received.lock().unwrap(),
-        vec![42],
-        "outbound fired only for the committed transition, and reached the other machine"
+        vec![0, 42],
+        "construct effect fired on creation (0); Ping(42) committed; Ping(-1) errored so no outbound"
     );
 }
