@@ -20,12 +20,14 @@ RUN rustup target add x86_64-unknown-linux-gnu
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
-COPY framework ./framework
 COPY chatbot/src ./chatbot/src
 COPY chatbot/Cargo.toml ./chatbot/
-# probe is a dev-only workspace member; cargo needs its manifest to load the workspace,
-# but it is not compiled (we build --package chatbot).
+COPY re_framework ./re_framework
+# framework, probe, and kameo_playground are non-compiled workspace members; cargo needs their
+# manifests to load the workspace, but they are not built (we build --package chatbot).
+COPY framework ./framework
 COPY probe ./probe
+COPY kameo_playground ./kameo_playground
 COPY .git ./.git
 
 RUN cargo build --release --package chatbot
