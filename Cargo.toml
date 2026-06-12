@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "chatbot", "framework", "probe", "kameo_playground",
+    "chatbot", "framework", "probe", "kameo_playground", "re_framework",
 ]
 resolver = "3"
