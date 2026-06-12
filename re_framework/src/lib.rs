@@ -7,4 +7,4 @@ mod smoke;
 
 pub use effects::Effects;
 pub use handle::StateMachineHandle;
-pub use machine::{Scheduled, StateMachine};
+pub use machine::{EntityId, Identified, Scheduled, StateMachine};

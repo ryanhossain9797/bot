@@ -1,10 +1,14 @@
-
-use crate::{Effects, Scheduled, StateMachine, StateMachineHandle};
+use crate::{Effects, EntityId, Identified, Scheduled, StateMachine, StateMachineHandle};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 
+impl EntityId for String {
+    fn get_id_string(&self) -> &str {
+        self
+    }
+}
 
 #[derive(Default)]
 struct Obs {
@@ -22,19 +26,35 @@ struct CounterMachine;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CounterState {
+    id: String,
     total: i64,
     tick_at: Option<DateTime<Utc>>,
+}
+
+impl Identified for CounterState {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 enum CounterAction {
     Add(i64),
-    Ping, 
+    Ping,
     Tick,
 }
 
 struct CounterInit {
+    id: String,
     start: i64,
+}
+
+impl Identified for CounterInit {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
 }
 
 impl StateMachine for CounterMachine {
@@ -44,8 +64,9 @@ impl StateMachine for CounterMachine {
     type Construction = CounterInit;
     type Env = CounterEnv;
 
-    fn construct(_id: String, init: CounterInit) -> CounterState {
+    fn construct(id: String, init: CounterInit) -> CounterState {
         CounterState {
+            id,
             total: init.start,
             tick_at: Some(Utc::now() + Duration::milliseconds(50)),
         }
@@ -60,7 +81,7 @@ impl StateMachine for CounterMachine {
         match action {
             CounterAction::Add(n) => {
                 if state.total + n < 0 {
-                    anyhow::bail!("would go negative"); 
+                    anyhow::bail!("would go negative");
                 }
                 state.total += n;
                 env.obs.lock().unwrap().totals.push(state.total);
@@ -96,10 +117,10 @@ async fn smoke() {
         .expect("set COUNTER once");
     let sm = CounterMachine::handle();
 
-    sm.maybe_construct("c1".to_string(), CounterInit { start: 0 }).await;
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 }).await;
     sm.act("c1".to_string(), CounterAction::Add(5)).await;
 
-    sm.maybe_construct("c1".to_string(), CounterInit { start: 999 }).await;
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 }).await;
     sm.act("c1".to_string(), CounterAction::Add(3)).await;
 
     sm.act("c1".to_string(), CounterAction::Add(-1000)).await;
@@ -115,12 +136,11 @@ async fn smoke() {
 
     sm.delete("c1".to_string()).await;
     tokio::time::sleep(StdDuration::from_millis(20)).await;
-    sm.act("c1".to_string(), CounterAction::Add(1)).await; 
+    sm.act("c1".to_string(), CounterAction::Add(1)).await;
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     assert_eq!(obs.lock().unwrap().totals, vec![5, 8, 18], "post-delete act dropped");
 }
-
 
 struct RtEnv {
     received: Arc<Mutex<Vec<i64>>>,
@@ -131,12 +151,28 @@ static PINGER: OnceLock<StateMachineHandle<PingerMachine>> = OnceLock::new();
 
 struct PongerMachine;
 #[derive(Clone, Serialize, Deserialize)]
-struct PongerState;
+struct PongerState {
+    id: String,
+}
+impl Identified for PongerState {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
 #[derive(Serialize, Deserialize)]
 enum PongerAction {
     Pong(i64),
 }
-struct PongerInit;
+struct PongerInit {
+    id: String,
+}
+impl Identified for PongerInit {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
 
 impl StateMachine for PongerMachine {
     type State = PongerState;
@@ -144,8 +180,8 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(_id: String, _: PongerInit) -> PongerState {
-        PongerState
+    fn construct(id: String, _: PongerInit) -> PongerState {
+        PongerState { id }
     }
     fn transition(
         state: PongerState,
@@ -167,12 +203,28 @@ impl StateMachine for PongerMachine {
 
 struct PingerMachine;
 #[derive(Clone, Serialize, Deserialize)]
-struct PingerState;
+struct PingerState {
+    id: String,
+}
+impl Identified for PingerState {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
 #[derive(Serialize, Deserialize)]
 enum PingerAction {
     Ping(i64),
 }
-struct PingerInit;
+struct PingerInit {
+    id: String,
+}
+impl Identified for PingerInit {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
 
 impl StateMachine for PingerMachine {
     type State = PingerState;
@@ -180,8 +232,8 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(_id: String, _: PingerInit) -> PingerState {
-        PingerState
+    fn construct(id: String, _: PingerInit) -> PingerState {
+        PingerState { id }
     }
     fn transition(
         state: PingerState,
@@ -191,7 +243,7 @@ impl StateMachine for PingerMachine {
     ) -> anyhow::Result<(PingerState, Effects<Self>)> {
         let PingerAction::Ping(n) = action;
         if *n < 0 {
-            anyhow::bail!("no negative pings"); 
+            anyhow::bail!("no negative pings");
         }
         Ok((
             state,
@@ -220,11 +272,11 @@ async fn outbound() {
     let ponger = PongerMachine::handle();
     let pinger = PingerMachine::handle();
 
-    ponger.maybe_construct("pong1".to_string(), PongerInit).await;
-    pinger.maybe_construct("ping1".to_string(), PingerInit).await;
+    ponger.maybe_construct(PongerInit { id: "pong1".to_string() }).await;
+    pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
 
-    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await; 
-    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await; 
+    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;
+    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await;
 
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(

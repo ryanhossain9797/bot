@@ -1,4 +1,4 @@
-use crate::machine::StateMachine;
+use crate::machine::{EntityId, Identified, StateMachine};
 use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,7 +20,7 @@ struct Entry<SM: StateMachine> {
 }
 
 pub struct StateMachineHandle<SM: StateMachine> {
-    entities: Arc<DashMap<SM::Id, Entry<SM>>>,
+    entities: Arc<DashMap<String, Entry<SM>>>,
     env: Arc<SM::Env>,
     next_incarnation: Arc<AtomicU64>,
 }
@@ -34,20 +34,26 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    pub async fn maybe_construct(&self, id: SM::Id, construction: SM::Construction) {
+    pub async fn maybe_construct(&self, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
-        match self.entities.entry(id.clone()) {
+        let id = construction.get_id().clone();
+        let key = id.get_id_string().to_string();
+        match self.entities.entry(key.clone()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let incarnation = self.next_incarnation.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = mpsc::channel(MAILBOX);
                 let state = SM::construct(id.clone(), construction);
+                assert!(
+                    state.get_id() == &id,
+                    "construct produced a state whose id disagrees with the constructor"
+                );
                 tokio::spawn(run_entity::<SM>(
                     state,
                     rx,
                     self.env.clone(),
                     self.entities.clone(),
-                    id,
+                    key,
                     incarnation,
                     tx.clone(),
                 ));
@@ -60,14 +66,14 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 
     pub async fn act(&self, id: SM::Id, action: SM::Action) {
-        let sender = self.entities.get(&id).map(|e| e.sender.clone());
+        let sender = self.entities.get(id.get_id_string()).map(|e| e.sender.clone());
         if let Some(sender) = sender {
             let _ = sender.send(Envelope::Act(action)).await;
         }
     }
 
     pub async fn delete(&self, id: SM::Id) {
-        let sender = self.entities.get(&id).map(|e| e.sender.clone());
+        let sender = self.entities.get(id.get_id_string()).map(|e| e.sender.clone());
         if let Some(sender) = sender {
             let _ = sender.send(Envelope::Delete).await;
         }
@@ -78,8 +84,8 @@ async fn run_entity<SM: StateMachine>(
     mut state: SM::State,
     mut rx: mpsc::Receiver<Envelope<SM::Action>>,
     env: Arc<SM::Env>,
-    entities: Arc<DashMap<SM::Id, Entry<SM>>>,
-    id: SM::Id,
+    entities: Arc<DashMap<String, Entry<SM>>>,
+    id_string: String,
     incarnation: u64,
     self_tx: mpsc::Sender<Envelope<SM::Action>>,
 ) {
@@ -90,9 +96,10 @@ async fn run_entity<SM: StateMachine>(
     while let Some(msg) = rx.recv().await {
         match msg {
             Envelope::Act(action) => {
-                match SM::transition(state.clone(), &id, env.clone(), &action) {
+                let working = state.clone();
+                match SM::transition(working, state.get_id(), env.clone(), &action) {
                     Ok((next, effects)) => {
-                        state = next; 
+                        state = next;
                         for fut in effects.self_actions {
                             let tx = self_tx.clone();
                             tokio::spawn(async move {
@@ -101,22 +108,22 @@ async fn run_entity<SM: StateMachine>(
                             });
                         }
                         for outbound in effects.outbound {
-                            tokio::spawn(outbound); 
+                            tokio::spawn(outbound);
                         }
                         reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
                     }
-                    Err(_e) => {  }
+                    Err(_e) => {}
                 }
             }
             Envelope::Wakeup(g) => {
                 if g != generation {
-                    continue; 
+                    continue;
                 }
                 match SM::schedule(&state) {
                     Some(s) if s.at <= Utc::now() => {
-                        let _ = self_tx.send(Envelope::Act(s.action)).await; 
+                        let _ = self_tx.send(Envelope::Act(s.action)).await;
                     }
-                    Some(_) => reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx), 
+                    Some(_) => reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx),
                     None => {}
                 }
             }
@@ -127,7 +134,7 @@ async fn run_entity<SM: StateMachine>(
     if let Some(t) = timer.take() {
         t.abort();
     }
-    entities.remove_if(&id, |_, e| e.incarnation == incarnation);
+    entities.remove_if(&id_string, |_, e| e.incarnation == incarnation);
 }
 
 fn reschedule_timer<SM: StateMachine>(
