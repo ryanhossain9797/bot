@@ -8,7 +8,6 @@ mod services;
 mod state_machines;
 mod tools;
 
-use types::bot::BotHandle;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use services::llama_cpp::LlamaCppService;
@@ -22,7 +21,6 @@ use crate::state_machines::conversation_state_machine::init_conversation_state_m
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
-    bot_singleton_handle: BotHandle,
     lance_service: Arc<LanceService>,
     llama_cpp: Arc<LlamaCppService>,
     announce_tool_use: bool,
@@ -38,7 +36,6 @@ async fn init_env() -> anyhow::Result<Env> {
 
     Ok(Env {
         discord_http,
-        bot_singleton_handle: BotHandle::new(),
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,

@@ -19,7 +19,7 @@ pub struct Scheduled<A> {
 }
 
 pub trait StateMachine: Sized + 'static {
-    type State: Identified<Id = Self::Id> + Clone + Serialize + DeserializeOwned + Send + 'static;
+    type State: Clone + Serialize + DeserializeOwned + Send + 'static;
     type Id: EntityId;
     type Action: Serialize + DeserializeOwned + Send + std::fmt::Debug + 'static;
     type Construction: Identified<Id = Self::Id> + Send + 'static;
@@ -28,6 +28,7 @@ pub trait StateMachine: Sized + 'static {
     fn construct(construction: Self::Construction) -> (Self::State, Effects<Self>);
     fn transition(
         state: &Self::State,
+        id: &Self::Id,
         env: &Arc<Self::Env>,
         action: &Self::Action,
     ) -> anyhow::Result<(Self::State, Effects<Self>)>;

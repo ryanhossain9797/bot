@@ -37,10 +37,11 @@ impl StateMachine for ConversationMachine {
 
     fn transition(
         state: &Conversation,
+        id: &ConversationId,
         env: &Arc<Env>,
         action: &ConversationAction,
     ) -> ConversationTransitionResult {
-        conversation_transition(env, state.clone(), action)
+        conversation_transition(env, id, state.clone(), action)
     }
 
     fn schedule(state: &Conversation) -> Option<Scheduled<ConversationAction>> {
@@ -73,7 +74,6 @@ fn handle_outcome(
     if response.tool_calls.is_empty() {
         Ok((
             Conversation {
-                id: conversation_id.clone(),
                 state: ConversationState::Idle {
                     recent_conversation: Some((recent_conversation, Utc::now())),
                 },
@@ -99,7 +99,6 @@ fn handle_outcome(
 
         Ok((
             Conversation {
-                id: conversation_id.clone(),
                 state: ConversationState::RunningTools {
                     recent_conversation,
                     tool_rounds: tool_rounds + 1,
@@ -118,11 +117,10 @@ fn handle_outcome(
 
 fn conversation_transition(
     env: &Arc<Env>,
+    conversation_id: &ConversationId,
     conversation: Conversation,
     action: &ConversationAction,
 ) -> ConversationTransitionResult {
-    let conversation_id = conversation.id.clone();
-
     let state = match (conversation.state, action) {
         (_, ConversationAction::ForceReset) => Ok((
             Conversation {
@@ -214,7 +212,7 @@ fn conversation_transition(
                     }
                     None => handle_outcome(
                         env,
-                        &conversation_id,
+                        conversation_id,
                         response.clone(),
                         updated_conversation,
                         conversation.pending,
@@ -244,7 +242,7 @@ fn conversation_transition(
             ConversationAction::MessageSent(_res),
         ) => handle_outcome(
             env,
-            &conversation_id,
+            conversation_id,
             outcome,
             recent_conversation,
             conversation.pending,
@@ -304,7 +302,6 @@ fn conversation_transition(
 
                 Ok((
                     Conversation {
-                        id: conversation_id.clone(),
                         state: ConversationState::AwaitingLLMDecision {
                             history,
                             current_input,
@@ -440,7 +437,6 @@ fn post_transition(
 
     Ok((
         Conversation {
-            id: conversation.id,
             state: ConversationState::AwaitingLLMDecision {
                 history,
                 current_input,
@@ -479,7 +475,6 @@ fn construct_conversation(
 ) -> (Conversation, Effects<ConversationMachine>) {
     (
         Conversation {
-            id: constructor.id,
             pending: Vec::new(),
             state: ConversationState::default(),
             last_transition: Utc::now(),

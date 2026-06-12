@@ -37,23 +37,19 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
 
     pub async fn maybe_construct(&self, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
-        let key = construction.get_id().get_id_string();
-        match self.entities.entry(key.clone()) {
+        let id = construction.get_id().clone();
+        match self.entities.entry(id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let incarnation = self.next_incarnation.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = mpsc::channel(MAILBOX);
                 let (state, effects) = SM::construct(construction);
-                assert!(
-                    state.get_id().get_id_string() == key,
-                    "construct produced a state whose id disagrees with the constructor"
-                );
                 tokio::spawn(run_entity::<SM>(
                     state,
                     rx,
                     self.env.clone(),
                     self.entities.clone(),
-                    key,
+                    id,
                     incarnation,
                     tx.clone(),
                     effects,
@@ -92,7 +88,7 @@ async fn run_entity<SM: StateMachine>(
     mut rx: mpsc::Receiver<Envelope<SM::Action>>,
     env: Arc<SM::Env>,
     entities: Arc<DashMap<String, Entry<SM>>>,
-    id_string: String,
+    id: SM::Id,
     incarnation: u64,
     self_tx: mpsc::Sender<Envelope<SM::Action>>,
     initial: Effects<SM>,
@@ -116,7 +112,7 @@ async fn run_entity<SM: StateMachine>(
         );
         match msg {
             Envelope::Act(action) => {
-                match SM::transition(&state, &env, &action) {
+                match SM::transition(&state, &id, &env, &action) {
                     Ok((next, effects)) => {
                         state = next;
                         spawn_effects::<SM>(effects, &self_tx);
@@ -144,7 +140,7 @@ async fn run_entity<SM: StateMachine>(
     if let Some(t) = timer.take() {
         t.abort();
     }
-    entities.remove_if(&id_string, |_, e| e.incarnation == incarnation);
+    entities.remove_if(&id.get_id_string(), |_, e| e.incarnation == incarnation);
 }
 
 fn spawn_effects<SM: StateMachine>(

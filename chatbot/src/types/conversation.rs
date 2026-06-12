@@ -125,19 +125,11 @@ impl ConversationMessage {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
-    pub id: ConversationId,
     pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
         pub is_group: bool,
         pub bot_identity: String,
-}
-
-impl re_framework::Identified for Conversation {
-    type Id = ConversationId;
-    fn get_id(&self) -> &ConversationId {
-        &self.id
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

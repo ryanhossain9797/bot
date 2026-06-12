@@ -26,16 +26,8 @@ struct CounterMachine;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CounterState {
-    id: String,
     total: i64,
     tick_at: Option<DateTime<Utc>>,
-}
-
-impl Identified for CounterState {
-    type Id = String;
-    fn get_id(&self) -> &String {
-        &self.id
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,7 +59,6 @@ impl StateMachine for CounterMachine {
     fn construct(init: CounterInit) -> (CounterState, Effects<Self>) {
         (
             CounterState {
-                id: init.id,
                 total: init.start,
                 tick_at: Some(Utc::now() + Duration::milliseconds(50)),
             },
@@ -77,6 +68,7 @@ impl StateMachine for CounterMachine {
 
     fn transition(
         state: &CounterState,
+        _id: &String,
         env: &Arc<CounterEnv>,
         action: &CounterAction,
     ) -> anyhow::Result<(CounterState, Effects<Self>)> {
@@ -157,15 +149,7 @@ static PINGER: OnceLock<StateMachineHandle<PingerMachine>> = OnceLock::new();
 
 struct PongerMachine;
 #[derive(Clone, Serialize, Deserialize)]
-struct PongerState {
-    id: String,
-}
-impl Identified for PongerState {
-    type Id = String;
-    fn get_id(&self) -> &String {
-        &self.id
-    }
-}
+struct PongerState;
 #[derive(Debug, Serialize, Deserialize)]
 enum PongerAction {
     Pong(i64),
@@ -186,11 +170,12 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(init: PongerInit) -> (PongerState, Effects<Self>) {
-        (PongerState { id: init.id }, Effects::none())
+    fn construct(_init: PongerInit) -> (PongerState, Effects<Self>) {
+        (PongerState, Effects::none())
     }
     fn transition(
         state: &PongerState,
+        _id: &String,
         env: &Arc<RtEnv>,
         action: &PongerAction,
     ) -> anyhow::Result<(PongerState, Effects<Self>)> {
@@ -208,15 +193,7 @@ impl StateMachine for PongerMachine {
 
 struct PingerMachine;
 #[derive(Clone, Serialize, Deserialize)]
-struct PingerState {
-    id: String,
-}
-impl Identified for PingerState {
-    type Id = String;
-    fn get_id(&self) -> &String {
-        &self.id
-    }
-}
+struct PingerState;
 #[derive(Debug, Serialize, Deserialize)]
 enum PingerAction {
     Ping(i64),
@@ -237,14 +214,15 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(init: PingerInit) -> (PingerState, Effects<Self>) {
+    fn construct(_init: PingerInit) -> (PingerState, Effects<Self>) {
         (
-            PingerState { id: init.id },
+            PingerState,
             Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0)),
         )
     }
     fn transition(
         state: &PingerState,
+        _id: &String,
         _env: &Arc<RtEnv>,
         action: &PingerAction,
     ) -> anyhow::Result<(PingerState, Effects<Self>)> {
