@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 
 impl EntityId for String {
-    fn get_id_string(&self) -> &str {
-        self
+    fn get_id_string(&self) -> String {
+        self.clone()
     }
 }
 
@@ -38,7 +38,7 @@ impl Identified for CounterState {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 enum CounterAction {
     Add(i64),
     Ping,
@@ -166,7 +166,7 @@ impl Identified for PongerState {
         &self.id
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 enum PongerAction {
     Pong(i64),
 }
@@ -217,7 +217,7 @@ impl Identified for PingerState {
         &self.id
     }
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 enum PingerAction {
     Ping(i64),
 }

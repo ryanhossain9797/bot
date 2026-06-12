@@ -37,7 +37,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
 
     pub async fn maybe_construct(&self, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
-        let key = construction.get_id().get_id_string().to_string();
+        let key = construction.get_id().get_id_string();
         match self.entities.entry(key.clone()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
@@ -67,14 +67,20 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 
     pub async fn act(&self, id: SM::Id, action: SM::Action) {
-        let sender = self.entities.get(id.get_id_string()).map(|e| e.sender.clone());
-        if let Some(sender) = sender {
-            let _ = sender.send(Envelope::Act(action)).await;
+        let sender = self.entities.get(&id.get_id_string()).map(|e| e.sender.clone());
+        match sender {
+            Some(sender) => {
+                let _ = sender.send(Envelope::Act(action)).await;
+            }
+            None => eprintln!(
+                "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
+                id.get_id_string()
+            ),
         }
     }
 
     pub async fn delete(&self, id: SM::Id) {
-        let sender = self.entities.get(id.get_id_string()).map(|e| e.sender.clone());
+        let sender = self.entities.get(&id.get_id_string()).map(|e| e.sender.clone());
         if let Some(sender) = sender {
             let _ = sender.send(Envelope::Delete).await;
         }
@@ -97,6 +103,17 @@ async fn run_entity<SM: StateMachine>(
     reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
 
     while let Some(msg) = rx.recv().await {
+        let label = match &msg {
+            Envelope::Act(action) => format!("Action: {action:?}"),
+            Envelope::Wakeup(_) => "Wakeup".to_string(),
+            Envelope::Delete => "Delete".to_string(),
+        };
+        println!(
+            "TRANSITION AT {} - StateMachine: {} - {}",
+            Utc::now(),
+            std::any::type_name::<SM::State>().rsplit("::").next().unwrap_or("?"),
+            label
+        );
         match msg {
             Envelope::Act(action) => {
                 match SM::transition(&state, &env, &action) {

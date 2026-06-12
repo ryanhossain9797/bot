@@ -9,7 +9,7 @@ pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
 
 pub const MAX_TOOL_ROUNDS: usize = 10;
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Platform {
     Telegram,
     Discord,
@@ -32,12 +32,18 @@ impl Platform {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
 pub struct ConversationId(pub Platform, pub String);
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}_{}", self.0.to_string(), self.1)
+    }
+}
+
+impl re_framework::EntityId for ConversationId {
+    fn get_id_string(&self) -> String {
+        self.to_string()
     }
 }
 
@@ -95,8 +101,16 @@ pub struct ConversationMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConstructor {
+        pub id: ConversationId,
         pub is_group: bool,
         pub bot_identity: String,
+}
+
+impl re_framework::Identified for ConversationConstructor {
+    type Id = ConversationId;
+    fn get_id(&self) -> &ConversationId {
+        &self.id
+    }
 }
 
 impl ConversationMessage {
@@ -111,11 +125,19 @@ impl ConversationMessage {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
+    pub id: ConversationId,
     pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
         pub is_group: bool,
         pub bot_identity: String,
+}
+
+impl re_framework::Identified for Conversation {
+    type Id = ConversationId;
+    fn get_id(&self) -> &ConversationId {
+        &self.id
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,7 +277,7 @@ impl HistoryEntry {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
     ForceReset,
     NewMessage {

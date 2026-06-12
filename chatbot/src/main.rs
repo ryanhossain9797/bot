@@ -9,7 +9,6 @@ mod state_machines;
 mod tools;
 
 use types::bot::BotHandle;
-use once_cell::sync::OnceCell;
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use services::llama_cpp::LlamaCppService;
@@ -17,10 +16,11 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::services::lance_db::LanceService;
+use crate::state_machines::conversation_state_machine::init_conversation_state_machine;
 
 #[allow(dead_code)]
 #[derive(Clone)]
-struct Env {
+pub struct Env {
     discord_http: Arc<Http>,
     bot_singleton_handle: BotHandle,
     lance_service: Arc<LanceService>,
@@ -28,32 +28,27 @@ struct Env {
     announce_tool_use: bool,
 }
 
-static ENV: OnceCell<Arc<Env>> = OnceCell::new();
-
-async fn init_env() -> anyhow::Result<Arc<Env>> {
+async fn init_env() -> anyhow::Result<Env> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
     let llama_cpp_service = LlamaCppService::new().await?;
     let lance_service = LanceService::new().await;
 
-
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
-    Ok(Arc::new(Env {
+    Ok(Env {
         discord_http,
         bot_singleton_handle: BotHandle::new(),
         lance_service: Arc::new(lance_service),
         llama_cpp: Arc::new(llama_cpp_service),
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
-    }))
+    })
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
     let env = init_env().await?;
-    if ENV.set(env.clone()).is_err() {
-        panic!("ENV should only be initialized once");
-    }
+    init_conversation_state_machine(env);
 
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 

@@ -1,9 +1,9 @@
-use framework::StateMachineHandle;
+use re_framework::StateMachine;
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    state_machines::conversation_state_machine::CONVERSATION_STATE_MACHINE,
+    state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
 };
 
@@ -20,11 +20,8 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
         .clone()
         .unwrap_or_else(|| bot_user.name.clone());
 
-    let conversation_state_machine = CONVERSATION_STATE_MACHINE.clone();
-
     let client = Client::builder(discord_token, intents)
         .event_handler(Handler {
-            conversation_state_machine,
             bot_user_id,
             bot_name,
         })
@@ -39,9 +36,7 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 }
 
 struct Handler {
-    conversation_state_machine:
-        StateMachineHandle<ConversationId, ConversationConstructor, ConversationAction>,
-        bot_user_id: u64,
+    bot_user_id: u64,
     bot_name: String,
 }
 
@@ -71,21 +66,19 @@ impl EventHandler for Handler {
         let conversation_id =
             ConversationId(Platform::Discord, message.channel_id.get().to_string());
 
-        self.conversation_state_machine
-            .maybe_construct(
-                conversation_id.clone(),
-                ConversationConstructor {
-                    is_group,
-                    bot_identity,
-                },
-            )
+        let handle = ConversationMachine::handle();
+
+        handle
+            .maybe_construct(ConversationConstructor {
+                id: conversation_id.clone(),
+                is_group,
+                bot_identity,
+            })
             .await;
 
         let action = ConversationAction::NewMessage { msg, user_id, name };
 
-        self.conversation_state_machine
-            .act(conversation_id, action)
-            .await;
+        handle.act(conversation_id, action).await;
     }
 }
 

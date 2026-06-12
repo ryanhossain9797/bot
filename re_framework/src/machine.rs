@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 pub trait EntityId: Clone + Eq + Serialize + DeserializeOwned + Send + 'static {
-    fn get_id_string(&self) -> &str;
+    fn get_id_string(&self) -> String;
 }
 
 pub trait Identified {
@@ -21,7 +21,7 @@ pub struct Scheduled<A> {
 pub trait StateMachine: Sized + 'static {
     type State: Identified<Id = Self::Id> + Clone + Serialize + DeserializeOwned + Send + 'static;
     type Id: EntityId;
-    type Action: Serialize + DeserializeOwned + Send + 'static;
+    type Action: Serialize + DeserializeOwned + Send + std::fmt::Debug + 'static;
     type Construction: Identified<Id = Self::Id> + Send + 'static;
     type Env: Send + Sync + 'static;
 
