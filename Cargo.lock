@@ -5639,6 +5639,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "re_framework"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dashmap 6.1.0",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "readability"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
