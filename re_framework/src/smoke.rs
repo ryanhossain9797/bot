@@ -90,17 +90,20 @@ impl StateMachine for CounterMachine {
 #[tokio::test]
 async fn smoke() {
     let obs = Arc::new(Mutex::new(Obs::default()));
-    let sm = StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: obs.clone() });
-    COUNTER.set(sm.clone()).ok().expect("set COUNTER once");
+    COUNTER
+        .set(StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: obs.clone() }))
+        .ok()
+        .expect("set COUNTER once");
+    let sm = CounterMachine::handle();
 
     sm.maybe_construct("c1".to_string(), CounterInit { start: 0 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(5)).await; 
+    sm.act("c1".to_string(), CounterAction::Add(5)).await;
 
     sm.maybe_construct("c1".to_string(), CounterInit { start: 999 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(3)).await; 
+    sm.act("c1".to_string(), CounterAction::Add(3)).await;
 
-    sm.act("c1".to_string(), CounterAction::Add(-1000)).await; 
-    sm.act("c1".to_string(), CounterAction::Ping).await; 
+    sm.act("c1".to_string(), CounterAction::Add(-1000)).await;
+    sm.act("c1".to_string(), CounterAction::Ping).await;
 
     tokio::time::sleep(StdDuration::from_millis(120)).await;
 
@@ -206,10 +209,16 @@ impl StateMachine for PingerMachine {
 #[tokio::test]
 async fn outbound() {
     let received = Arc::new(Mutex::new(Vec::<i64>::new()));
-    let ponger = StateMachineHandle::<PongerMachine>::new(RtEnv { received: received.clone() });
-    PONGER.set(ponger.clone()).ok().expect("set PONGER once");
-    let pinger = StateMachineHandle::<PingerMachine>::new(RtEnv { received: received.clone() });
-    PINGER.set(pinger.clone()).ok().expect("set PINGER once");
+    PONGER
+        .set(StateMachineHandle::<PongerMachine>::new(RtEnv { received: received.clone() }))
+        .ok()
+        .expect("set PONGER once");
+    PINGER
+        .set(StateMachineHandle::<PingerMachine>::new(RtEnv { received: received.clone() }))
+        .ok()
+        .expect("set PINGER once");
+    let ponger = PongerMachine::handle();
+    let pinger = PingerMachine::handle();
 
     ponger.maybe_construct("pong1".to_string(), PongerInit).await;
     pinger.maybe_construct("ping1".to_string(), PingerInit).await;

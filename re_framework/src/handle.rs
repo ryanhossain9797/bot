@@ -25,16 +25,6 @@ pub struct StateMachineHandle<SM: StateMachine> {
     next_incarnation: Arc<AtomicU64>,
 }
 
-impl<SM: StateMachine> Clone for StateMachineHandle<SM> {
-    fn clone(&self) -> Self {
-        StateMachineHandle {
-            entities: self.entities.clone(),
-            env: self.env.clone(),
-            next_incarnation: self.next_incarnation.clone(),
-        }
-    }
-}
-
 impl<SM: StateMachine> StateMachineHandle<SM> {
     pub fn new(env: SM::Env) -> Self {
         StateMachineHandle {
@@ -95,7 +85,7 @@ async fn run_entity<SM: StateMachine>(
 ) {
     let mut generation: u64 = 0;
     let mut timer: Option<JoinHandle<()>> = None;
-    arm::<SM>(&state, &mut generation, &mut timer, &self_tx);
+    reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
 
     while let Some(msg) = rx.recv().await {
         match msg {
@@ -113,7 +103,7 @@ async fn run_entity<SM: StateMachine>(
                         for outbound in effects.outbound {
                             tokio::spawn(outbound); 
                         }
-                        arm::<SM>(&state, &mut generation, &mut timer, &self_tx);
+                        reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
                     }
                     Err(_e) => {  }
                 }
@@ -126,7 +116,7 @@ async fn run_entity<SM: StateMachine>(
                     Some(s) if s.at <= Utc::now() => {
                         let _ = self_tx.send(Envelope::Act(s.action)).await; 
                     }
-                    Some(_) => arm::<SM>(&state, &mut generation, &mut timer, &self_tx), 
+                    Some(_) => reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx), 
                     None => {}
                 }
             }
@@ -140,7 +130,7 @@ async fn run_entity<SM: StateMachine>(
     entities.remove_if(&id, |_, e| e.incarnation == incarnation);
 }
 
-fn arm<SM: StateMachine>(
+fn reschedule_timer<SM: StateMachine>(
     state: &SM::State,
     generation: &mut u64,
     timer: &mut Option<JoinHandle<()>>,
