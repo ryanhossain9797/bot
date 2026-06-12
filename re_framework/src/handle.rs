@@ -8,34 +8,23 @@ use tokio::task::JoinHandle;
 
 const MAILBOX: usize = 64;
 
-// The wire type into an entity's mailbox. Domain actions ride in `Act`; the rest are framework
-// meta-actions the runtime delivers through the same channel.
 enum Envelope<A> {
     Act(A),
-    // A timer firing. Carries no action — the runtime re-evaluates schedule() against current state
-    // and fires the fresh action only if overdue. The u64 is the arming GENERATION; a wakeup whose
-    // generation no longer matches is from a superseded arm and is dropped.
     Wakeup(u64),
     Delete,
 }
 
-// One registry entry: the sender into the entity's task, plus its incarnation — an optimistic-
-// concurrency token (cf. a SQL rowversion) so a stopping entity only removes itself if it's still
-// the registered occupant, never clobbering a successor re-created under the same id.
 struct Entry<SM: StateMachine> {
     sender: mpsc::Sender<Envelope<SM::Action>>,
     incarnation: u64,
 }
 
-// The runtime for one state-machine kind: the handle the domain holds (in a OnceLock). Owns the
-// entity store (Arc'd, so every clone shares it) and the env. Cloneable.
 pub struct StateMachineHandle<SM: StateMachine> {
     entities: Arc<DashMap<SM::Id, Entry<SM>>>,
     env: Arc<SM::Env>,
     next_incarnation: Arc<AtomicU64>,
 }
 
-// Hand-written (not derived) so cloning only bumps the Arcs — it must not require SM or SM::Env: Clone.
 impl<SM: StateMachine> Clone for StateMachineHandle<SM> {
     fn clone(&self) -> Self {
         StateMachineHandle {
@@ -55,9 +44,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    // Atomic get-or-create: the DashMap entry lock makes check-and-spawn race-free, so there is no
-    // "loser" to clean up. If the id already exists this is a no-op (idempotent — live state is not
-    // reset).
     pub async fn maybe_construct(&self, id: SM::Id, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
         match self.entities.entry(id.clone()) {
@@ -84,8 +70,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 
     pub async fn act(&self, id: SM::Id, action: SM::Action) {
-        // Clone the sender out of the guard, then drop the guard before awaiting — never hold a
-        // DashMap shard lock across an await.
         let sender = self.entities.get(&id).map(|e| e.sender.clone());
         if let Some(sender) = sender {
             let _ = sender.send(Envelope::Act(action)).await;
@@ -100,9 +84,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 }
 
-// The per-entity task. Owns the state, processes its mailbox serially, runs the value/Result
-// transition (commit + effects only on Ok), and manages a single re-evaluating timer. Holds its own
-// self-sender for loop-backs and timer wakeups, so self-messaging needs no registry lookup.
 async fn run_entity<SM: StateMachine>(
     mut state: SM::State,
     mut rx: mpsc::Receiver<Envelope<SM::Action>>,
@@ -121,7 +102,7 @@ async fn run_entity<SM: StateMachine>(
             Envelope::Act(action) => {
                 match SM::transition(state.clone(), &id, env.clone(), &action) {
                     Ok((next, effects)) => {
-                        state = next; // commit — everything below fires only after this, only on Ok
+                        state = next; 
                         for fut in effects.self_actions {
                             let tx = self_tx.clone();
                             tokio::spawn(async move {
@@ -130,22 +111,22 @@ async fn run_entity<SM: StateMachine>(
                             });
                         }
                         for outbound in effects.outbound {
-                            tokio::spawn(outbound); // fire-and-forget (e.g. a cross-machine send)
+                            tokio::spawn(outbound); 
                         }
                         arm::<SM>(&state, &mut generation, &mut timer, &self_tx);
                     }
-                    Err(_e) => { /* invalid (state, action): no commit, no effects, no re-arm */ }
+                    Err(_e) => {  }
                 }
             }
             Envelope::Wakeup(g) => {
                 if g != generation {
-                    continue; // superseded arm
+                    continue; 
                 }
                 match SM::schedule(&state) {
                     Some(s) if s.at <= Utc::now() => {
-                        let _ = self_tx.send(Envelope::Act(s.action)).await; // overdue → fire fresh
+                        let _ = self_tx.send(Envelope::Act(s.action)).await; 
                     }
-                    Some(_) => arm::<SM>(&state, &mut generation, &mut timer, &self_tx), // not yet due
+                    Some(_) => arm::<SM>(&state, &mut generation, &mut timer, &self_tx), 
                     None => {}
                 }
             }
@@ -153,17 +134,12 @@ async fn run_entity<SM: StateMachine>(
         }
     }
 
-    // Cleanup on exit: abort the timer and deregister — but only if we're still the registered
-    // occupant (incarnation guard), so we never clobber a successor.
     if let Some(t) = timer.take() {
         t.abort();
     }
     entities.remove_if(&id, |_, e| e.incarnation == incarnation);
 }
 
-// (Re)arm the single timer from current state: abort any running one, bump the generation, then if
-// the state schedules a self-action, spawn a task that sleeps to the deadline and fires a
-// content-free Wakeup(generation) back. The action is NOT captured — it is re-derived on wake.
 fn arm<SM: StateMachine>(
     state: &SM::State,
     generation: &mut u64,

@@ -1,9 +1,3 @@
-// End-to-end smoke test of the runtime: idempotent maybe_construct, the value/Result transition
-// (including Err = no-op), a self-action loop-back, an absolute-deadline timer wakeup, delete-then-
-// cleanup, and a cross-machine outbound send. State is observed via a shared log on the Env.
-//
-// Note the shape: the STATE is plain data; a separate marker type (CounterMachine, …) implements
-// StateMachine, including handle() backed by the machine's own OnceLock.
 
 use crate::{Effects, Scheduled, StateMachine, StateMachineHandle};
 use chrono::{DateTime, Duration, Utc};
@@ -11,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 
-// ---- core: idempotency, Result no-op, self-action loop-back, timer, delete ----
 
 #[derive(Default)]
 struct Obs {
@@ -36,7 +29,7 @@ struct CounterState {
 #[derive(Serialize, Deserialize)]
 enum CounterAction {
     Add(i64),
-    Ping, // returns a self-action that loops back Add(10)
+    Ping, 
     Tick,
 }
 
@@ -67,7 +60,7 @@ impl StateMachine for CounterMachine {
         match action {
             CounterAction::Add(n) => {
                 if state.total + n < 0 {
-                    anyhow::bail!("would go negative"); // invalid → Err → no-op
+                    anyhow::bail!("would go negative"); 
                 }
                 state.total += n;
                 env.obs.lock().unwrap().totals.push(state.total);
@@ -101,14 +94,13 @@ async fn smoke() {
     COUNTER.set(sm.clone()).ok().expect("set COUNTER once");
 
     sm.maybe_construct("c1".to_string(), CounterInit { start: 0 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(5)).await; // total 5
+    sm.act("c1".to_string(), CounterAction::Add(5)).await; 
 
-    // idempotent re-construct: start:999 ignored, live state survives
     sm.maybe_construct("c1".to_string(), CounterInit { start: 999 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(3)).await; // total 8 (NOT reset)
+    sm.act("c1".to_string(), CounterAction::Add(3)).await; 
 
-    sm.act("c1".to_string(), CounterAction::Add(-1000)).await; // Err → no-op
-    sm.act("c1".to_string(), CounterAction::Ping).await; // self-action → total 18
+    sm.act("c1".to_string(), CounterAction::Add(-1000)).await; 
+    sm.act("c1".to_string(), CounterAction::Ping).await; 
 
     tokio::time::sleep(StdDuration::from_millis(120)).await;
 
@@ -120,13 +112,12 @@ async fn smoke() {
 
     sm.delete("c1".to_string()).await;
     tokio::time::sleep(StdDuration::from_millis(20)).await;
-    sm.act("c1".to_string(), CounterAction::Add(1)).await; // entity gone → dropped
+    sm.act("c1".to_string(), CounterAction::Add(1)).await; 
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     assert_eq!(obs.lock().unwrap().totals, vec![5, 8, 18], "post-delete act dropped");
 }
 
-// ---- cross-machine outbound: Pinger sends a Pong to a Ponger after its transition commits ----
 
 struct RtEnv {
     received: Arc<Mutex<Vec<i64>>>,
@@ -197,7 +188,7 @@ impl StateMachine for PingerMachine {
     ) -> anyhow::Result<(PingerState, Effects<Self>)> {
         let PingerAction::Ping(n) = action;
         if *n < 0 {
-            anyhow::bail!("no negative pings"); // Err → transition discarded → NO outbound fires
+            anyhow::bail!("no negative pings"); 
         }
         Ok((
             state,
@@ -223,8 +214,8 @@ async fn outbound() {
     ponger.maybe_construct("pong1".to_string(), PongerInit).await;
     pinger.maybe_construct("ping1".to_string(), PingerInit).await;
 
-    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await; // commits → outbound Pong(42)
-    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await; // Err → no outbound
+    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await; 
+    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await; 
 
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(
