@@ -1,6 +1,3 @@
-// What a domain user of the framework writes: pure state types (each with its OWN Env), a
-// StateMachine impl, and calls to act_maybe_construct / act / delete. No macros, no concrete entity
-// types — the framework's single generic wrapper is the actor for every state machine.
 mod framework;
 
 use chrono::{DateTime, Utc};
@@ -12,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
-// ===================== entity: Convo =====================
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ConvoId(pub String);
@@ -27,7 +23,6 @@ impl EntityId for ConvoId {
 pub struct Convo {
     id: ConvoId,
     count: i64,
-    // Absolute deadline for the next tick, stored in state so schedule() returns a stable instant.
     tick_at: Option<DateTime<Utc>>,
 }
 
@@ -39,7 +34,6 @@ pub enum ConvoAction {
 
 pub struct ConvoConstruction;
 
-// Convo's own env — a plain type; the framework only needs Send + Sync + 'static to store it.
 pub struct ConvoEnv {
     greeting: String,
 }
@@ -89,7 +83,6 @@ impl StateMachine for Convo {
     }
 }
 
-// ===================== entity: Counter =====================
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CounterId(pub String);
@@ -157,12 +150,9 @@ impl StateMachine for Counter {
     }
 }
 
-// ===================== driver =====================
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // main provides each state machine's env at startup — the framework builds none of its own.
-    // (Any async setup a real env needs — loading a model, opening a DB — happens here, in main.)
     register_env::<Convo>(ConvoEnv {
         greeting: "TerminalAlphaBeta".to_string(),
     });
@@ -172,7 +162,6 @@ async fn main() -> anyhow::Result<()> {
 
     construct::<Counter>(CounterId("counter:1".to_string()), CounterInit { start: 10 })?;
 
-    // First message: act_maybe_construct creates convo:1, then acts (count -> 1).
     act_maybe_construct::<Convo>(
         ConvoId("convo:1".to_string()),
         ConvoConstruction,
@@ -181,8 +170,6 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Second message: maybe_construct finds the existing entity and just acts (count -> 2, NOT reset
-    // to a fresh 0). This is the idempotency fix — a re-construct does not overwrite live state.
     act_maybe_construct::<Convo>(
         ConvoId("convo:1".to_string()),
         ConvoConstruction,
@@ -191,7 +178,6 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Framework meta-action: tear the Counter down, then prove a later domain action misses cleanly.
     delete::<Counter>("counter:1").await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
     act::<Counter>("counter:1", CounterAction::Add(1)).await?;

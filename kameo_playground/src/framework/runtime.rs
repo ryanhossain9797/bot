@@ -9,8 +9,6 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
-// One env per state-machine type, keyed by TypeId. Stored as the concrete `Arc<S::Env>` behind `Any`
-// so transition can be handed the concrete env (it needs to read real fields, not a `dyn`).
 type EnvMap = HashMap<TypeId, Box<dyn Any + Send + Sync>>;
 static ENVS: OnceLock<RwLock<EnvMap>> = OnceLock::new();
 
@@ -33,13 +31,8 @@ fn env<S: StateMachine>() -> Arc<S::Env> {
         .expect("env not registered — call <StateMachine>::bootstrap() at startup")
 }
 
-// The single generic actor. Wraps the pure domain state with the framework's per-entity runtime
-// bookkeeping. There is no per-entity concrete type and no macro: this one type is the kameo actor
-// for every state machine.
 pub struct StateWrapper<S: StateMachine> {
     state: S,
-    // Bumped on every arm. Stamped onto the Wakeup the timer fires; a wakeup whose generation no
-    // longer matches is from a superseded arm and is ignored.
     generation: u64,
     timer: Option<tokio::task::JoinHandle<()>>,
 }
@@ -52,10 +45,6 @@ impl<S: StateMachine> Actor for StateWrapper<S> {
         Ok(args)
     }
 
-    // Runs on EVERY stop — Delete, panic, or last-ref-drop (the act_maybe_construct loser). Abort the
-    // timer and deregister, but deregister BY ID, not by name: remove the entry only if it still holds
-    // our id. A blind remove(name) would clobber a successor re-created under the same name, or (for
-    // the never-registered loser) clobber the winner. remove_by_id no-ops in both cases.
     async fn on_stop(
         &mut self,
         actor_ref: WeakActorRef<Self>,
@@ -75,7 +64,7 @@ impl<S: StateMachine> Message<Envelope<S::Action>> for StateWrapper<S> {
         match envelope {
             Envelope::Act(action) => self.dispatch(action),
             Envelope::Wakeup(generation) => self.on_wakeup(generation),
-            Envelope::Delete => ctx.stop(), // on_stop aborts the timer and deregisters by id
+            Envelope::Delete => ctx.stop(), 
         }
     }
 }
@@ -93,8 +82,6 @@ impl<S: StateMachine> StateWrapper<S> {
         self.state.id().id_string()
     }
 
-    // Value-in / value-out: run the transition on a CLONE, and commit + fire effects ONLY on a valid
-    // new state. An Err leaves the live state untouched — no commit, no effects, no re-arm.
     fn dispatch(&mut self, action: S::Action) {
         match self.state.clone().transition(env::<S>(), &action) {
             Ok((next, effects)) => {
@@ -105,12 +92,12 @@ impl<S: StateMachine> StateWrapper<S> {
                     let id = id.clone();
                     tokio::spawn(async move {
                         let next = fut.await;
-                        let _ = act::<S>(&id, next).await; // loop back to this entity
+                        let _ = act::<S>(&id, next).await; 
                     });
                 }
                 for out in effects.outbound {
                     tokio::spawn(async move {
-                        let _ = out.deliver().await; // route to its target entity
+                        let _ = out.deliver().await; 
                     });
                 }
 
@@ -122,8 +109,6 @@ impl<S: StateMachine> StateWrapper<S> {
         }
     }
 
-    // A timer fired. Drop it if from a superseded arm; otherwise re-evaluate the schedule against
-    // CURRENT state and fire the fresh action only if overdue, else re-arm.
     fn on_wakeup(&mut self, generation: u64) {
         if generation != self.generation {
             println!(
@@ -140,9 +125,6 @@ impl<S: StateMachine> StateWrapper<S> {
         }
     }
 
-    // (Re)arm the single timer from current state: abort any running one, bump the generation, then
-    // if the state schedules a self-action, spawn a task that sleeps to the deadline and fires a
-    // content-free Wakeup(generation) back. The action is NOT captured — it is re-derived on wake.
     fn arm(&mut self) {
         if let Some(handle) = self.timer.take() {
             handle.abort();
@@ -162,9 +144,6 @@ impl<S: StateMachine> StateWrapper<S> {
     }
 }
 
-// Construct an entity and register it under its id. Idempotent: a lost race (the name got registered
-// between our check and ours) surfaces as NameAlreadyRegistered, which we treat as success — the
-// just-spawned loser drops here and self-stops, and the existing entity stays live.
 pub fn construct<S: StateMachine>(id: S::Id, construction: S::Construction) -> anyhow::Result<()> {
     let key = id.id_string();
     let state = S::construct(id, construction);
@@ -188,9 +167,6 @@ pub async fn act<S: StateMachine>(id: &str, action: S::Action) -> anyhow::Result
     Ok(())
 }
 
-// Get-or-create then act, in one step: look up by id; if absent, construct (idempotent); then act on
-// whichever entity exists. This is the only ingestion entry point — it removes the construct→act
-// window entirely, since the action always rides along with the create.
 pub async fn act_maybe_construct<S: StateMachine>(
     id: S::Id,
     construction: S::Construction,
