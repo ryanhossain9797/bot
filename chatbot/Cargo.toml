@@ -9,7 +9,7 @@ edition = "2021"
 llama-cpp-2 = { version = "=0.1.146", features = ["vulkan"] } # stick to this version for now
 num_cpus = "1.16"
 tokio = { version = "1.48", features = ["full"] }
-framework = { path = "../framework" }
+re_framework = { path = "../re_framework" }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 once_cell = "1.21"
