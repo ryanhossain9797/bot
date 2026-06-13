@@ -58,6 +58,14 @@ fn session_context_block(
         lines.push(note);
     }
 
+    if is_group {
+        lines.push(
+            "Reminders: reply only if your id is @mentioned — otherwise reply with exactly `<empty>`; match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
+        );
+    } else {
+        lines.push("Reminder: you are Terminal Alpha Beta.".to_string());
+    }
+
     json!({ "role": "user", "content": lines.join("\n") })
 }
 
