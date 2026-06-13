@@ -26,7 +26,7 @@ const MAX_THINKING_TOKENS: usize = 1000;
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 
 const THINKING_FORCE_CLOSE: &str =
-    "\n\nWait — I'm going in circles. I have enough to answer the user now, so I'll stop thinking and respond.\n</think>\n\n";
+    "\n\nWait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.\n</think>\n\n";
 
 fn run_generation_text(
     model: &LlamaModel,
