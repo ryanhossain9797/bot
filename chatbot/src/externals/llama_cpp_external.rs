@@ -7,6 +7,7 @@ use crate::{
     Env,
 };
 use chrono::Utc;
+use llama_cpp_2::mtmd::mtmd_default_marker;
 use serde_json::{json, Value};
 
 use std::sync::Arc;
@@ -67,21 +68,29 @@ fn build_conversation(
     max_tool_rounds: usize,
     is_group: bool,
     bot_identity: &str,
-) -> Value {
+) -> (Value, Vec<Arc<Vec<u8>>>) {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
         .unwrap_or_default();
 
+    let marker = mtmd_default_marker();
     let mut messages: Vec<Value> = Vec::new();
+    let mut images: Vec<Arc<Vec<u8>>> = Vec::new();
 
     for entry in &history {
         match entry {
-            HistoryEntry::Input(input) => messages.extend(input.to_openai_messages()),
+            HistoryEntry::Input(input) => {
+                let (msgs, bytes) = input.messages_and_media(marker);
+                messages.extend(msgs);
+                images.extend(bytes);
+            }
             HistoryEntry::Output(response) => messages.push(response.to_openai_message()),
         }
     }
 
-    messages.extend(new_input.to_openai_messages());
+    let (live_msgs, live_bytes) = new_input.messages_and_media(marker);
+    messages.extend(live_msgs);
+    images.extend(live_bytes);
 
     messages.push(session_context_block(
         is_group,
@@ -90,7 +99,7 @@ fn build_conversation(
         max_tool_rounds,
     ));
 
-    Value::Array(messages)
+    (Value::Array(messages), images)
 }
 
 fn all_tool_calls(parsed: &Value) -> Vec<(String, String, String)> {
@@ -127,7 +136,7 @@ async fn get_response_from_llm(
     is_group: bool,
     bot_identity: &str,
 ) -> anyhow::Result<LLMResponse> {
-    let conversation = build_conversation(
+    let (conversation, images) = build_conversation(
         current_input,
         maybe_recent_conversation,
         tool_rounds,
@@ -142,16 +151,12 @@ async fn get_response_from_llm(
         serde_json::to_string_pretty(&conversation).unwrap_or_default()
     );
 
-    let image_count = match current_input {
-        LLMInput::ConversationMessage(m) => m.images.len(),
-        LLMInput::ToolResults(_, user_msg) => user_msg.as_ref().map_or(0, |m| m.images.len()),
-    };
-    if image_count > 0 {
-        println!("[image] {image_count} image(s) reached the LLM external (not yet fed to the model)");
+    if !images.is_empty() {
+        println!("[image] feeding {} image(s) to the model", images.len());
     }
 
     let parsed = llama_cpp
-        .get_primary_response(conversation, allow_tools)
+        .get_primary_response(conversation, images, allow_tools)
         .await?;
 
     let thoughts = parsed

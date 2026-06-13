@@ -11,10 +11,13 @@ use tokio::task::{spawn_blocking, JoinHandle};
 
 use crate::agents::{Agent, PRIMARY_AGENT_IMPL};
 
+pub struct PrimaryModel {
+    pub mtmd: MtmdContext,
+    pub model: Arc<LlamaModel>,
+}
+
 pub struct LlamaCppService {
-    #[allow(dead_code)]
-    mtmd: Arc<MtmdContext>,
-    primary_model: Arc<LlamaModel>,
+    primary: Arc<PrimaryModel>,
     backend: Arc<LlamaBackend>,
     primary_agent: &'static Agent,
 }
@@ -64,21 +67,20 @@ impl LlamaCppService {
 
         let backend_arc = Arc::new(backend);
 
-        let primary_task: JoinHandle<anyhow::Result<(Arc<LlamaModel>, Arc<MtmdContext>)>> = {
+        let primary_task: JoinHandle<anyhow::Result<Arc<PrimaryModel>>> = {
             let backend = Arc::clone(&backend_arc);
             spawn_blocking(move || {
                 let model_params = LlamaModelParams::default();
-                let model = Self::primary_model(backend.as_ref(), &model_params)?;
+                let model = Arc::new(Self::primary_model(backend.as_ref(), &model_params)?);
                 let mtmd = Self::mtmd_context(&model)?;
-                Ok((Arc::new(model), Arc::new(mtmd)))
+                Ok(Arc::new(PrimaryModel { mtmd, model }))
             })
         };
 
-        let (primary_model, mtmd) = primary_task.await??;
+        let primary = primary_task.await??;
 
         Ok(Self {
-            mtmd,
-            primary_model,
+            primary,
             backend: backend_arc,
             primary_agent,
         })
@@ -99,15 +101,17 @@ impl LlamaCppService {
     pub async fn get_primary_response(
         &self,
         conversation: serde_json::Value,
+        images: Vec<Arc<Vec<u8>>>,
         allow_tools: bool,
     ) -> anyhow::Result<serde_json::Value> {
         self.primary_agent
             .respond(
                 Self::context_params(),
-                Arc::clone(&self.primary_model),
+                Arc::clone(&self.primary),
                 Arc::clone(&self.backend),
                 Self::BATCH_CHUNK_SIZE,
                 conversation,
+                images,
                 allow_tools,
             )
             .await

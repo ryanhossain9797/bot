@@ -19,6 +19,8 @@ use std::sync::{Arc, OnceLock};
 type ConversationTransitionResult = anyhow::Result<Conversation>;
 type ConversationEffects = Effects<ConversationMachine>;
 
+const REDACT_HISTORY_IMAGES: bool = false;
+
 static CONVERSATION: OnceLock<StateMachineHandle<ConversationMachine>> = OnceLock::new();
 
 pub struct ConversationMachine;
@@ -165,8 +167,13 @@ fn conversation_transition(
             ConversationAction::LLMDecisionResult(res),
         ) => match res {
             Ok(response) => {
+                let recorded_input = if REDACT_HISTORY_IMAGES {
+                    current_input.redacted()
+                } else {
+                    current_input
+                };
                 let mut updated_history = history;
-                updated_history.push(HistoryEntry::Input(current_input));
+                updated_history.push(HistoryEntry::Input(recorded_input));
                 updated_history.push(HistoryEntry::Output(response.clone()));
 
                 let updated_conversation = RecentConversation {
