@@ -23,6 +23,8 @@ use crate::{
 
 const MAX_THINKING_TOKENS: usize = 600;
 
+const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
+
 const THINKING_FORCE_CLOSE: &str =
     "\n\nWait — I'm going in circles. I have enough to answer the user now, so I'll stop thinking and respond.\n</think>\n\n";
 
@@ -36,7 +38,7 @@ fn run_generation_text(
 ) -> anyhow::Result<String> {
     let mut ctx = model.new_context(backend, ctx_params)?;
 
-    let tokens = model.str_to_token(prompt, AddBos::Never)?;
+    let tokens = model.str_to_token(prompt, if ADD_BOS_REEVAL_WHEN_CACHING_HITS { AddBos::Always } else { AddBos::Never })?;
     let mut batch = LlamaCppService::new_batch();
     let last = tokens.len() - 1;
     for (i, t) in tokens.iter().enumerate() {
@@ -84,7 +86,7 @@ fn run_generation_mtmd(
     let chunks = mtmd.tokenize(
         MtmdInputText {
             text: prompt.to_string(),
-            add_special: false,
+            add_special: ADD_BOS_REEVAL_WHEN_CACHING_HITS,
             parse_special: true,
         },
         &bitmap_refs,
