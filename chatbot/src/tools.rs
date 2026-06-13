@@ -56,7 +56,7 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Search the web. Returns short snippets — use visit_url to read a result in full. Keep one focused topic per query; for several facts, emit several search calls in the same turn (parallel tool calls are fine and encouraged) rather than stuffing everything into one query.",
+                    "description": "Search the web for sources — returns only short snippets, usually not enough to answer specifics (dates, numbers, names, quotes, current facts); open the most relevant result with visit_url and read it before answering. One focused topic per query; for several facts, fire several searches in the same turn (parallel calls are fine).",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -70,7 +70,7 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Fetch a URL's readable text — usually a web_search result, or one the user gave you.",
+                    "description": "Read a web page in full (its readable text). The normal next step after web_search — open the best result and read it before answering anything detailed or factual; the snippet alone is rarely enough. Also works on a URL the user gave you.",
                     "parameters": {
                         "type": "object",
                         "properties": {
