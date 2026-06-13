@@ -31,6 +31,10 @@ impl LlamaCppService {
         Self::MAX_GENERATION_TOKENS
     }
 
+    pub const fn get_context_size() -> usize {
+        Self::CONTEXT_SIZE.get() as usize
+    }
+
     fn primary_model(
         backend: &LlamaBackend,
         model_params: &LlamaModelParams,
