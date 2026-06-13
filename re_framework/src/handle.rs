@@ -43,7 +43,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let mut effects = Effects::new(id.clone());
                 let state = SM::construct(construction, &mut effects);
-                tokio::spawn(run_entity::<SM>(state, rx, self.env.clone(), id, effects));
+                tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id, effects));
                 slot.insert(SoleMailboxHandle { sender: tx });
             }
         }

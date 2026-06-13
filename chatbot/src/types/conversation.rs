@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::sync::Arc;
 use strum::{EnumDiscriminants, EnumIter};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
@@ -91,12 +92,28 @@ impl Default for ConversationState {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Image {
+    pub bytes: Arc<Vec<u8>>,
+    pub mime: String,
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image")
+            .field("mime", &self.mime)
+            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
     pub text: String,
     pub queued: bool,
         pub user_id: String,
         pub name: String,
+        pub images: Vec<Image>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +293,7 @@ pub enum ConversationAction {
                 msg: String,
         user_id: String,
         name: String,
+        images: Vec<Image>,
     },
     Timeout,
     CommitResult(Result<(), String>),

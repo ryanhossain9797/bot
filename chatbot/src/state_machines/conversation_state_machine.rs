@@ -101,7 +101,7 @@ fn handle_outcome(
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
             effects.enqueue_external(execute_tool(
-                env.clone(),
+                Arc::clone(&env),
                 tool_call.clone(),
                 conversation_id.to_string(),
                 recent_conversation.history.clone(),
@@ -139,7 +139,7 @@ fn conversation_transition(
             last_transition: Utc::now(),
             ..conversation
         }),
-        (user_state, ConversationAction::NewMessage { msg, user_id, name }) => {
+        (user_state, ConversationAction::NewMessage { msg, user_id, name, images }) => {
             let mut pending = conversation.pending;
             let queued = !matches!(&user_state, ConversationState::Idle { .. });
             pending.push(ConversationMessage {
@@ -147,6 +147,7 @@ fn conversation_transition(
                 queued,
                 user_id: user_id.clone(),
                 name: name.clone(),
+                images: images.clone(),
             });
 
             Ok(Conversation {
@@ -190,7 +191,7 @@ fn conversation_transition(
                 match message_to_send {
                     Some(message) => {
                         effects.enqueue_external(send_message(
-                            env.clone(),
+                            Arc::clone(&env),
                             conversation_id.clone(),
                             message,
                         ));
@@ -285,7 +286,7 @@ fn conversation_transition(
 
                 let history = recent_conversation.history();
                 effects.enqueue_external(get_llm_decision(
-                    env.clone(),
+                    Arc::clone(&env),
                     current_input.clone(),
                     Some(recent_conversation),
                     tool_rounds,
@@ -327,7 +328,7 @@ fn conversation_transition(
             println!("Timed Out");
 
             effects.enqueue_external(commit_to_memory(
-                env.clone(),
+                Arc::clone(&env),
                 conversation_id.to_string(),
                 recent_conversation.history.clone(),
             ));
@@ -366,6 +367,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
             .map(|m| m.user_id.clone())
             .unwrap_or_default();
         let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
+        let images = drained.iter().flat_map(|m| m.images.clone()).collect();
         let text = drained
             .into_iter()
             .map(|m| m.text)
@@ -376,6 +378,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
             queued,
             user_id,
             name,
+            images,
         }
     })
 }
@@ -410,7 +413,7 @@ fn post_transition(
     let current_input = LLMInput::ConversationMessage(msg);
 
     effects.enqueue_external(get_llm_decision(
-        env.clone(),
+        Arc::clone(&env),
         current_input.clone(),
         recent_conversation.map(|(rc, _)| rc),
         0,

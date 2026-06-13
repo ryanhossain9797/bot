@@ -4,7 +4,9 @@ use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
     state_machines::conversation_state_machine::ConversationMachine,
-    types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
+    types::conversation::{
+        ConversationAction, ConversationConstructor, ConversationId, Image, Platform,
+    },
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -46,9 +48,14 @@ impl EventHandler for Handler {
         if message.author.id.get() == self.bot_user_id {
             return;
         }
-        let Some(text) = filter(&message, self.bot_user_id, &self.bot_name) else {
+
+        let images = download_images(&message).await;
+        let text = filter(&message, self.bot_user_id, &self.bot_name);
+
+        if text.is_none() && images.is_empty() {
             return;
-        };
+        }
+        let text = text.unwrap_or_default();
 
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
@@ -74,10 +81,38 @@ impl EventHandler for Handler {
             bot_identity,
         });
 
-        let action = ConversationAction::NewMessage { msg, user_id, name };
+        let action = ConversationAction::NewMessage {
+            msg,
+            user_id,
+            name,
+            images,
+        };
 
         handle.act(conversation_id, action);
     }
+}
+
+async fn download_images(message: &DMessage) -> Vec<Image> {
+    let mut images = Vec::new();
+    for attachment in &message.attachments {
+        let Some(mime) = attachment.content_type.clone() else {
+            continue;
+        };
+        if !mime.starts_with("image/") {
+            continue;
+        }
+        match attachment.download().await {
+            Ok(bytes) => images.push(Image {
+                bytes: std::sync::Arc::new(bytes),
+                mime,
+            }),
+            Err(err) => eprintln!(
+                "[discord] failed to download image {}: {err}",
+                attachment.filename
+            ),
+        }
+    }
+    images
 }
 
 fn identity(name: &str, id: u64) -> String {

@@ -142,6 +142,14 @@ async fn get_response_from_llm(
         serde_json::to_string_pretty(&conversation).unwrap_or_default()
     );
 
+    let image_count = match current_input {
+        LLMInput::ConversationMessage(m) => m.images.len(),
+        LLMInput::ToolResults(_, user_msg) => user_msg.as_ref().map_or(0, |m| m.images.len()),
+    };
+    if image_count > 0 {
+        println!("[image] {image_count} image(s) reached the LLM external (not yet fed to the model)");
+    }
+
     let parsed = llama_cpp
         .get_primary_response(conversation, allow_tools)
         .await?;

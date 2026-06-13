@@ -3,3 +3,6 @@ members = [
     "chatbot", "framework", "probe", "kameo_playground", "re_framework",
 ]
 resolver = "3"
+
+[workspace.lints.clippy]
+clone_on_ref_ptr = "deny"
