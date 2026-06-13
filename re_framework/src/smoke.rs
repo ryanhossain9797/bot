@@ -56,14 +56,11 @@ impl StateMachine for CounterMachine {
     type Construction = CounterInit;
     type Env = CounterEnv;
 
-    fn construct(init: CounterInit) -> (CounterState, Effects) {
-        (
-            CounterState {
-                total: init.start,
-                tick_at: Some(Utc::now() + Duration::milliseconds(50)),
-            },
-            Effects::none(),
-        )
+    fn construct(init: CounterInit, _effects: &mut Effects<Self>) -> CounterState {
+        CounterState {
+            total: init.start,
+            tick_at: Some(Utc::now() + Duration::milliseconds(50)),
+        }
     }
 
     fn transition(
@@ -71,7 +68,8 @@ impl StateMachine for CounterMachine {
         id: &String,
         env: &Arc<CounterEnv>,
         action: &CounterAction,
-    ) -> anyhow::Result<(CounterState, Effects)> {
+        effects: &mut Effects<Self>,
+    ) -> anyhow::Result<CounterState> {
         match action {
             CounterAction::Add(n) => {
                 if state.total + n < 0 {
@@ -80,17 +78,17 @@ impl StateMachine for CounterMachine {
                 let mut next = state.clone();
                 next.total += n;
                 env.obs.lock().unwrap().totals.push(next.total);
-                Ok((next, Effects::none()))
+                Ok(next)
             }
-            CounterAction::Ping => Ok((
-                state.clone(),
-                Effects::none().send::<CounterMachine>(id.clone(), CounterAction::Add(10)),
-            )),
+            CounterAction::Ping => {
+                effects.enqueue_action::<CounterMachine>(id.clone(), CounterAction::Add(10));
+                Ok(state.clone())
+            }
             CounterAction::Tick => {
                 let mut next = state.clone();
                 next.tick_at = None;
                 env.obs.lock().unwrap().ticks += 1;
-                Ok((next, Effects::none()))
+                Ok(next)
             }
         }
     }
@@ -171,18 +169,19 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(_init: PongerInit) -> (PongerState, Effects) {
-        (PongerState, Effects::none())
+    fn construct(_init: PongerInit, _effects: &mut Effects<Self>) -> PongerState {
+        PongerState
     }
     fn transition(
         state: &PongerState,
         _id: &String,
         env: &Arc<RtEnv>,
         action: &PongerAction,
-    ) -> anyhow::Result<(PongerState, Effects)> {
+        _effects: &mut Effects<Self>,
+    ) -> anyhow::Result<PongerState> {
         let PongerAction::Pong(n) = action;
         env.received.lock().unwrap().push(*n);
-        Ok((state.clone(), Effects::none()))
+        Ok(state.clone())
     }
     fn schedule(_state: &PongerState) -> Option<Scheduled<PongerAction>> {
         None
@@ -215,26 +214,23 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(_init: PingerInit) -> (PingerState, Effects) {
-        (
-            PingerState,
-            Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0)),
-        )
+    fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
+        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0));
+        PingerState
     }
     fn transition(
         state: &PingerState,
         _id: &String,
         _env: &Arc<RtEnv>,
         action: &PingerAction,
-    ) -> anyhow::Result<(PingerState, Effects)> {
+        effects: &mut Effects<Self>,
+    ) -> anyhow::Result<PingerState> {
         let PingerAction::Ping(n) = action;
         if *n < 0 {
             anyhow::bail!("no negative pings");
         }
-        Ok((
-            state.clone(),
-            Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n)),
-        ))
+        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n));
+        Ok(state.clone())
     }
     fn schedule(_state: &PingerState) -> Option<Scheduled<PingerAction>> {
         None

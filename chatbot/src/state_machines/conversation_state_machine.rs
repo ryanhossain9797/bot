@@ -3,13 +3,11 @@ use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
 };
-use crate::types::conversation::{
-    LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS,
-};
+use crate::types::conversation::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, RecentConversation, Conversation, ConversationAction, ConversationConstructor, ConversationId, ConversationMessage,
-        ConversationState,
+        Conversation, ConversationAction, ConversationConstructor, ConversationId,
+        ConversationMessage, ConversationState, HistoryEntry, LLMInput, RecentConversation,
     },
     Env,
 };
@@ -18,20 +16,10 @@ use re_framework::{Effects, Scheduled, StateMachine, StateMachineHandle};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-type ConversationTransitionResult = anyhow::Result<(Conversation, Effects)>;
+type ConversationTransitionResult = anyhow::Result<Conversation>;
+type ConversationEffects = Effects<ConversationMachine>;
 
 static CONVERSATION: OnceLock<StateMachineHandle<ConversationMachine>> = OnceLock::new();
-
-fn loop_back(
-    effects: Effects,
-    conversation_id: ConversationId,
-    fut: impl std::future::Future<Output = ConversationAction> + Send + 'static,
-) -> Effects {
-    effects.fire(async move {
-        let action = fut.await;
-        ConversationMachine::handle().act(conversation_id, action).await;
-    })
-}
 
 pub struct ConversationMachine;
 
@@ -42,7 +30,10 @@ impl StateMachine for ConversationMachine {
     type Construction = ConversationConstructor;
     type Env = crate::Env;
 
-    fn construct(constructor: ConversationConstructor) -> (Conversation, Effects) {
+    fn construct(
+        constructor: ConversationConstructor,
+        _effects: &mut ConversationEffects,
+    ) -> Conversation {
         construct_conversation(constructor)
     }
 
@@ -51,8 +42,9 @@ impl StateMachine for ConversationMachine {
         id: &ConversationId,
         env: &Arc<Env>,
         action: &ConversationAction,
+        effects: &mut ConversationEffects,
     ) -> ConversationTransitionResult {
-        conversation_transition(env, id, state.clone(), action)
+        conversation_transition(env, id, state.clone(), action, effects)
     }
 
     fn schedule(state: &Conversation) -> Option<Scheduled<ConversationAction>> {
@@ -60,7 +52,9 @@ impl StateMachine for ConversationMachine {
     }
 
     fn handle() -> &'static StateMachineHandle<ConversationMachine> {
-        CONVERSATION.get().expect("ConversationMachine not initialized")
+        CONVERSATION
+            .get()
+            .expect("ConversationMachine not initialized")
     }
 }
 
@@ -81,52 +75,42 @@ fn handle_outcome(
     tool_rounds: usize,
     is_group: bool,
     bot_identity: String,
+    effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     if response.tool_calls.is_empty() {
-        Ok((
-            Conversation {
-                state: ConversationState::Idle {
-                    recent_conversation: Some((recent_conversation, Utc::now())),
-                },
-                last_transition: Utc::now(),
-                pending,
-                is_group,
-                bot_identity,
+        Ok(Conversation {
+            state: ConversationState::Idle {
+                recent_conversation: Some((recent_conversation, Utc::now())),
             },
-            Effects::none(),
-        ))
+            last_transition: Utc::now(),
+            pending,
+            is_group,
+            bot_identity,
+        })
     } else {
-        let mut effects = Effects::none();
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
-            effects = loop_back(
-                effects,
-                conversation_id.clone(),
-                execute_tool(
-                    env.clone(),
-                    tool_call.clone(),
-                    conversation_id.to_string(),
-                    recent_conversation.history.clone(),
-                ),
-            );
+            effects.enqueue_external(execute_tool(
+                env.clone(),
+                tool_call.clone(),
+                conversation_id.to_string(),
+                recent_conversation.history.clone(),
+            ));
             pending_tools.insert(tool_call.id.clone(), tool_call);
         }
 
-        Ok((
-            Conversation {
-                state: ConversationState::RunningTools {
-                    recent_conversation,
-                    tool_rounds: tool_rounds + 1,
-                    pending_tools,
-                    completed_tools: Vec::new(),
-                },
-                last_transition: Utc::now(),
-                pending,
-                is_group,
-                bot_identity,
+        Ok(Conversation {
+            state: ConversationState::RunningTools {
+                recent_conversation,
+                tool_rounds: tool_rounds + 1,
+                pending_tools,
+                completed_tools: Vec::new(),
             },
-            effects,
-        ))
+            last_transition: Utc::now(),
+            pending,
+            is_group,
+            bot_identity,
+        })
     }
 }
 
@@ -135,25 +119,16 @@ fn conversation_transition(
     conversation_id: &ConversationId,
     conversation: Conversation,
     action: &ConversationAction,
+    effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     let state = match (conversation.state, action) {
-        (_, ConversationAction::ForceReset) => Ok((
-            Conversation {
-                pending: Vec::new(),
-                state: ConversationState::default(),
-                last_transition: Utc::now(),
-                ..conversation
-            },
-            Effects::none(),
-        )),
-        (
-            user_state,
-            ConversationAction::NewMessage {
-                msg,
-                user_id,
-                name,
-            },
-        ) => {
+        (_, ConversationAction::ForceReset) => Ok(Conversation {
+            pending: Vec::new(),
+            state: ConversationState::default(),
+            last_transition: Utc::now(),
+            ..conversation
+        }),
+        (user_state, ConversationAction::NewMessage { msg, user_id, name }) => {
             let mut pending = conversation.pending;
             let queued = !matches!(&user_state, ConversationState::Idle { .. });
             pending.push(ConversationMessage {
@@ -163,14 +138,11 @@ fn conversation_transition(
                 name: name.clone(),
             });
 
-            Ok((
-                Conversation {
-                    pending,
-                    state: user_state,
-                    ..conversation
-                },
-                Effects::none(),
-            ))
+            Ok(Conversation {
+                pending,
+                state: user_state,
+                ..conversation
+            })
         }
         (
             ConversationState::AwaitingLLMDecision {
@@ -206,24 +178,21 @@ fn conversation_transition(
 
                 match message_to_send {
                     Some(message) => {
-                        let effects = loop_back(
-                            Effects::none(),
+                        effects.enqueue_external(send_message(
+                            env.clone(),
                             conversation_id.clone(),
-                            send_message(env.clone(), conversation_id.clone(), message),
-                        );
+                            message,
+                        ));
 
-                        Ok((
-                            Conversation {
-                                state: ConversationState::SendingMessage {
-                                    outcome: response.clone(),
-                                    recent_conversation: updated_conversation,
-                                    tool_rounds,
-                                },
-                                last_transition: Utc::now(),
-                                ..conversation
+                        Ok(Conversation {
+                            state: ConversationState::SendingMessage {
+                                outcome: response.clone(),
+                                recent_conversation: updated_conversation,
+                                tool_rounds,
                             },
-                            effects,
-                        ))
+                            last_transition: Utc::now(),
+                            ..conversation
+                        })
                     }
                     None => handle_outcome(
                         env,
@@ -234,19 +203,17 @@ fn conversation_transition(
                         tool_rounds,
                         conversation.is_group,
                         conversation.bot_identity.clone(),
+                        effects,
                     ),
                 }
             }
-            Err(_) => Ok((
-                Conversation {
-                    state: ConversationState::Idle {
-                        recent_conversation: None,
-                    },
-                    last_transition: Utc::now(),
-                    ..conversation
+            Err(_) => Ok(Conversation {
+                state: ConversationState::Idle {
+                    recent_conversation: None,
                 },
-                Effects::none(),
-            )),
+                last_transition: Utc::now(),
+                ..conversation
+            }),
         },
         (
             ConversationState::SendingMessage {
@@ -264,6 +231,7 @@ fn conversation_transition(
             tool_rounds,
             conversation.is_group,
             conversation.bot_identity.clone(),
+            effects,
         ),
         (
             ConversationState::RunningTools {
@@ -305,48 +273,38 @@ fn conversation_transition(
                 let bot_identity = conversation.bot_identity.clone();
 
                 let history = recent_conversation.history();
-                let effects = loop_back(
-                    Effects::none(),
-                    conversation_id.clone(),
-                    get_llm_decision(
-                        env.clone(),
-                        current_input.clone(),
-                        Some(recent_conversation),
-                        tool_rounds,
-                        MAX_TOOL_ROUNDS,
-                        is_group,
-                        bot_identity.clone(),
-                    ),
-                );
+                effects.enqueue_external(get_llm_decision(
+                    env.clone(),
+                    current_input.clone(),
+                    Some(recent_conversation),
+                    tool_rounds,
+                    MAX_TOOL_ROUNDS,
+                    is_group,
+                    bot_identity.clone(),
+                ));
 
-                Ok((
-                    Conversation {
-                        state: ConversationState::AwaitingLLMDecision {
-                            history,
-                            current_input,
-                            tool_rounds,
-                        },
-                        last_transition: Utc::now(),
-                        pending,
-                        is_group,
-                        bot_identity,
+                Ok(Conversation {
+                    state: ConversationState::AwaitingLLMDecision {
+                        history,
+                        current_input,
+                        tool_rounds,
                     },
-                    effects,
-                ))
+                    last_transition: Utc::now(),
+                    pending,
+                    is_group,
+                    bot_identity,
+                })
             } else {
-                Ok((
-                    Conversation {
-                        state: ConversationState::RunningTools {
-                            recent_conversation,
-                            tool_rounds,
-                            pending_tools,
-                            completed_tools,
-                        },
-                        last_transition: Utc::now(),
-                        ..conversation
+                Ok(Conversation {
+                    state: ConversationState::RunningTools {
+                        recent_conversation,
+                        tool_rounds,
+                        pending_tools,
+                        completed_tools,
                     },
-                    Effects::none(),
-                ))
+                    last_transition: Utc::now(),
+                    ..conversation
+                })
             }
         }
         (
@@ -357,55 +315,45 @@ fn conversation_transition(
         ) => {
             println!("Timed Out");
 
-            let effects = loop_back(
-                Effects::none(),
-                conversation_id.clone(),
-                commit_to_memory(
-                    env.clone(),
-                    conversation_id.to_string(),
-                    recent_conversation.history.clone(),
-                ),
-            );
+            effects.enqueue_external(commit_to_memory(
+                env.clone(),
+                conversation_id.to_string(),
+                recent_conversation.history.clone(),
+            ));
 
-            Ok((
-                Conversation {
-                    state: ConversationState::CommitingToMemory {
-                        recent_conversation,
-                    },
-                    last_transition: Utc::now(),
-                    ..conversation
+            Ok(Conversation {
+                state: ConversationState::CommitingToMemory {
+                    recent_conversation,
                 },
-                effects,
-            ))
+                last_transition: Utc::now(),
+                ..conversation
+            })
         }
-        (
-            ConversationState::CommitingToMemory { .. },
-            ConversationAction::CommitResult(_),
-        ) => {
+        (ConversationState::CommitingToMemory { .. }, ConversationAction::CommitResult(_)) => {
             println!("Commited to Memory");
 
-            Ok((
-                Conversation {
-                    state: ConversationState::Idle {
-                        recent_conversation: None,
-                    },
-                    last_transition: Utc::now(),
-                    ..conversation
+            Ok(Conversation {
+                state: ConversationState::Idle {
+                    recent_conversation: None,
                 },
-                Effects::none(),
-            ))
+                last_transition: Utc::now(),
+                ..conversation
+            })
         }
         _ => Err(anyhow::anyhow!("Invalid state or action")),
     };
 
-    post_transition(env, conversation_id, state)
+    post_transition(env, conversation_id, state, effects)
 }
 
 fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
     (!pending.is_empty()).then(|| {
         let drained = std::mem::take(pending);
         let queued = drained.iter().any(|m| m.queued);
-        let user_id = drained.last().map(|m| m.user_id.clone()).unwrap_or_default();
+        let user_id = drained
+            .last()
+            .map(|m| m.user_id.clone())
+            .unwrap_or_default();
         let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
         let text = drained
             .into_iter()
@@ -423,20 +371,21 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
 
 fn post_transition(
     env: &Arc<Env>,
-    conversation_id: &ConversationId,
+    _conversation_id: &ConversationId,
     result: ConversationTransitionResult,
+    effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
-    let (mut conversation, effects) = result?;
+    let mut conversation = result?;
 
     let recent_conversation = match &conversation.state {
         ConversationState::Idle {
             recent_conversation,
         } => recent_conversation.clone(),
-        _ => return Ok((conversation, effects)),
+        _ => return Ok(conversation),
     };
 
     let Some(msg) = take_pending(&mut conversation.pending) else {
-        return Ok((conversation, effects));
+        return Ok(conversation);
     };
 
     let is_group = conversation.is_group;
@@ -449,34 +398,27 @@ fn post_transition(
 
     let current_input = LLMInput::ConversationMessage(msg);
 
-    let effects = loop_back(
-        effects,
-        conversation_id.clone(),
-        get_llm_decision(
-            env.clone(),
-            current_input.clone(),
-            recent_conversation.map(|(rc, _)| rc),
-            0,
-            MAX_TOOL_ROUNDS,
-            is_group,
-            bot_identity.clone(),
-        ),
-    );
+    effects.enqueue_external(get_llm_decision(
+        env.clone(),
+        current_input.clone(),
+        recent_conversation.map(|(rc, _)| rc),
+        0,
+        MAX_TOOL_ROUNDS,
+        is_group,
+        bot_identity.clone(),
+    ));
 
-    Ok((
-        Conversation {
-            state: ConversationState::AwaitingLLMDecision {
-                history,
-                current_input,
-                tool_rounds: 0,
-            },
-            last_transition: Utc::now(),
-            pending: Vec::new(),
-            is_group,
-            bot_identity,
+    Ok(Conversation {
+        state: ConversationState::AwaitingLLMDecision {
+            history,
+            current_input,
+            tool_rounds: 0,
         },
-        effects,
-    ))
+        last_transition: Utc::now(),
+        pending: Vec::new(),
+        is_group,
+        bot_identity,
+    })
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
@@ -498,17 +440,12 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
     }
 }
 
-fn construct_conversation(
-    constructor: ConversationConstructor,
-) -> (Conversation, Effects) {
-    (
-        Conversation {
-            pending: Vec::new(),
-            state: ConversationState::default(),
-            last_transition: Utc::now(),
-            is_group: constructor.is_group,
-            bot_identity: constructor.bot_identity,
-        },
-        Effects::none(),
-    )
+fn construct_conversation(constructor: ConversationConstructor) -> Conversation {
+    Conversation {
+        pending: Vec::new(),
+        state: ConversationState::default(),
+        last_transition: Utc::now(),
+        is_group: constructor.is_group,
+        bot_identity: constructor.bot_identity,
+    }
 }

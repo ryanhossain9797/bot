@@ -41,7 +41,8 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             DEntry::Vacant(slot) => {
                 let incarnation = self.next_incarnation.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = mpsc::channel(MAILBOX);
-                let (state, effects) = SM::construct(construction);
+                let mut effects = Effects::new(id.clone());
+                let state = SM::construct(construction, &mut effects);
                 tokio::spawn(run_entity::<SM>(
                     state,
                     rx,
@@ -105,7 +106,7 @@ async fn run_entity<SM: StateMachine>(
     entities: Arc<DashMap<String, Entry<SM>>>,
     id: SM::Id,
     incarnation: u64,
-    initial: Effects,
+    initial: Effects<SM>,
 ) {
     spawn_effects(initial);
 
@@ -139,7 +140,8 @@ async fn run_entity<SM: StateMachine>(
         };
 
         log_transition::<SM>(&format!("Action: {action:?}"));
-        if let Ok((next, effects)) = SM::transition(&state, &id, &env, &action) {
+        let mut effects = Effects::new(id.clone());
+        if let Ok(next) = SM::transition(&state, &id, &env, &action, &mut effects) {
             state = next;
             spawn_effects(effects);
         }
@@ -148,7 +150,7 @@ async fn run_entity<SM: StateMachine>(
     entities.remove_if(&id.get_id_string(), |_, e| e.incarnation == incarnation);
 }
 
-fn spawn_effects(effects: Effects) {
+fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
     }

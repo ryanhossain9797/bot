@@ -25,13 +25,14 @@ pub trait StateMachine: Sized + 'static {
     type Construction: Identified<Id = Self::Id> + Send + 'static;
     type Env: Send + Sync + 'static;
 
-    fn construct(construction: Self::Construction) -> (Self::State, Effects);
+    fn construct(construction: Self::Construction, effects: &mut Effects<Self>) -> Self::State;
     fn transition(
         state: &Self::State,
         id: &Self::Id,
         env: &Arc<Self::Env>,
         action: &Self::Action,
-    ) -> anyhow::Result<(Self::State, Effects)>;
+        effects: &mut Effects<Self>,
+    ) -> anyhow::Result<Self::State>;
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
     fn handle() -> &'static StateMachineHandle<Self>;
 }
