@@ -4,9 +4,8 @@ use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
     state_machines::conversation_state_machine::ConversationMachine,
-    types::conversation::{
-        ConversationAction, ConversationConstructor, ConversationId, Image, Platform,
-    },
+    types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
+    types::media::Image,
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {

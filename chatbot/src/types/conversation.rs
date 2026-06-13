@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use crate::types::media::Image;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::sync::Arc;
 use strum::{EnumDiscriminants, EnumIter};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
@@ -89,21 +89,6 @@ impl Default for ConversationState {
         ConversationState::Idle {
             recent_conversation: None,
         }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Image {
-    pub bytes: Arc<Vec<u8>>,
-    pub mime: String,
-}
-
-impl std::fmt::Debug for Image {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Image")
-            .field("mime", &self.mime)
-            .field("bytes", &format_args!("{} bytes", self.bytes.len()))
-            .finish()
     }
 }
 
