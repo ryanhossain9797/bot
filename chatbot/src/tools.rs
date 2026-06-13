@@ -56,11 +56,11 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Search the web. Returns short snippets — use visit_url to read a result in full.",
+                    "description": "Search the web. Returns short snippets — use visit_url to read a result in full. Keep one focused topic per query; for several facts, emit several search calls in the same turn (parallel tool calls are fine and encouraged) rather than stuffing everything into one query.",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": { "type": "string", "description": "A few keywords describing what to look for, e.g. \"rust async runtime comparison\"" }
+                            "query": { "type": "string", "description": "A few keywords for a single focused question, e.g. \"rust async runtime comparison\" or \"Stark Frieren hair color\". Don't pile unrelated attributes into one query — search one fact at a time." }
                         },
                         "required": ["query"]
                     }
