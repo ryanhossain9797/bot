@@ -114,14 +114,14 @@ async fn smoke() {
         .expect("set COUNTER once");
     let sm = CounterMachine::handle();
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(5)).await;
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 });
+    sm.act("c1".to_string(), CounterAction::Add(5));
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(3)).await;
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 });
+    sm.act("c1".to_string(), CounterAction::Add(3));
 
-    sm.act("c1".to_string(), CounterAction::Add(-1000)).await;
-    sm.act("c1".to_string(), CounterAction::Ping).await;
+    sm.act("c1".to_string(), CounterAction::Add(-1000));
+    sm.act("c1".to_string(), CounterAction::Ping);
 
     tokio::time::sleep(StdDuration::from_millis(120)).await;
 
@@ -131,9 +131,9 @@ async fn smoke() {
         assert_eq!(o.ticks, 1, "timer fired exactly once");
     }
 
-    sm.delete("c1".to_string()).await;
+    sm.delete("c1".to_string());
     tokio::time::sleep(StdDuration::from_millis(20)).await;
-    sm.act("c1".to_string(), CounterAction::Add(1)).await;
+    sm.act("c1".to_string(), CounterAction::Add(1));
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     assert_eq!(obs.lock().unwrap().totals, vec![5, 8, 18], "post-delete act dropped");
@@ -254,11 +254,11 @@ async fn outbound() {
     let ponger = PongerMachine::handle();
     let pinger = PingerMachine::handle();
 
-    ponger.maybe_construct(PongerInit { id: "pong1".to_string() }).await;
-    pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
+    ponger.maybe_construct(PongerInit { id: "pong1".to_string() });
+    pinger.maybe_construct(PingerInit { id: "ping1".to_string() });
 
-    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;
-    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await;
+    pinger.act("ping1".to_string(), PingerAction::Ping(42));
+    pinger.act("ping1".to_string(), PingerAction::Ping(-1));
 
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(

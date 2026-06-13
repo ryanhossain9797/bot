@@ -68,17 +68,15 @@ impl EventHandler for Handler {
 
         let handle = ConversationMachine::handle();
 
-        handle
-            .maybe_construct(ConversationConstructor {
-                id: conversation_id.clone(),
-                is_group,
-                bot_identity,
-            })
-            .await;
+        handle.maybe_construct(ConversationConstructor {
+            id: conversation_id.clone(),
+            is_group,
+            bot_identity,
+        });
 
         let action = ConversationAction::NewMessage { msg, user_id, name };
 
-        handle.act(conversation_id, action).await;
+        handle.act(conversation_id, action);
     }
 }
 

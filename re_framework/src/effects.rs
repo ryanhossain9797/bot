@@ -19,7 +19,7 @@ impl<SM: StateMachine> Effects<SM> {
 
     pub fn enqueue_action<T: StateMachine>(&mut self, id: T::Id, action: T::Action) {
         self.outbound.push(Box::pin(async move {
-            T::handle().act(id, action).await;
+            T::handle().act(id, action);
         }));
     }
 
@@ -30,7 +30,7 @@ impl<SM: StateMachine> Effects<SM> {
         let id = self.id.clone();
         self.outbound.push(Box::pin(async move {
             let action = fut.await;
-            SM::handle().act(id, action).await;
+            SM::handle().act(id, action);
         }));
     }
 }
