@@ -60,7 +60,7 @@ fn session_context_block(
 
     if is_group {
         lines.push(
-            "Reminders: reply only if your id is @mentioned — otherwise reply with exactly `<empty>`; match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
+            "Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise reply with exactly `<empty>`. Match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
         );
     } else {
         lines.push("Reminder: you are Terminal Alpha Beta.".to_string());
