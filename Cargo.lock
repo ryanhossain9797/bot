@@ -812,6 +812,7 @@ dependencies = [
  "chrono",
  "encoding_rs",
  "fastembed",
+ "image",
  "lancedb",
  "llama-cpp-2",
  "lzma-sys",

@@ -103,7 +103,7 @@ fn handle_outcome(
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
             effects.enqueue_external(execute_tool(
-                Arc::clone(&env),
+                Arc::clone(env),
                 tool_call.clone(),
                 conversation_id.to_string(),
                 recent_conversation.history.clone(),
@@ -141,7 +141,15 @@ fn conversation_transition(
             last_transition: Utc::now(),
             ..conversation
         }),
-        (user_state, ConversationAction::NewMessage { msg, user_id, name, images }) => {
+        (
+            user_state,
+            ConversationAction::NewMessage {
+                msg,
+                user_id,
+                name,
+                images,
+            },
+        ) => {
             let mut pending = conversation.pending;
             let queued = !matches!(&user_state, ConversationState::Idle { .. });
             pending.push(ConversationMessage {
@@ -149,7 +157,7 @@ fn conversation_transition(
                 queued,
                 user_id: user_id.clone(),
                 name: name.clone(),
-                images: images.clone(),
+                images: images.iter().map(|image| image.downscaled()).collect(),
             });
 
             Ok(Conversation {
@@ -198,7 +206,7 @@ fn conversation_transition(
                 match message_to_send {
                     Some(message) => {
                         effects.enqueue_external(send_message(
-                            Arc::clone(&env),
+                            Arc::clone(env),
                             conversation_id.clone(),
                             message,
                         ));
@@ -293,7 +301,7 @@ fn conversation_transition(
 
                 let history = recent_conversation.history();
                 effects.enqueue_external(get_llm_decision(
-                    Arc::clone(&env),
+                    Arc::clone(env),
                     current_input.clone(),
                     Some(recent_conversation),
                     tool_rounds,
@@ -335,7 +343,7 @@ fn conversation_transition(
             println!("Timed Out");
 
             effects.enqueue_external(commit_to_memory(
-                Arc::clone(&env),
+                Arc::clone(env),
                 conversation_id.to_string(),
                 recent_conversation.history.clone(),
             ));
@@ -359,7 +367,9 @@ fn conversation_transition(
                 ..conversation
             })
         }
-        _ => Err(anyhow::anyhow!("no transition for {action:?} in state {from}")),
+        _ => Err(anyhow::anyhow!(
+            "no transition for {action:?} in state {from}"
+        )),
     };
 
     post_transition(env, conversation_id, state, effects)
@@ -420,7 +430,7 @@ fn post_transition(
     let current_input = LLMInput::ConversationMessage(msg);
 
     effects.enqueue_external(get_llm_decision(
-        Arc::clone(&env),
+        Arc::clone(env),
         current_input.clone(),
         recent_conversation.map(|(rc, _)| rc),
         0,
