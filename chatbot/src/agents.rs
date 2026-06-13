@@ -38,7 +38,20 @@ fn run_generation_text(
 ) -> anyhow::Result<String> {
     let mut ctx = model.new_context(backend, ctx_params)?;
 
-    let tokens = model.str_to_token(prompt, if ADD_BOS_REEVAL_WHEN_CACHING_HITS { AddBos::Always } else { AddBos::Never })?;
+    let mut tokens = model.str_to_token(prompt, if ADD_BOS_REEVAL_WHEN_CACHING_HITS { AddBos::Always } else { AddBos::Never })?;
+    let max_input = LlamaCppService::get_context_size() - LlamaCppService::get_max_generation_tokens();
+    if tokens.len() > max_input {
+        let head = (max_input / 4).min(2048);
+        let tail = max_input - head;
+        let dropped = tokens.len() - max_input;
+        eprintln!(
+            "[ctx] prompt {} tokens exceeds budget {max_input}; dropping {dropped} middle tokens",
+            tokens.len()
+        );
+        let mut trimmed = tokens[..head].to_vec();
+        trimmed.extend_from_slice(&tokens[tokens.len() - tail..]);
+        tokens = trimmed;
+    }
     let mut batch = LlamaCppService::new_batch();
     let last = tokens.len() - 1;
     for (i, t) in tokens.iter().enumerate() {
