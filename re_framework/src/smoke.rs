@@ -56,7 +56,7 @@ impl StateMachine for CounterMachine {
     type Construction = CounterInit;
     type Env = CounterEnv;
 
-    fn construct(init: CounterInit) -> (CounterState, Effects<Self>) {
+    fn construct(init: CounterInit) -> (CounterState, Effects) {
         (
             CounterState {
                 total: init.start,
@@ -68,10 +68,10 @@ impl StateMachine for CounterMachine {
 
     fn transition(
         state: &CounterState,
-        _id: &String,
+        id: &String,
         env: &Arc<CounterEnv>,
         action: &CounterAction,
-    ) -> anyhow::Result<(CounterState, Effects<Self>)> {
+    ) -> anyhow::Result<(CounterState, Effects)> {
         match action {
             CounterAction::Add(n) => {
                 if state.total + n < 0 {
@@ -82,9 +82,10 @@ impl StateMachine for CounterMachine {
                 env.obs.lock().unwrap().totals.push(next.total);
                 Ok((next, Effects::none()))
             }
-            CounterAction::Ping => {
-                Ok((state.clone(), Effects::none().then(async { CounterAction::Add(10) })))
-            }
+            CounterAction::Ping => Ok((
+                state.clone(),
+                Effects::none().send::<CounterMachine>(id.clone(), CounterAction::Add(10)),
+            )),
             CounterAction::Tick => {
                 let mut next = state.clone();
                 next.tick_at = None;
@@ -170,7 +171,7 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(_init: PongerInit) -> (PongerState, Effects<Self>) {
+    fn construct(_init: PongerInit) -> (PongerState, Effects) {
         (PongerState, Effects::none())
     }
     fn transition(
@@ -178,7 +179,7 @@ impl StateMachine for PongerMachine {
         _id: &String,
         env: &Arc<RtEnv>,
         action: &PongerAction,
-    ) -> anyhow::Result<(PongerState, Effects<Self>)> {
+    ) -> anyhow::Result<(PongerState, Effects)> {
         let PongerAction::Pong(n) = action;
         env.received.lock().unwrap().push(*n);
         Ok((state.clone(), Effects::none()))
@@ -214,7 +215,7 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(_init: PingerInit) -> (PingerState, Effects<Self>) {
+    fn construct(_init: PingerInit) -> (PingerState, Effects) {
         (
             PingerState,
             Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0)),
@@ -225,7 +226,7 @@ impl StateMachine for PingerMachine {
         _id: &String,
         _env: &Arc<RtEnv>,
         action: &PingerAction,
-    ) -> anyhow::Result<(PingerState, Effects<Self>)> {
+    ) -> anyhow::Result<(PingerState, Effects)> {
         let PingerAction::Ping(n) = action;
         if *n < 0 {
             anyhow::bail!("no negative pings");

@@ -49,7 +49,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                     self.entities.clone(),
                     id,
                     incarnation,
-                    tx.clone(),
                     effects,
                 ));
                 slot.insert(Entry {
@@ -67,7 +66,14 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             .map(|e| e.sender.clone());
         match sender {
             Some(sender) => {
-                let _ = sender.send(Envelope::Act(action)).await;
+                if let Err(mpsc::error::SendError(Envelope::Act(action))) =
+                    sender.send(Envelope::Act(action)).await
+                {
+                    eprintln!(
+                        "[warn] action {action:?} for entity {} dropped — mailbox closed (entity deleted?)",
+                        id.get_id_string()
+                    );
+                }
             }
             None => eprintln!(
                 "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
@@ -82,7 +88,12 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             .get(&id.get_id_string())
             .map(|e| e.sender.clone());
         if let Some(sender) = sender {
-            let _ = sender.send(Envelope::Delete).await;
+            if sender.send(Envelope::Delete).await.is_err() {
+                eprintln!(
+                    "[warn] delete for entity {} — mailbox already closed",
+                    id.get_id_string()
+                );
+            }
         }
     }
 }
@@ -94,10 +105,9 @@ async fn run_entity<SM: StateMachine>(
     entities: Arc<DashMap<String, Entry<SM>>>,
     id: SM::Id,
     incarnation: u64,
-    self_tx: mpsc::Sender<Envelope<SM::Action>>,
-    initial: Effects<SM>,
+    initial: Effects,
 ) {
-    spawn_effects::<SM>(initial, &self_tx);
+    spawn_effects(initial);
 
     loop {
         let action = match SM::schedule(&state) {
@@ -106,6 +116,7 @@ async fn run_entity<SM: StateMachine>(
                 let delay = (scheduled.at - Utc::now())
                     .to_std()
                     .unwrap_or(std::time::Duration::ZERO);
+
                 tokio::time::timeout(delay, rx.recv())
                     .await
                     .unwrap_or_else(|_e| Some(Envelope::Act(scheduled.action)))
@@ -114,8 +125,15 @@ async fn run_entity<SM: StateMachine>(
 
         let action = match action {
             Some(Envelope::Act(action)) => action,
-            Some(Envelope::Delete) | None => {
+            Some(Envelope::Delete) => {
                 log_transition::<SM>("Delete");
+                break;
+            }
+            None => {
+                eprintln!(
+                    "[error] entity {} mailbox closed while live — all senders dropped unexpectedly (framework bug)",
+                    id.get_id_string()
+                );
                 break;
             }
         };
@@ -123,24 +141,14 @@ async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         if let Ok((next, effects)) = SM::transition(&state, &id, &env, &action) {
             state = next;
-            spawn_effects::<SM>(effects, &self_tx);
+            spawn_effects(effects);
         }
     }
 
     entities.remove_if(&id.get_id_string(), |_, e| e.incarnation == incarnation);
 }
 
-fn spawn_effects<SM: StateMachine>(
-    effects: Effects<SM>,
-    self_tx: &mpsc::Sender<Envelope<SM::Action>>,
-) {
-    for fut in effects.self_actions {
-        let tx = self_tx.clone();
-        tokio::spawn(async move {
-            let action = fut.await;
-            let _ = tx.send(Envelope::Act(action)).await;
-        });
-    }
+fn spawn_effects(effects: Effects) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
     }
