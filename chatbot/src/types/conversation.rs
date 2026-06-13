@@ -132,9 +132,6 @@ impl ConversationMessage {
         }
     }
 
-    /// Content for the model plus the ordered bytes of any hydrated images. Each hydrated
-    /// image contributes one `marker` line (the LLM layer splices its bitmap there) and its
-    /// bytes; dehydrated images contribute a note explaining they were seen earlier.
     pub fn content_and_media(&self, marker: &str) -> (String, Vec<Arc<Vec<u8>>>) {
         let mut parts: Vec<String> = Vec::new();
         let base = self.to_content();
@@ -190,8 +187,6 @@ impl LLMInput {
         }
     }
 
-    /// OpenAI-shaped messages plus the ordered bytes of any hydrated images they carry.
-    /// `marker` is the media marker spliced in for each hydrated image.
     pub fn messages_and_media(&self, marker: &str) -> (Vec<Value>, Vec<Arc<Vec<u8>>>) {
         match self {
             LLMInput::ConversationMessage(msg) => {

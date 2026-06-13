@@ -19,9 +19,6 @@ use std::sync::{Arc, OnceLock};
 type ConversationTransitionResult = anyhow::Result<Conversation>;
 type ConversationEffects = Effects<ConversationMachine>;
 
-/// When true, images are dehydrated (dropped to a note) before entering history. When false
-/// they stay hydrated and are re-fed to the model every turn — experimental, grows context
-/// and VRAM with each turn that carries an image.
 const REDACT_HISTORY_IMAGES: bool = false;
 
 static CONVERSATION: OnceLock<StateMachineHandle<ConversationMachine>> = OnceLock::new();

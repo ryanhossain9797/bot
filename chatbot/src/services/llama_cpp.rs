@@ -11,9 +11,6 @@ use tokio::task::{spawn_blocking, JoinHandle};
 
 use crate::agents::{Agent, PRIMARY_AGENT_IMPL};
 
-/// Text model paired with its multimodal projector. `mtmd` is declared first so it
-/// drops before `model`: the C `mtmd_context` retains a pointer to the text model and
-/// must not outlive it.
 pub struct PrimaryModel {
     pub mtmd: MtmdContext,
     pub model: Arc<LlamaModel>,

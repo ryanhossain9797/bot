@@ -16,8 +16,6 @@ impl std::fmt::Debug for Image {
     }
 }
 
-/// An image that is either carrying its bytes (live, fed to the model) or has been
-/// reduced to its size (persisted in history — never holds bytes).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MessageImage {
     Hydrated(Image),
