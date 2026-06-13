@@ -6,23 +6,27 @@ use std::{
 };
 
 use llama_cpp_2::{
-    context::params::LlamaContextParams,
+    context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
     model::{AddBos, LlamaModel},
+    mtmd::{MtmdBitmap, MtmdInputText},
     openai::OpenAIChatTemplateParams,
     sampling::LlamaSampler,
 };
 pub use primary_agent::*;
 use tokio::task::spawn_blocking;
 
-use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, services::llama_cpp::LlamaCppService};
+use crate::{
+    configuration::debug::DEBUG_LIVE_LLM_OUTPUT,
+    services::llama_cpp::{LlamaCppService, PrimaryModel},
+};
 
-const MAX_THINKING_TOKENS: usize = 2048;
+const MAX_THINKING_TOKENS: usize = 600;
 
 const THINKING_FORCE_CLOSE: &str =
     "\n\nWait — I'm going in circles. I have enough to answer the user now, so I'll stop thinking and respond.\n</think>\n\n";
 
-fn run_generation(
+fn run_generation_text(
     model: &LlamaModel,
     backend: &LlamaBackend,
     ctx_params: LlamaContextParams,
@@ -33,25 +37,73 @@ fn run_generation(
     let mut ctx = model.new_context(backend, ctx_params)?;
 
     let tokens = model.str_to_token(prompt, AddBos::Never)?;
-
     let mut batch = LlamaCppService::new_batch();
     let last = tokens.len() - 1;
-    let mut last_idx = 0;
     for (i, t) in tokens.iter().enumerate() {
         batch.add(*t, i as i32, &[0], i == last)?;
         if batch.n_tokens() >= batch_chunk_size as i32 {
             ctx.decode(&mut batch)?;
-            last_idx = batch.n_tokens() - 1;
             batch.clear();
         }
     }
     if batch.n_tokens() > 0 {
         ctx.decode(&mut batch)?;
-        last_idx = batch.n_tokens() - 1;
     }
-    let mut n_cur = tokens.len() as i32;
 
+    log_prompt(prompt);
+    generate(model, &mut ctx, tokens.len() as i32, temperature)
+}
+
+fn log_prompt(prompt: &str) {
+    if DEBUG_LIVE_LLM_OUTPUT {
+        print!("{prompt}\n<<< generation >>>\n");
+        let _ = io::stdout().flush();
+    }
+}
+
+fn run_generation_mtmd(
+    primary: &PrimaryModel,
+    backend: &LlamaBackend,
+    ctx_params: LlamaContextParams,
+    batch_chunk_size: usize,
+    prompt: &str,
+    images: &[Arc<Vec<u8>>],
+    temperature: f32,
+) -> anyhow::Result<String> {
+    let model = primary.model.as_ref();
+    let mtmd = &primary.mtmd;
+
+    let bitmaps = images
+        .iter()
+        .map(|bytes| MtmdBitmap::from_buffer(mtmd, bytes))
+        .collect::<Result<Vec<_>, _>>()?;
+    let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+
+    let mut ctx = model.new_context(backend, ctx_params)?;
+
+    let chunks = mtmd.tokenize(
+        MtmdInputText {
+            text: prompt.to_string(),
+            add_special: false,
+            parse_special: true,
+        },
+        &bitmap_refs,
+    )?;
+
+    let n_past = chunks.eval_chunks(mtmd, &ctx, 0, 0, batch_chunk_size as i32, true)?;
+
+    log_prompt(prompt);
+    generate(model, &mut ctx, n_past, temperature)
+}
+
+fn generate(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext,
+    mut n_cur: i32,
+    temperature: f32,
+) -> anyhow::Result<String> {
     let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::dry(model, 0.8, 1.75, 2, -1, ["\n", ":", "\"", "*"]),
         LlamaSampler::temp(temperature),
         LlamaSampler::top_k(20),
         LlamaSampler::top_p(0.95, 1),
@@ -61,6 +113,7 @@ fn run_generation(
     let mut out_bytes: Vec<u8> = Vec::new();
     let mut printed = 0usize;
     let max_generation_tokens = LlamaCppService::get_max_generation_tokens();
+    let mut batch = LlamaCppService::new_batch();
 
     let mut thinking_closed = false;
 
@@ -83,7 +136,6 @@ fn run_generation(
             batch.add(tok, n_cur, &[0], true)?;
             ctx.decode(&mut batch)?;
             n_cur += 1;
-            last_idx = batch.n_tokens() - 1;
         }};
     }
 
@@ -95,7 +147,7 @@ fn run_generation(
             thinking_closed = true;
         }
 
-        let token = sampler.sample(&ctx, last_idx);
+        let token = sampler.sample(ctx, -1);
         if model.is_eog_token(token) {
             break;
         }
@@ -112,12 +164,14 @@ fn run_generation(
 fn respond_blocking(
     agent: &'static Agent,
     ctx_params: LlamaContextParams,
-    model: Arc<LlamaModel>,
+    primary: Arc<PrimaryModel>,
     backend: Arc<LlamaBackend>,
     batch_chunk_size: usize,
     conversation: serde_json::Value,
+    images: Vec<Arc<Vec<u8>>>,
     allow_tools: bool,
 ) -> anyhow::Result<serde_json::Value> {
+    let model = primary.model.as_ref();
     let mut messages = vec![serde_json::json!({
         "role": "system",
         "content": agent.system_content(),
@@ -151,19 +205,26 @@ fn respond_blocking(
     };
     let rendered = model.apply_chat_template_oaicompat(&template, &params)?;
 
-    if DEBUG_LIVE_LLM_OUTPUT {
-        print!("{}\n<<< generation >>>\n", rendered.prompt);
-        let _ = io::stdout().flush();
-    }
-
-    let raw = run_generation(
-        model.as_ref(),
-        backend.as_ref(),
-        ctx_params,
-        batch_chunk_size,
-        &rendered.prompt,
-        agent.temperature(),
-    )?;
+    let raw = if images.is_empty() {
+        run_generation_text(
+            model,
+            backend.as_ref(),
+            ctx_params,
+            batch_chunk_size,
+            &rendered.prompt,
+            agent.temperature(),
+        )?
+    } else {
+        run_generation_mtmd(
+            primary.as_ref(),
+            backend.as_ref(),
+            ctx_params,
+            batch_chunk_size,
+            &rendered.prompt,
+            &images,
+            agent.temperature(),
+        )?
+    };
 
     let parsed = rendered.parse_response_oaicompat(&raw, false)?;
     Ok(serde_json::from_str(&parsed)?)
@@ -193,20 +254,22 @@ impl Agent {
     pub async fn respond(
         &'static self,
         ctx_params: LlamaContextParams,
-        model: Arc<LlamaModel>,
+        primary: Arc<PrimaryModel>,
         backend: Arc<LlamaBackend>,
         batch_chunk_size: usize,
         conversation: serde_json::Value,
+        images: Vec<Arc<Vec<u8>>>,
         allow_tools: bool,
     ) -> anyhow::Result<serde_json::Value> {
         let task = spawn_blocking(move || {
             respond_blocking(
                 self,
                 ctx_params,
-                model,
+                primary,
                 backend,
                 batch_chunk_size,
                 conversation,
+                images,
                 allow_tools,
             )
         });

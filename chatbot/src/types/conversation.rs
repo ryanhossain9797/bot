@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use crate::types::media::Image;
+use crate::types::media::MessageImage;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::sync::Arc;
 use strum::{EnumDiscriminants, EnumIter};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
@@ -98,7 +99,7 @@ pub struct ConversationMessage {
     pub queued: bool,
         pub user_id: String,
         pub name: String,
-        pub images: Vec<Image>,
+        pub images: Vec<MessageImage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +124,45 @@ impl ConversationMessage {
             self.text.clone()
         }
     }
+
+    pub fn redacted(&self) -> ConversationMessage {
+        ConversationMessage {
+            images: self.images.iter().map(MessageImage::dehydrated).collect(),
+            ..self.clone()
+        }
+    }
+
+    /// Content for the model plus the ordered bytes of any hydrated images. Each hydrated
+    /// image contributes one `marker` line (the LLM layer splices its bitmap there) and its
+    /// bytes; dehydrated images contribute a note explaining they were seen earlier.
+    pub fn content_and_media(&self, marker: &str) -> (String, Vec<Arc<Vec<u8>>>) {
+        let mut parts: Vec<String> = Vec::new();
+        let base = self.to_content();
+        if !base.is_empty() {
+            parts.push(base);
+        }
+
+        let mut bytes = Vec::new();
+        let mut dehydrated = 0usize;
+        for image in &self.images {
+            match image.hydrated_bytes() {
+                Some(b) => {
+                    parts.push(marker.to_string());
+                    bytes.push(b);
+                }
+                None => dehydrated += 1,
+            }
+        }
+        if dehydrated > 0 {
+            parts.push(format!(
+                "[{dehydrated} image{} from earlier in the conversation — you saw {} at the time, not re-attached here]",
+                if dehydrated == 1 { "" } else { "s" },
+                if dehydrated == 1 { "it" } else { "them" }
+            ));
+        }
+
+        (parts.join("\n"), bytes)
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -141,18 +181,35 @@ pub enum LLMInput {
 }
 
 impl LLMInput {
-    pub fn to_openai_messages(&self) -> Vec<Value> {
+    pub fn redacted(&self) -> LLMInput {
         match self {
-            LLMInput::ConversationMessage(msg) => vec![json!({ "role": "user", "content": msg.to_content() })],
+            LLMInput::ConversationMessage(m) => LLMInput::ConversationMessage(m.redacted()),
+            LLMInput::ToolResults(results, user) => {
+                LLMInput::ToolResults(results.clone(), user.as_ref().map(ConversationMessage::redacted))
+            }
+        }
+    }
+
+    /// OpenAI-shaped messages plus the ordered bytes of any hydrated images they carry.
+    /// `marker` is the media marker spliced in for each hydrated image.
+    pub fn messages_and_media(&self, marker: &str) -> (Vec<Value>, Vec<Arc<Vec<u8>>>) {
+        match self {
+            LLMInput::ConversationMessage(msg) => {
+                let (content, bytes) = msg.content_and_media(marker);
+                (vec![json!({ "role": "user", "content": content })], bytes)
+            }
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<Value> = results
                     .iter()
                     .map(|r| json!({ "role": "tool", "tool_call_id": r.id, "content": r.data.actual }))
                     .collect();
+                let mut bytes = Vec::new();
                 if let Some(msg) = user_msg {
-                    messages.push(json!({ "role": "user", "content": msg.to_content() }));
+                    let (content, b) = msg.content_and_media(marker);
+                    messages.push(json!({ "role": "user", "content": content }));
+                    bytes = b;
                 }
-                messages
+                (messages, bytes)
             }
         }
     }
@@ -278,7 +335,7 @@ pub enum ConversationAction {
                 msg: String,
         user_id: String,
         name: String,
-        images: Vec<Image>,
+        images: Vec<MessageImage>,
     },
     Timeout,
     CommitResult(Result<(), String>),

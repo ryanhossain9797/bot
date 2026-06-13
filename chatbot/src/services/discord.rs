@@ -5,7 +5,7 @@ use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 use crate::{
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
-    types::media::Image,
+    types::media::{Image, MessageImage},
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -91,7 +91,7 @@ impl EventHandler for Handler {
     }
 }
 
-async fn download_images(message: &DMessage) -> Vec<Image> {
+async fn download_images(message: &DMessage) -> Vec<MessageImage> {
     let mut images = Vec::new();
     for attachment in &message.attachments {
         let Some(mime) = attachment.content_type.clone() else {
@@ -101,10 +101,10 @@ async fn download_images(message: &DMessage) -> Vec<Image> {
             continue;
         }
         match attachment.download().await {
-            Ok(bytes) => images.push(Image {
+            Ok(bytes) => images.push(MessageImage::Hydrated(Image {
                 bytes: std::sync::Arc::new(bytes),
                 mime,
-            }),
+            })),
             Err(err) => eprintln!(
                 "[discord] failed to download image {}: {err}",
                 attachment.filename
