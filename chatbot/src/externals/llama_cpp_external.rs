@@ -57,6 +57,9 @@ fn session_context_block(
     if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
         lines.push(note);
     }
+    lines.push(
+        "When the image, a tool result, or the user's correction contradicts what you remember, trust the source and update — don't defend your prior.".to_string(),
+    );
 
     if is_group {
         lines.push(
