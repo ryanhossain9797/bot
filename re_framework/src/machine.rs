@@ -35,4 +35,11 @@ pub trait StateMachine: Sized + 'static {
     ) -> anyhow::Result<Self::State>;
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
     fn handle() -> &'static StateMachineHandle<Self>;
+
+    fn name() -> &'static str {
+        std::any::type_name::<Self>()
+            .rsplit("::")
+            .next()
+            .unwrap_or("?")
+    }
 }

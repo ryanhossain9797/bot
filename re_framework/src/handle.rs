@@ -114,10 +114,7 @@ fn log_transition<SM: StateMachine>(label: &str) {
     println!(
         "TRANSITION AT {} - StateMachine: {} - {}",
         Utc::now(),
-        std::any::type_name::<SM::State>()
-            .rsplit("::")
-            .next()
-            .unwrap_or("?"),
+        SM::name(),
         label
     );
 }
