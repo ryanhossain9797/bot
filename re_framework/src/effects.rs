@@ -2,37 +2,35 @@ use crate::machine::StateMachine;
 use std::future::Future;
 use std::pin::Pin;
 
-pub type SelfEffect<SM> = Pin<Box<dyn Future<Output = <SM as StateMachine>::Action> + Send>>;
-
 type Outbound = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub struct Effects<SM: StateMachine> {
-    pub(crate) self_actions: Vec<SelfEffect<SM>>,
+    id: SM::Id,
     pub(crate) outbound: Vec<Outbound>,
 }
 
 impl<SM: StateMachine> Effects<SM> {
-    pub fn none() -> Self {
+    pub(crate) fn new(id: SM::Id) -> Self {
         Effects {
-            self_actions: Vec::new(),
+            id,
             outbound: Vec::new(),
         }
     }
 
-    pub fn then(mut self, fut: impl Future<Output = SM::Action> + Send + 'static) -> Self {
-        self.self_actions.push(Box::pin(fut));
-        self
-    }
-
-    pub fn send<T: StateMachine>(mut self, id: T::Id, action: T::Action) -> Self {
+    pub fn enqueue_action<T: StateMachine>(&mut self, id: T::Id, action: T::Action) {
         self.outbound.push(Box::pin(async move {
-            T::handle().act(id, action).await;
+            T::handle().act(id, action);
         }));
-        self
     }
 
-    pub fn fire(mut self, fut: impl Future<Output = ()> + Send + 'static) -> Self {
-        self.outbound.push(Box::pin(fut));
-        self
+    pub fn enqueue_external(
+        &mut self,
+        fut: impl Future<Output = SM::Action> + Send + 'static,
+    ) {
+        let id = self.id.clone();
+        self.outbound.push(Box::pin(async move {
+            let action = fut.await;
+            SM::handle().act(id, action);
+        }));
     }
 }

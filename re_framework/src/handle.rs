@@ -2,28 +2,28 @@ use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
 use chrono::Utc;
 use dashmap::DashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
-const MAILBOX: usize = 64;
-
+/// Mailbox message; single-variant for now, kept as an enum for planned control messages.
 enum Envelope<A> {
     Act(A),
-    Wakeup(u64),
-    Delete,
 }
 
-struct Entry<SM: StateMachine> {
-    sender: mpsc::Sender<Envelope<SM::Action>>,
-    incarnation: u64,
+/// Sole sender to a live actor's mailbox; not `Clone` — dropping it (via registry removal) stops the actor (RAII).
+struct SoleMailboxHandle<SM: StateMachine> {
+    sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
+}
+
+impl<SM: StateMachine> SoleMailboxHandle<SM> {
+    fn deliver(&self, action: SM::Action) {
+        let _ = self.sender.send(Envelope::Act(action));
+    }
 }
 
 pub struct StateMachineHandle<SM: StateMachine> {
-    entities: Arc<DashMap<String, Entry<SM>>>,
+    entities: Arc<DashMap<String, SoleMailboxHandle<SM>>>,
     env: Arc<SM::Env>,
-    next_incarnation: Arc<AtomicU64>,
 }
 
 impl<SM: StateMachine> StateMachineHandle<SM> {
@@ -31,43 +31,27 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         StateMachineHandle {
             entities: Arc::new(DashMap::new()),
             env: Arc::new(env),
-            next_incarnation: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    pub async fn maybe_construct(&self, construction: SM::Construction) {
+    pub fn maybe_construct(&self, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
         let id = construction.get_id().clone();
         match self.entities.entry(id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
-                let incarnation = self.next_incarnation.fetch_add(1, Ordering::Relaxed);
-                let (tx, rx) = mpsc::channel(MAILBOX);
-                let (state, effects) = SM::construct(construction);
-                tokio::spawn(run_entity::<SM>(
-                    state,
-                    rx,
-                    self.env.clone(),
-                    self.entities.clone(),
-                    id,
-                    incarnation,
-                    tx.clone(),
-                    effects,
-                ));
-                slot.insert(Entry {
-                    sender: tx,
-                    incarnation,
-                });
+                let (tx, rx) = mpsc::unbounded_channel();
+                let mut effects = Effects::new(id.clone());
+                let state = SM::construct(construction, &mut effects);
+                tokio::spawn(run_entity::<SM>(state, rx, self.env.clone(), id, effects));
+                slot.insert(SoleMailboxHandle { sender: tx });
             }
         }
     }
 
-    pub async fn act(&self, id: SM::Id, action: SM::Action) {
-        let sender = self.entities.get(&id.get_id_string()).map(|e| e.sender.clone());
-        match sender {
-            Some(sender) => {
-                let _ = sender.send(Envelope::Act(action)).await;
-            }
+    pub fn act(&self, id: SM::Id, action: SM::Action) {
+        match self.entities.get(&id.get_id_string()) {
+            Some(mailbox) => mailbox.deliver(action),
             None => eprintln!(
                 "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
                 id.get_id_string()
@@ -75,109 +59,62 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    pub async fn delete(&self, id: SM::Id) {
-        let sender = self.entities.get(&id.get_id_string()).map(|e| e.sender.clone());
-        if let Some(sender) = sender {
-            let _ = sender.send(Envelope::Delete).await;
-        }
+    pub fn delete(&self, id: SM::Id) {
+        self.entities.remove(&id.get_id_string());
     }
 }
 
 async fn run_entity<SM: StateMachine>(
     mut state: SM::State,
-    mut rx: mpsc::Receiver<Envelope<SM::Action>>,
+    mut rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
     env: Arc<SM::Env>,
-    entities: Arc<DashMap<String, Entry<SM>>>,
     id: SM::Id,
-    incarnation: u64,
-    self_tx: mpsc::Sender<Envelope<SM::Action>>,
     initial: Effects<SM>,
 ) {
-    let mut generation: u64 = 0;
-    let mut timer: Option<JoinHandle<()>> = None;
-    spawn_effects::<SM>(initial, &self_tx);
-    reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
+    spawn_effects(initial);
 
-    while let Some(msg) = rx.recv().await {
-        let label = match &msg {
-            Envelope::Act(action) => format!("Action: {action:?}"),
-            Envelope::Wakeup(_) => "Wakeup".to_string(),
-            Envelope::Delete => "Delete".to_string(),
+    loop {
+        let action = match SM::schedule(&state) {
+            None => rx.recv().await,
+            Some(scheduled) => {
+                let delay = (scheduled.at - Utc::now())
+                    .to_std()
+                    .unwrap_or(std::time::Duration::ZERO);
+
+                tokio::time::timeout(delay, rx.recv())
+                    .await
+                    .unwrap_or_else(|_e| Some(Envelope::Act(scheduled.action)))
+            }
         };
-        println!(
-            "TRANSITION AT {} - StateMachine: {} - {}",
-            Utc::now(),
-            std::any::type_name::<SM::State>().rsplit("::").next().unwrap_or("?"),
-            label
-        );
-        match msg {
-            Envelope::Act(action) => {
-                match SM::transition(&state, &id, &env, &action) {
-                    Ok((next, effects)) => {
-                        state = next;
-                        spawn_effects::<SM>(effects, &self_tx);
-                        reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx);
-                    }
-                    Err(_e) => {}
-                }
+
+        let Some(Envelope::Act(action)) = action else {
+            log_transition::<SM>("Delete");
+            break;
+        };
+
+        log_transition::<SM>(&format!("Action: {action:?}"));
+        let mut effects = Effects::new(id.clone());
+        match SM::transition(&state, &id, &env, &action, &mut effects) {
+            Ok(next) => {
+                state = next;
+                spawn_effects(effects);
             }
-            Envelope::Wakeup(g) => {
-                if g != generation {
-                    continue;
-                }
-                match SM::schedule(&state) {
-                    Some(s) if s.at <= Utc::now() => {
-                        let _ = self_tx.send(Envelope::Act(s.action)).await;
-                    }
-                    Some(_) => reschedule_timer::<SM>(&state, &mut generation, &mut timer, &self_tx),
-                    None => {}
-                }
-            }
-            Envelope::Delete => break,
+            Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
         }
     }
-
-    if let Some(t) = timer.take() {
-        t.abort();
-    }
-    entities.remove_if(&id.get_id_string(), |_, e| e.incarnation == incarnation);
 }
 
-fn spawn_effects<SM: StateMachine>(
-    effects: Effects<SM>,
-    self_tx: &mpsc::Sender<Envelope<SM::Action>>,
-) {
-    for fut in effects.self_actions {
-        let tx = self_tx.clone();
-        tokio::spawn(async move {
-            let action = fut.await;
-            let _ = tx.send(Envelope::Act(action)).await;
-        });
-    }
+fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
     }
 }
 
-fn reschedule_timer<SM: StateMachine>(
-    state: &SM::State,
-    generation: &mut u64,
-    timer: &mut Option<JoinHandle<()>>,
-    self_tx: &mpsc::Sender<Envelope<SM::Action>>,
-) {
-    if let Some(t) = timer.take() {
-        t.abort();
-    }
-    *generation += 1;
-    let g = *generation;
-    if let Some(scheduled) = SM::schedule(state) {
-        let tx = self_tx.clone();
-        let delay = (scheduled.at - Utc::now())
-            .to_std()
-            .unwrap_or(std::time::Duration::ZERO);
-        *timer = Some(tokio::spawn(async move {
-            tokio::time::sleep(delay).await;
-            let _ = tx.send(Envelope::Wakeup(g)).await;
-        }));
-    }
+fn log_transition<SM: StateMachine>(label: &str) {
+    println!(
+        "TRANSITION AT {} - StateMachine: {} - {}",
+        Utc::now(),
+        SM::name(),
+        label
+    );
 }

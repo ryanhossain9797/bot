@@ -38,7 +38,10 @@ pub async fn send_message(env: Arc<Env>, conversation_id: ConversationId, messag
         Platform::Discord => {
             let channel = match conversation_id.1.parse::<u64>() {
                 Ok(id) => serenity::all::ChannelId::new(id),
-                Err(err) => return ConversationAction::MessageSent(Err(err.to_string())),
+                Err(err) => {
+                    eprintln!("[send] invalid channel id {:?}: {err}", conversation_id.1);
+                    return ConversationAction::MessageSent(Err(err.to_string()));
+                }
             };
 
             for chunk in split_for_discord(&message) {
@@ -46,7 +49,7 @@ pub async fn send_message(env: Arc<Env>, conversation_id: ConversationId, messag
                     .send_message(&env.discord_http, CreateMessage::new().content(&chunk))
                     .await
                 {
-                    eprintln!("Failed to send Discord message: {err}");
+                    eprintln!("[send] Discord send failed: {err}");
                     return ConversationAction::MessageSent(Err(err.to_string()));
                 }
             }

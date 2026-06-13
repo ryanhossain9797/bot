@@ -56,22 +56,20 @@ impl StateMachine for CounterMachine {
     type Construction = CounterInit;
     type Env = CounterEnv;
 
-    fn construct(init: CounterInit) -> (CounterState, Effects<Self>) {
-        (
-            CounterState {
-                total: init.start,
-                tick_at: Some(Utc::now() + Duration::milliseconds(50)),
-            },
-            Effects::none(),
-        )
+    fn construct(init: CounterInit, _effects: &mut Effects<Self>) -> CounterState {
+        CounterState {
+            total: init.start,
+            tick_at: Some(Utc::now() + Duration::milliseconds(50)),
+        }
     }
 
     fn transition(
         state: &CounterState,
-        _id: &String,
+        id: &String,
         env: &Arc<CounterEnv>,
         action: &CounterAction,
-    ) -> anyhow::Result<(CounterState, Effects<Self>)> {
+        effects: &mut Effects<Self>,
+    ) -> anyhow::Result<CounterState> {
         match action {
             CounterAction::Add(n) => {
                 if state.total + n < 0 {
@@ -80,16 +78,17 @@ impl StateMachine for CounterMachine {
                 let mut next = state.clone();
                 next.total += n;
                 env.obs.lock().unwrap().totals.push(next.total);
-                Ok((next, Effects::none()))
+                Ok(next)
             }
             CounterAction::Ping => {
-                Ok((state.clone(), Effects::none().then(async { CounterAction::Add(10) })))
+                effects.enqueue_action::<CounterMachine>(id.clone(), CounterAction::Add(10));
+                Ok(state.clone())
             }
             CounterAction::Tick => {
                 let mut next = state.clone();
                 next.tick_at = None;
                 env.obs.lock().unwrap().ticks += 1;
-                Ok((next, Effects::none()))
+                Ok(next)
             }
         }
     }
@@ -115,14 +114,14 @@ async fn smoke() {
         .expect("set COUNTER once");
     let sm = CounterMachine::handle();
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(5)).await;
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 });
+    sm.act("c1".to_string(), CounterAction::Add(5));
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 }).await;
-    sm.act("c1".to_string(), CounterAction::Add(3)).await;
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 });
+    sm.act("c1".to_string(), CounterAction::Add(3));
 
-    sm.act("c1".to_string(), CounterAction::Add(-1000)).await;
-    sm.act("c1".to_string(), CounterAction::Ping).await;
+    sm.act("c1".to_string(), CounterAction::Add(-1000));
+    sm.act("c1".to_string(), CounterAction::Ping);
 
     tokio::time::sleep(StdDuration::from_millis(120)).await;
 
@@ -132,9 +131,9 @@ async fn smoke() {
         assert_eq!(o.ticks, 1, "timer fired exactly once");
     }
 
-    sm.delete("c1".to_string()).await;
+    sm.delete("c1".to_string());
     tokio::time::sleep(StdDuration::from_millis(20)).await;
-    sm.act("c1".to_string(), CounterAction::Add(1)).await;
+    sm.act("c1".to_string(), CounterAction::Add(1));
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     assert_eq!(obs.lock().unwrap().totals, vec![5, 8, 18], "post-delete act dropped");
@@ -170,18 +169,19 @@ impl StateMachine for PongerMachine {
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
-    fn construct(_init: PongerInit) -> (PongerState, Effects<Self>) {
-        (PongerState, Effects::none())
+    fn construct(_init: PongerInit, _effects: &mut Effects<Self>) -> PongerState {
+        PongerState
     }
     fn transition(
         state: &PongerState,
         _id: &String,
         env: &Arc<RtEnv>,
         action: &PongerAction,
-    ) -> anyhow::Result<(PongerState, Effects<Self>)> {
+        _effects: &mut Effects<Self>,
+    ) -> anyhow::Result<PongerState> {
         let PongerAction::Pong(n) = action;
         env.received.lock().unwrap().push(*n);
-        Ok((state.clone(), Effects::none()))
+        Ok(state.clone())
     }
     fn schedule(_state: &PongerState) -> Option<Scheduled<PongerAction>> {
         None
@@ -214,26 +214,23 @@ impl StateMachine for PingerMachine {
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
-    fn construct(_init: PingerInit) -> (PingerState, Effects<Self>) {
-        (
-            PingerState,
-            Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0)),
-        )
+    fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
+        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0));
+        PingerState
     }
     fn transition(
         state: &PingerState,
         _id: &String,
         _env: &Arc<RtEnv>,
         action: &PingerAction,
-    ) -> anyhow::Result<(PingerState, Effects<Self>)> {
+        effects: &mut Effects<Self>,
+    ) -> anyhow::Result<PingerState> {
         let PingerAction::Ping(n) = action;
         if *n < 0 {
             anyhow::bail!("no negative pings");
         }
-        Ok((
-            state.clone(),
-            Effects::none().send::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n)),
-        ))
+        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n));
+        Ok(state.clone())
     }
     fn schedule(_state: &PingerState) -> Option<Scheduled<PingerAction>> {
         None
@@ -257,11 +254,11 @@ async fn outbound() {
     let ponger = PongerMachine::handle();
     let pinger = PingerMachine::handle();
 
-    ponger.maybe_construct(PongerInit { id: "pong1".to_string() }).await;
-    pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
+    ponger.maybe_construct(PongerInit { id: "pong1".to_string() });
+    pinger.maybe_construct(PingerInit { id: "ping1".to_string() });
 
-    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;
-    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await;
+    pinger.act("ping1".to_string(), PingerAction::Ping(42));
+    pinger.act("ping1".to_string(), PingerAction::Ping(-1));
 
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(
