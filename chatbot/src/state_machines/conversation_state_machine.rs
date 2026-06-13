@@ -18,9 +18,20 @@ use re_framework::{Effects, Scheduled, StateMachine, StateMachineHandle};
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-type ConversationTransitionResult = anyhow::Result<(Conversation, Effects<ConversationMachine>)>;
+type ConversationTransitionResult = anyhow::Result<(Conversation, Effects)>;
 
 static CONVERSATION: OnceLock<StateMachineHandle<ConversationMachine>> = OnceLock::new();
+
+fn loop_back(
+    effects: Effects,
+    conversation_id: ConversationId,
+    fut: impl std::future::Future<Output = ConversationAction> + Send + 'static,
+) -> Effects {
+    effects.fire(async move {
+        let action = fut.await;
+        ConversationMachine::handle().act(conversation_id, action).await;
+    })
+}
 
 pub struct ConversationMachine;
 
@@ -31,7 +42,7 @@ impl StateMachine for ConversationMachine {
     type Construction = ConversationConstructor;
     type Env = crate::Env;
 
-    fn construct(constructor: ConversationConstructor) -> (Conversation, Effects<Self>) {
+    fn construct(constructor: ConversationConstructor) -> (Conversation, Effects) {
         construct_conversation(constructor)
     }
 
@@ -88,12 +99,16 @@ fn handle_outcome(
         let mut effects = Effects::none();
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
-            effects = effects.then(execute_tool(
-                env.clone(),
-                tool_call.clone(),
-                conversation_id.to_string(),
-                recent_conversation.history.clone(),
-            ));
+            effects = loop_back(
+                effects,
+                conversation_id.clone(),
+                execute_tool(
+                    env.clone(),
+                    tool_call.clone(),
+                    conversation_id.to_string(),
+                    recent_conversation.history.clone(),
+                ),
+            );
             pending_tools.insert(tool_call.id.clone(), tool_call);
         }
 
@@ -191,11 +206,11 @@ fn conversation_transition(
 
                 match message_to_send {
                     Some(message) => {
-                        let effects = Effects::none().then(send_message(
-                            env.clone(),
+                        let effects = loop_back(
+                            Effects::none(),
                             conversation_id.clone(),
-                            message,
-                        ));
+                            send_message(env.clone(), conversation_id.clone(), message),
+                        );
 
                         Ok((
                             Conversation {
@@ -290,15 +305,19 @@ fn conversation_transition(
                 let bot_identity = conversation.bot_identity.clone();
 
                 let history = recent_conversation.history();
-                let effects = Effects::none().then(get_llm_decision(
-                    env.clone(),
-                    current_input.clone(),
-                    Some(recent_conversation),
-                    tool_rounds,
-                    MAX_TOOL_ROUNDS,
-                    is_group,
-                    bot_identity.clone(),
-                ));
+                let effects = loop_back(
+                    Effects::none(),
+                    conversation_id.clone(),
+                    get_llm_decision(
+                        env.clone(),
+                        current_input.clone(),
+                        Some(recent_conversation),
+                        tool_rounds,
+                        MAX_TOOL_ROUNDS,
+                        is_group,
+                        bot_identity.clone(),
+                    ),
+                );
 
                 Ok((
                     Conversation {
@@ -338,11 +357,15 @@ fn conversation_transition(
         ) => {
             println!("Timed Out");
 
-            let effects = Effects::none().then(commit_to_memory(
-                env.clone(),
-                conversation_id.to_string(),
-                recent_conversation.history.clone(),
-            ));
+            let effects = loop_back(
+                Effects::none(),
+                conversation_id.clone(),
+                commit_to_memory(
+                    env.clone(),
+                    conversation_id.to_string(),
+                    recent_conversation.history.clone(),
+                ),
+            );
 
             Ok((
                 Conversation {
@@ -375,7 +398,7 @@ fn conversation_transition(
         _ => Err(anyhow::anyhow!("Invalid state or action")),
     };
 
-    post_transition(env, state)
+    post_transition(env, conversation_id, state)
 }
 
 fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
@@ -400,6 +423,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
 
 fn post_transition(
     env: &Arc<Env>,
+    conversation_id: &ConversationId,
     result: ConversationTransitionResult,
 ) -> ConversationTransitionResult {
     let (mut conversation, effects) = result?;
@@ -425,15 +449,19 @@ fn post_transition(
 
     let current_input = LLMInput::ConversationMessage(msg);
 
-    let effects = effects.then(get_llm_decision(
-        env.clone(),
-        current_input.clone(),
-        recent_conversation.map(|(rc, _)| rc),
-        0,
-        MAX_TOOL_ROUNDS,
-        is_group,
-        bot_identity.clone(),
-    ));
+    let effects = loop_back(
+        effects,
+        conversation_id.clone(),
+        get_llm_decision(
+            env.clone(),
+            current_input.clone(),
+            recent_conversation.map(|(rc, _)| rc),
+            0,
+            MAX_TOOL_ROUNDS,
+            is_group,
+            bot_identity.clone(),
+        ),
+    );
 
     Ok((
         Conversation {
@@ -472,7 +500,7 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
 
 fn construct_conversation(
     constructor: ConversationConstructor,
-) -> (Conversation, Effects<ConversationMachine>) {
+) -> (Conversation, Effects) {
     (
         Conversation {
             pending: Vec::new(),
