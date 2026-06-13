@@ -3,6 +3,7 @@ use llama_cpp_2::{
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, LlamaModel},
+    mtmd::{MtmdContext, MtmdContextParams},
 };
 use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::{num::NonZero, sync::Arc};
@@ -11,6 +12,8 @@ use tokio::task::{spawn_blocking, JoinHandle};
 use crate::agents::{Agent, PRIMARY_AGENT_IMPL};
 
 pub struct LlamaCppService {
+    #[allow(dead_code)]
+    mtmd: Arc<MtmdContext>,
     primary_model: Arc<LlamaModel>,
     backend: Arc<LlamaBackend>,
     primary_agent: &'static Agent,
@@ -38,6 +41,20 @@ impl LlamaCppService {
         Ok(model)
     }
 
+    fn mtmd_context(model: &LlamaModel) -> anyhow::Result<MtmdContext> {
+        let mmproj_path = std::env::var("MMPROJ_PATH")
+            .unwrap_or_else(|_| "./models/mmproj-Qwen3.6-27B-BF16.gguf".to_string());
+        println!("Loading multimodal projector from: {}", mmproj_path);
+        let mtmd = MtmdContext::init_from_file(&mmproj_path, model, &MtmdContextParams::default())?;
+        println!(
+            "Loaded multimodal projector from: {} (vision={}, audio={})",
+            mmproj_path,
+            mtmd.support_vision(),
+            mtmd.support_audio()
+        );
+        Ok(mtmd)
+    }
+
     pub async fn new() -> anyhow::Result<Self> {
         send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
 
@@ -47,18 +64,20 @@ impl LlamaCppService {
 
         let backend_arc = Arc::new(backend);
 
-        let primary_task: JoinHandle<anyhow::Result<Arc<LlamaModel>>> = {
+        let primary_task: JoinHandle<anyhow::Result<(Arc<LlamaModel>, Arc<MtmdContext>)>> = {
             let backend = Arc::clone(&backend_arc);
             spawn_blocking(move || {
                 let model_params = LlamaModelParams::default();
-                let model = Arc::new(Self::primary_model(backend.as_ref(), &model_params)?);
-                Ok(model)
+                let model = Self::primary_model(backend.as_ref(), &model_params)?;
+                let mtmd = Self::mtmd_context(&model)?;
+                Ok((Arc::new(model), Arc::new(mtmd)))
             })
         };
 
-        let primary_model = primary_task.await??;
+        let (primary_model, mtmd) = primary_task.await??;
 
         Ok(Self {
+            mtmd,
             primary_model,
             backend: backend_arc,
             primary_agent,

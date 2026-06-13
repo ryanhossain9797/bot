@@ -109,7 +109,7 @@ impl StateMachine for CounterMachine {
 async fn smoke() {
     let obs = Arc::new(Mutex::new(Obs::default()));
     COUNTER
-        .set(StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: obs.clone() }))
+        .set(StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: Arc::clone(&obs) }))
         .ok()
         .expect("set COUNTER once");
     let sm = CounterMachine::handle();
@@ -244,11 +244,11 @@ impl StateMachine for PingerMachine {
 async fn outbound() {
     let received = Arc::new(Mutex::new(Vec::<i64>::new()));
     PONGER
-        .set(StateMachineHandle::<PongerMachine>::new(RtEnv { received: received.clone() }))
+        .set(StateMachineHandle::<PongerMachine>::new(RtEnv { received: Arc::clone(&received) }))
         .ok()
         .expect("set PONGER once");
     PINGER
-        .set(StateMachineHandle::<PingerMachine>::new(RtEnv { received: received.clone() }))
+        .set(StateMachineHandle::<PingerMachine>::new(RtEnv { received: Arc::clone(&received) }))
         .ok()
         .expect("set PINGER once");
     let ponger = PongerMachine::handle();

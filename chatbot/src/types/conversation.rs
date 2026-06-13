@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use crate::types::media::Image;
 use std::collections::HashMap;
 use std::fmt::Display;
 use strum::{EnumDiscriminants, EnumIter};
@@ -97,6 +98,7 @@ pub struct ConversationMessage {
     pub queued: bool,
         pub user_id: String,
         pub name: String,
+        pub images: Vec<Image>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,6 +278,7 @@ pub enum ConversationAction {
                 msg: String,
         user_id: String,
         name: String,
+        images: Vec<Image>,
     },
     Timeout,
     CommitResult(Result<(), String>),

@@ -24,3 +24,7 @@ RUN apt-get update && apt-get install -y \
     vulkan-tools \
     && (getent group render || groupadd -r render) \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy multimodal projector (vision) — appended last so the model/apt layers stay cached
+COPY models/mmproj-Qwen3.6-27B-BF16.gguf /app/models/
+ENV MMPROJ_PATH=/app/models/mmproj-Qwen3.6-27B-BF16.gguf
