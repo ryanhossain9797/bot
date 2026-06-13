@@ -18,6 +18,6 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
     A message tagged [Followup] arrived while you were busy (people see only your replies, never \
     tool calls). Build on what you already produced rather than repeating; in a group, first judge \
     whether it is even aimed at you — if not, `<empty>`.";
-const TEMPERATURE: f32 = 0.6;
+const TEMPERATURE: f32 = 1.0;
 
 pub const PRIMARY_AGENT_IMPL: Agent = Agent::new(SYSTEM_PROMPT, TEMPERATURE);
