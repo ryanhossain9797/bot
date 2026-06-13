@@ -66,6 +66,16 @@ pub fn init_conversation_state_machine(env: Env) {
         .expect("ConversationMachine initialized once");
 }
 
+fn state_label(state: &ConversationState) -> &'static str {
+    match state {
+        ConversationState::Idle { .. } => "Idle",
+        ConversationState::CommitingToMemory { .. } => "CommitingToMemory",
+        ConversationState::AwaitingLLMDecision { .. } => "AwaitingLLMDecision",
+        ConversationState::SendingMessage { .. } => "SendingMessage",
+        ConversationState::RunningTools { .. } => "RunningTools",
+    }
+}
+
 fn handle_outcome(
     env: &Arc<Env>,
     conversation_id: &ConversationId,
@@ -121,6 +131,7 @@ fn conversation_transition(
     action: &ConversationAction,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
+    let from = state_label(&conversation.state);
     let state = match (conversation.state, action) {
         (_, ConversationAction::ForceReset) => Ok(Conversation {
             pending: Vec::new(),
@@ -340,7 +351,7 @@ fn conversation_transition(
                 ..conversation
             })
         }
-        _ => Err(anyhow::anyhow!("Invalid state or action")),
+        _ => Err(anyhow::anyhow!("no transition for {action:?} in state {from}")),
     };
 
     post_transition(env, conversation_id, state, effects)

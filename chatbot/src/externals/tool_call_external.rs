@@ -442,7 +442,11 @@ pub async fn execute_tool(
     conversation_id: String,
     history: Vec<HistoryEntry>,
 ) -> ConversationAction {
+    let tool_name = tool_call.tool_type.wire_name().to_string();
     let result = run_tool(env, tool_call.tool_type, conversation_id, history).await;
+    if let Err(err) = &result {
+        eprintln!("[tool {tool_name} id {}] failed: {err}", tool_call.id);
+    }
     ConversationAction::ToolResult {
         id: tool_call.id,
         result,

@@ -94,9 +94,12 @@ async fn run_entity<SM: StateMachine>(
 
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
-        if let Ok(next) = SM::transition(&state, &id, &env, &action, &mut effects) {
-            state = next;
-            spawn_effects(effects);
+        match SM::transition(&state, &id, &env, &action, &mut effects) {
+            Ok(next) => {
+                state = next;
+                spawn_effects(effects);
+            }
+            Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
         }
     }
 }

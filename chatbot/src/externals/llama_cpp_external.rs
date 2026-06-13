@@ -152,12 +152,13 @@ async fn get_response_from_llm(
         .unwrap_or("")
         .to_string();
 
-    let message = parsed
+    let content = parsed
         .get("content")
         .and_then(|v| v.as_str())
         .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("<empty>"))
-        .map(String::from);
+        .unwrap_or("");
+    let explicit_empty = content.eq_ignore_ascii_case("<empty>");
+    let message = (!content.is_empty() && !explicit_empty).then(|| content.to_string());
 
     let calls = all_tool_calls(&parsed);
     let mut tool_calls = Vec::with_capacity(calls.len());
@@ -166,6 +167,12 @@ async fn get_response_from_llm(
         tool_calls.push(ToolCall { id, tool_type });
     }
     tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
+
+    if message.is_none() && tool_calls.is_empty() && !explicit_empty {
+        eprintln!(
+            "[llm] implicit empty response — model produced no message and no tool calls; nothing will be sent"
+        );
+    }
 
     Ok(LLMResponse {
         thoughts,
@@ -203,6 +210,9 @@ pub async fn get_llm_decision(
 
     match llama_cpp_result {
         Ok(llama_cpp_response) => ConversationAction::LLMDecisionResult(Ok(llama_cpp_response)),
-        Err(err) => ConversationAction::LLMDecisionResult(Err(err.to_string())),
+        Err(err) => {
+            eprintln!("[llm] decision failed: {err}");
+            ConversationAction::LLMDecisionResult(Err(err.to_string()))
+        }
     }
 }

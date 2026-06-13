@@ -122,5 +122,9 @@ pub async fn commit_to_memory(
     conversation_id: String,
     history: Vec<HistoryEntry>,
 ) -> ConversationAction {
-    ConversationAction::CommitResult(commit(Arc::clone(&env.lance_service), conversation_id, history).await)
+    let result = commit(Arc::clone(&env.lance_service), conversation_id, history).await;
+    if let Err(err) = &result {
+        eprintln!("[memory] commit failed: {err}");
+    }
+    ConversationAction::CommitResult(result)
 }
