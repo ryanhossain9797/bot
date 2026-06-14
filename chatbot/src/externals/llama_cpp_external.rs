@@ -58,7 +58,7 @@ fn session_context_block(
         lines.push(note);
     }
     lines.push(
-        "If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can; don't just agree, and don't defend a wrong prior.".to_string(),
+        "If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can, then carry on with the corrected info; don't just agree or defend a wrong prior.".to_string(),
     );
 
     if is_group {
