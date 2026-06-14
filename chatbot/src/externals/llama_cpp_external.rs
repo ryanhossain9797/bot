@@ -58,7 +58,7 @@ fn session_context_block(
         lines.push(note);
     }
     lines.push(
-        "When the image, a tool result, or the user's correction contradicts what you remember, trust the source and update — don't defend your prior.".to_string(),
+        "If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can; don't just agree, and don't defend a wrong prior.".to_string(),
     );
 
     if is_group {
