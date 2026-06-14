@@ -56,7 +56,7 @@ impl ToolKind {
                 "type": "function",
                 "function": {
                     "name": self.wire_name(),
-                    "description": "Search the web for sources — returns only short snippets, usually not enough to answer specifics (dates, numbers, names, quotes, current facts); open the most relevant result with visit_url and read it before answering. One focused topic per query; for several facts, fire several searches in the same turn (parallel calls are fine).",
+                    "description": "Search the web — ONE focused topic per query; search one fact at a time, never pile attributes into a single query. Snippets only, usually not enough for specifics (dates, numbers, names, quotes) — open the best result with visit_url and read it before answering. For several facts, fire several single-topic searches in the same turn (parallel is fine).",
                     "parameters": {
                         "type": "object",
                         "properties": {

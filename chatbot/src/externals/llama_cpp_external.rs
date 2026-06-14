@@ -50,7 +50,7 @@ fn session_context_block(
 
     let mut lines = vec![
         "=== SESSION CONTEXT (authoritative; current as of now) ===".to_string(),
-        format!("Your identity: {bot_identity}"),
+        format!("Your username in this conversation: {bot_identity}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
     ];
@@ -58,7 +58,7 @@ fn session_context_block(
         lines.push(note);
     }
     lines.push(
-        "When the image, a tool result, or the user's correction contradicts what you remember, trust the source and update — don't defend your prior.".to_string(),
+        "If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can, then carry on with the corrected info; don't just agree or defend a wrong prior.".to_string(),
     );
 
     if is_group {
