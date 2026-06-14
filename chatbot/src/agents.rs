@@ -25,6 +25,8 @@ const MAX_THINKING_TOKENS: usize = 1000;
 
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 
+const DRY_BREAKS_LONG_STRINGS: bool = true;
+
 const THINKING_FORCE_CLOSE: &str =
     "\n\nWait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.\n</think>\n\n";
 
@@ -117,13 +119,15 @@ fn generate(
     mut n_cur: i32,
     temperature: f32,
 ) -> anyhow::Result<String> {
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::dry(model, 0.8, 1.75, 2, -1, ["\n", ":", "\"", "*"]),
-        LlamaSampler::temp(temperature),
-        LlamaSampler::top_k(20),
-        LlamaSampler::top_p(0.95, 1),
-        LlamaSampler::dist(0),
-    ]);
+    let mut samplers: Vec<LlamaSampler> = Vec::new();
+    if !DRY_BREAKS_LONG_STRINGS {
+        samplers.push(LlamaSampler::dry(model, 0.8, 1.75, 2, -1, ["\n", ":", "\"", "*"]));
+    }
+    samplers.push(LlamaSampler::temp(temperature));
+    samplers.push(LlamaSampler::top_k(20));
+    samplers.push(LlamaSampler::top_p(0.95, 1));
+    samplers.push(LlamaSampler::dist(0));
+    let mut sampler = LlamaSampler::chain_simple(samplers);
 
     let mut out_bytes: Vec<u8> = Vec::new();
     let mut printed = 0usize;
