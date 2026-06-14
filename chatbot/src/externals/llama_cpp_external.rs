@@ -50,7 +50,7 @@ fn session_context_block(
 
     let mut lines = vec![
         "=== SESSION CONTEXT (authoritative; current as of now) ===".to_string(),
-        format!("Your identity: {bot_identity}"),
+        format!("Your username in this conversation: {bot_identity}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
     ];
