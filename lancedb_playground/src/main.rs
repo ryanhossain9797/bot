@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use arrow_array::{
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use futures::TryStreamExt;
+use lance::deps::arrow_array::{
     Array, FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
     StringArray,
 };
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use futures::TryStreamExt;
-use lancedb::arrow::arrow_schema::{DataType, Field, Schema};
+use lance::deps::arrow_schema::{DataType, Field, Schema};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use lancedb::{connect, Table};
 

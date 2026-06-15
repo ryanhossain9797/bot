@@ -35,7 +35,7 @@ scraper = "0.27"
 readability = "0.3.0"
 lancedb = { version = "=0.30", default-features = false }
 lzma-sys = { version = "*", features = ["static"] } # static recommended by lance
-arrow-array = "=58.3.0" # must match lancedb internal version, use `cargo tree | grep arrow` to see
+lance = { version = "7", default-features = false } # arrow types via lance::deps::arrow_array — always matches lancedb's arrow
 fastembed = "5.8"
 
 [lints]
