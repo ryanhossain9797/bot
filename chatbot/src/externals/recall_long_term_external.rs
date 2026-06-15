@@ -1,6 +1,6 @@
 use std::{ops::Add, sync::Arc};
 
-use arrow_array::{Array, StringArray};
+use lance::deps::arrow_array::{Array, StringArray};
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use lancedb::query::{ExecutableQuery, QueryBase};
 use serenity::futures::TryStreamExt;

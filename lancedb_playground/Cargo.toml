@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 lancedb = { version = "=0.30", default-features = false }
 lzma-sys = { version = "*", features = ["static"] } # static recommended by lance
-arrow-array = "=58.3.0"
+lance = { version = "7", default-features = false } # for lance::deps::arrow_array — always matches lancedb's arrow
 fastembed = "5.8"
 tokio = { version = "1.48", features = ["full"] }
 anyhow = "1.0"

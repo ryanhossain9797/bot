@@ -3,7 +3,7 @@ use crate::{
     services::lance_db::LanceService,
     Env,
 };
-use arrow_array::{
+use lance::deps::arrow_array::{
     FixedSizeListArray, Float32Array, RecordBatch, RecordBatchIterator, RecordBatchReader,
     StringArray,
 };

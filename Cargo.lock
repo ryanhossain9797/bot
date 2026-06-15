@@ -808,11 +808,11 @@ name = "chatbot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arrow-array",
  "chrono",
  "encoding_rs",
  "fastembed",
  "image",
+ "lance",
  "lancedb",
  "llama-cpp-2",
  "lzma-sys",
@@ -4004,9 +4004,9 @@ name = "lancedb_playground"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arrow-array",
  "fastembed",
  "futures",
+ "lance",
  "lancedb",
  "lzma-sys",
  "tokio",
