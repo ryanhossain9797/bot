@@ -21,7 +21,7 @@ use crate::{
     services::llama_cpp::{LlamaCppService, PrimaryModel},
 };
 
-const MAX_THINKING_TOKENS: usize = 1000;
+const MAX_THINKING_TOKENS: usize = 2000;
 
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 
