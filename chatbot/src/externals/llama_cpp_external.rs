@@ -49,7 +49,7 @@ fn session_context_block(
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
 
     let mut lines = vec![
-        "=== SESSION CONTEXT (authoritative; current as of now) ===".to_string(),
+        "=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===".to_string(),
         format!("Your username in this conversation: {bot_identity}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
@@ -60,6 +60,9 @@ fn session_context_block(
     lines.push(
         "If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can, then carry on with the corrected info; don't just agree or defend a wrong prior.".to_string(),
     );
+    lines.push(
+        "If you already have something worth sharing — a partial answer, or what you're about to do — say it right after your thinking and before the tool call, instead of calling silently.".to_string(),
+    );
 
     if is_group {
         lines.push(
@@ -69,7 +72,9 @@ fn session_context_block(
         lines.push("Reminder: you are Terminal Alpha Beta.".to_string());
     }
 
-    json!({ "role": "user", "content": lines.join("\n") })
+    // Private role: stripped out in respond_blocking and re-injected as a system block past the
+    // template's "system must be first" guard — so this renders as a true system footer, not a user turn.
+    json!({ "role": "footer", "content": lines.join("\n") })
 }
 
 fn build_conversation(
