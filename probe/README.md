@@ -24,7 +24,7 @@ cargo run -p probe          # or: ./target/debug/probe  (release: cargo run -p p
 ```
 
 Edit the hardcoded bits at the top of [`src/main.rs`](src/main.rs):
-- `MODEL` — path to the GGUF (defaults to the chatbot's Qwen3.6-27B).
+- `MODEL` — path to the GGUF (defaults to the chatbot's Qwen3.6-35B-A3B).
 - `TOOLS` — the fake tool definition (OpenAI-compatible JSON array).
 - `REASONING_FORMAT` — `"auto"` | `"deepseek"` | `"deepseek-legacy"` | `"none"`.
 - the `messages_json` conversation.

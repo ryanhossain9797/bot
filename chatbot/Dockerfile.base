@@ -6,8 +6,8 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Copy model file (large, rarely changes)
-COPY models/Qwen3.6-27B-Q4_K_M.gguf /app/models/
-ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-27B-Q4_K_M.gguf
+COPY models/Qwen3.6-35B-A3B-Q4_K_M.gguf /app/models/
+ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-35B-A3B-Q4_K_M.gguf
 
 # Copy FastEmbed cache
 COPY .fastembed_cache* /app/.fastembed_cache
@@ -26,5 +26,5 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy multimodal projector (vision) — appended last so the model/apt layers stay cached
-COPY models/mmproj-Qwen3.6-27B-BF16.gguf /app/models/
-ENV MMPROJ_PATH=/app/models/mmproj-Qwen3.6-27B-BF16.gguf
+COPY models/mmproj-Qwen3.6-35B-A3B-BF16.gguf /app/models/
+ENV MMPROJ_PATH=/app/models/mmproj-Qwen3.6-35B-A3B-BF16.gguf

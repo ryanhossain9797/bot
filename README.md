@@ -7,7 +7,7 @@ A Rust-based Discord chatbot powered by a local Large Language Model, featuring 
 This is a multi-component project that provides a sophisticated AI chatbot experience:
 
 - **Discord Integration**: Responds to direct messages and mentions
-- **Local LLM**: Uses Qwen3.6-27B running locally via llama.cpp
+- **Local LLM**: Uses Qwen3.6-35B-A3B running locally via llama.cpp
 - **Tool Calling**: Supports multi-turn tool execution (weather, web search, etc.)
 - **Memory Systems**: Short-term and long-term memory via LanceDB with embeddings
 - **Type-Safe Architecture**: Built on a custom Rust state machine framework
@@ -123,7 +123,7 @@ just deploy_local
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PRIMARY_MODEL_PATH` | Path to GGUF model | `models/Qwen3.6-27B-Q4_K_M.gguf` |
+| `PRIMARY_MODEL_PATH` | Path to GGUF model | `models/Qwen3.6-35B-A3B-Q4_K_M.gguf` |
 | `RUST_LOG` | Log level | `info` |
 
 ## Dependencies

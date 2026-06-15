@@ -40,7 +40,7 @@ impl LlamaCppService {
         model_params: &LlamaModelParams,
     ) -> anyhow::Result<LlamaModel> {
         let primary_model_path = std::env::var("PRIMARY_MODEL_PATH")
-            .unwrap_or_else(|_| "./models/Qwen3.6-27B-Q4_K_M.gguf".to_string());
+            .unwrap_or_else(|_| "./models/Qwen3.6-35B-A3B-Q4_K_M.gguf".to_string());
         println!("Loading primary model from: {}", primary_model_path);
 
         let model = LlamaModel::load_from_file(backend, &primary_model_path, model_params)?;
@@ -50,7 +50,7 @@ impl LlamaCppService {
 
     fn mtmd_context(model: &LlamaModel) -> anyhow::Result<MtmdContext> {
         let mmproj_path = std::env::var("MMPROJ_PATH")
-            .unwrap_or_else(|_| "./models/mmproj-Qwen3.6-27B-BF16.gguf".to_string());
+            .unwrap_or_else(|_| "./models/mmproj-Qwen3.6-35B-A3B-BF16.gguf".to_string());
         println!("Loading multimodal projector from: {}", mmproj_path);
         let mtmd = MtmdContext::init_from_file(&mmproj_path, model, &MtmdContextParams::default())?;
         println!(

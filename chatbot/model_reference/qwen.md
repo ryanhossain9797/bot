@@ -7,14 +7,14 @@ llama.cpp applies at runtime.
 
 > **Heads-up on variation:** the tool-call wire format is NOT identical across Qwen
 > releases. Stock **Qwen2.5** emits JSON inside `<tool_call>` (`{"name":..,"arguments":..}`).
-> Our model (**Qwen3.6-27B**, a reasoning model) uses an **XML `<function=…>` format** and a
+> Our model (**Qwen3.6-35B-A3B**, a reasoning model) uses an **XML `<function=…>` format** and a
 > `<think>` reasoning channel. Always confirm against the model's embedded template.
 
 ---
 
-## Model in use: Qwen3.6-27B-Q4_K_M
+## Model in use: Qwen3.6-35B-A3B-Q4_K_M
 
-- File: `chatbot/models/Qwen3.6-27B-Q4_K_M.gguf` (also in LM Studio cache).
+- File: `chatbot/models/Qwen3.6-35B-A3B-Q4_K_M.gguf` (also in LM Studio cache).
 - Base format: **ChatML**. Turn delimiters `<|im_start|>{role}\n … <|im_end|>\n`.
 - **EOS / end-of-turn token: `<|im_end|>`** — this is what stops generation (no grammar cap needed).
 - **Reasoning model:** has a `<think> … </think>` channel. `add_generation_prompt` opens
@@ -207,7 +207,7 @@ an OpenAI-style message JSON:
 - It is a method on the **`ChatTemplateResult`** (NOT `LlamaModel`) — it needs the `chat_format` /
   `parser` produced during rendering.
 
-## Empirical behavior (probed against Qwen3.6-27B)
+## Empirical behavior (probed locally)
 
 - **No BOS** — tokenize with `AddBos::Never`; the prompt starts at `<|im_start|>` (id 248045);
   `<|im_end|>` is id 248046. Special tokens are single ids, not literal characters.

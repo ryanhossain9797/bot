@@ -21,7 +21,7 @@ use crate::{
     services::llama_cpp::{LlamaCppService, PrimaryModel},
 };
 
-const MAX_THINKING_TOKENS: usize = 1000;
+const MAX_THINKING_TOKENS: usize = 2000;
 
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 
@@ -195,8 +195,15 @@ fn respond_blocking(
         "role": "system",
         "content": agent.system_content(),
     })];
+    let mut footer: Option<String> = None;
     if let Some(arr) = conversation.as_array() {
-        messages.extend(arr.iter().cloned());
+        for msg in arr {
+            if msg.get("role").and_then(|r| r.as_str()) == Some("footer") {
+                footer = msg.get("content").and_then(|c| c.as_str()).map(str::to_string);
+            } else {
+                messages.push(msg.clone());
+            }
+        }
     }
     let messages_json = serde_json::Value::Array(messages).to_string();
 
@@ -222,7 +229,17 @@ fn respond_blocking(
         add_eos: false,
         parse_tool_calls: true,
     };
-    let rendered = model.apply_chat_template_oaicompat(&template, &params)?;
+    let mut rendered = model.apply_chat_template_oaicompat(&template, &params)?;
+
+    // Re-inject the footer as a system block right before the generation prompt — past the
+    // template's "system must be first" guard, which is a Jinja check, not a model limit.
+    if let Some(footer) = footer {
+        let block = format!("<|im_start|>system\n{footer}<|im_end|>\n");
+        match rendered.prompt.rfind("<|im_start|>assistant") {
+            Some(pos) => rendered.prompt.insert_str(pos, &block),
+            None => rendered.prompt.push_str(&block),
+        }
+    }
 
     let raw = if images.is_empty() {
         run_generation_text(
