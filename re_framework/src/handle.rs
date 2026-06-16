@@ -71,6 +71,7 @@ async fn run_entity<SM: StateMachine>(
     id: SM::Id,
     initial: Effects<SM>,
 ) {
+    persist_state::<SM>(&id, &state);
     spawn_effects(initial);
 
     loop {
@@ -97,6 +98,7 @@ async fn run_entity<SM: StateMachine>(
         match SM::transition(&state, &id, &env, &action, &mut effects) {
             Ok(next) => {
                 state = next;
+                persist_state::<SM>(&id, &state);
                 spawn_effects(effects);
             }
             Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
@@ -107,6 +109,37 @@ async fn run_entity<SM: StateMachine>(
 fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
+    }
+}
+
+// POC: write the latest state to framework_db/<state machine>/<entity id>.json on every transition.
+// Write-only for now — nothing reads it back yet. Best-effort: a failure logs and the actor continues.
+fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) {
+    let dir = std::path::Path::new("framework_db").join(SM::name());
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        eprintln!("[persist] create_dir_all {} failed: {e}", dir.display());
+        return;
+    }
+    let safe_id: String = id
+        .get_id_string()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    let path = dir.join(format!("{safe_id}.json"));
+    let tmp = dir.join(format!("{safe_id}.json.tmp"));
+    let bytes = match serde_json::to_vec_pretty(state) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("[persist] serialize {} failed: {e}", SM::name());
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&tmp, &bytes) {
+        eprintln!("[persist] write {} failed: {e}", tmp.display());
+        return;
+    }
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        eprintln!("[persist] rename to {} failed: {e}", path.display());
     }
 }
 
