@@ -308,6 +308,7 @@ fn conversation_transition(
                     MAX_TOOL_ROUNDS,
                     is_group,
                     bot_identity.clone(),
+                    conversation_id.0.clone(),
                 ));
 
                 Ok(Conversation {
@@ -402,7 +403,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
 
 fn post_transition(
     env: &Arc<Env>,
-    _conversation_id: &ConversationId,
+    conversation_id: &ConversationId,
     result: ConversationTransitionResult,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
@@ -437,6 +438,7 @@ fn post_transition(
         MAX_TOOL_ROUNDS,
         is_group,
         bot_identity.clone(),
+        conversation_id.0.clone(),
     ));
 
     Ok(Conversation {

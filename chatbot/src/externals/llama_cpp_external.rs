@@ -1,6 +1,6 @@
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, LLMResponse, RecentConversation, ToolCall,
+        HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation, ToolCall,
         ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -38,6 +38,7 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
 fn session_context_block(
     is_group: bool,
     bot_identity: &str,
+    platform: &Platform,
     tool_rounds: usize,
     max_tool_rounds: usize,
 ) -> Value {
@@ -53,6 +54,7 @@ fn session_context_block(
         format!("Your username in this conversation: {bot_identity}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
+        platform.formatting_note().to_string(),
     ];
     if let Some(note) = budget_note(tool_rounds, max_tool_rounds) {
         lines.push(note);
@@ -84,6 +86,7 @@ fn build_conversation(
     max_tool_rounds: usize,
     is_group: bool,
     bot_identity: &str,
+    platform: &Platform,
 ) -> (Value, Vec<Arc<Vec<u8>>>) {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
@@ -111,6 +114,7 @@ fn build_conversation(
     messages.push(session_context_block(
         is_group,
         bot_identity,
+        platform,
         tool_rounds,
         max_tool_rounds,
     ));
@@ -151,6 +155,7 @@ async fn get_response_from_llm(
     allow_tools: bool,
     is_group: bool,
     bot_identity: &str,
+    platform: &Platform,
 ) -> anyhow::Result<LLMResponse> {
     let (conversation, images) = build_conversation(
         current_input,
@@ -159,6 +164,7 @@ async fn get_response_from_llm(
         max_tool_rounds,
         is_group,
         bot_identity,
+        platform,
     );
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
@@ -218,6 +224,7 @@ pub async fn get_llm_decision(
     max_tool_rounds: usize,
     is_group: bool,
     bot_identity: String,
+    platform: Platform,
 ) -> ConversationAction {
     let allow_tools = tool_rounds < max_tool_rounds;
     println!(
@@ -234,6 +241,7 @@ pub async fn get_llm_decision(
         allow_tools,
         is_group,
         &bot_identity,
+        &platform,
     )
     .await;
 

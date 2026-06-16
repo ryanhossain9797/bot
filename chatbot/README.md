@@ -4,7 +4,7 @@
 
 Bot Hive is a Discord chatbot powered by a local Large Language Model (LLM) that provides conversational AI capabilities with tool calling support. It uses a type-safe state machine framework (`framework`) to manage user interactions through distinct states and transitions.
 
-The bot uses **Qwen3.6-35B-A3B** (quantized Q4_K_M) running locally via `llama-cpp-2`, enabling private, offline AI conversations without relying on external APIs.
+The bot uses **Qwen3.6-35B-A3B** (quantized Q8_0) running locally via `llama-cpp-2`, enabling private, offline AI conversations without relying on external APIs.
 
 ## Features
 
@@ -72,7 +72,7 @@ docker run -d \
 ## Configuration
 
 ### Environment Variables
-- `PRIMARY_MODEL_PATH`: Path to the primary LLM model file inside the container (default: `/app/models/Qwen3.6-35B-A3B-Q4_K_M.gguf`).
+- `PRIMARY_MODEL_PATH`: Path to the primary LLM model file inside the container (default: `/app/models/Qwen3.6-35B-A3B-Q8_0.gguf`).
 - `RUST_LOG`: Log level (default: `info`).
 
 ### Session File Caching
