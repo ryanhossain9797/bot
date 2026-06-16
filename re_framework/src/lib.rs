@@ -1,9 +1,7 @@
 mod effects;
 mod handle;
 mod machine;
-
-#[cfg(test)]
-mod smoke;
+mod store;
 
 pub use effects::Effects;
 pub use handle::StateMachineHandle;

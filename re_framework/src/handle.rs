@@ -1,6 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use anyhow::Context;
+use crate::store;
 use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -39,15 +39,28 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         use dashmap::mapref::entry::Entry as DEntry;
         let id = construction.get_id().clone();
         match self.entities.entry(id.get_id_string()) {
-            DEntry::Occupied(_) => {}
+            DEntry::Occupied(_) => {} // already live — constructed or rehydrated in this process
             DEntry::Vacant(slot) => {
-                let (tx, rx) = mpsc::unbounded_channel();
-                let mut effects = Effects::new(id.clone());
-                let state = SM::construct(construction, &mut effects);
-                tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id, effects));
-                slot.insert(SoleMailboxHandle { sender: tx });
+                slot.insert(self.spawn_entry(id, construction));
             }
         }
+    }
+
+    // Bring an entity to life and return its sole mailbox. A snapshot on disk means it was
+    // already constructed in a past life, so we rehydrate (resume the state — no `construct`,
+    // no construct effects); otherwise we construct fresh. Callers never see which happened.
+    fn spawn_entry(&self, id: SM::Id, construction: SM::Construction) -> SoleMailboxHandle<SM> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let initial = match store::read::<SM>(&id) {
+            Some(state) => StoredEntry::Rehydrated(state),
+            None => {
+                let mut effects = Effects::new(id.clone());
+                let state = SM::construct(construction, &mut effects);
+                StoredEntry::Constructed { state, effects }
+            }
+        };
+        tokio::spawn(run_entity::<SM>(rx, Arc::clone(&self.env), id, initial));
+        SoleMailboxHandle { sender: tx }
     }
 
     pub fn act(&self, id: SM::Id, action: SM::Action) {
@@ -66,17 +79,37 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 }
 
+/// How a newly-spawned entity gets its starting state. The store resolves this from the live
+/// map and the on-disk snapshot, so the rest of the code never branches on where state came from.
+enum StoredEntry<SM: StateMachine> {
+    Constructed { state: SM::State, effects: Effects<SM> },
+    Rehydrated(SM::State),
+}
+
 async fn run_entity<SM: StateMachine>(
-    mut state: SM::State,
     mut rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
     env: Arc<SM::Env>,
     id: SM::Id,
-    initial: Effects<SM>,
+    initial: StoredEntry<SM>,
 ) {
-    match persist_state::<SM>(&id, &state) {
-        Ok(()) => spawn_effects(initial),
-        Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
-    }
+    let mut state = match initial {
+        // Fresh: persist the initial state before firing construct effects. On failure, log and
+        // carry on with the in-memory state (matches the prior write-only POC behavior).
+        StoredEntry::Constructed { state, effects } => {
+            match store::write::<SM>(&id, &state) {
+                Ok(()) => spawn_effects(effects),
+                Err(e) => log_transition::<SM>(&format!(
+                    "construct aborted — persistence failed: {e:#}"
+                )),
+            }
+            state
+        }
+        // Resumed: already on disk, and construct effects belong to the past life that built it.
+        StoredEntry::Rehydrated(state) => {
+            log_transition::<SM>("rehydrated from disk");
+            state
+        }
+    };
 
     loop {
         let action = match SM::schedule(&state) {
@@ -100,7 +133,7 @@ async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
         match SM::transition(&state, &id, &env, &action, &mut effects) {
-            Ok(next) => match persist_state::<SM>(&id, &next) {
+            Ok(next) => match store::write::<SM>(&id, &next) {
                 Ok(()) => {
                     state = next;
                     spawn_effects(effects);
@@ -118,24 +151,6 @@ fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
     }
-}
-
-// POC: write the latest state to framework_db/<state machine>/<entity id>.json on every transition.
-// Write-only for now — nothing reads it back yet. On failure the caller aborts the transition.
-fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
-    let dir = std::path::Path::new("framework_db").join(SM::name());
-    std::fs::create_dir_all(&dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
-    let safe_id: String = id
-        .get_id_string()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
-        .collect();
-    let path = dir.join(format!("{safe_id}.json"));
-    let tmp = dir.join(format!("{safe_id}.json.tmp"));
-    let bytes = serde_json::to_vec_pretty(state).context("serialize state")?;
-    std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("rename to {}", path.display()))?;
-    Ok(())
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {
