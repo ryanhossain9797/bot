@@ -1,5 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
+use crate::store;
 use anyhow::Context;
 use chrono::Utc;
 use dashmap::DashMap;
@@ -7,13 +8,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Mailbox message; single-variant for now, kept as an enum for planned control messages.
-enum Envelope<A> {
+pub(crate) enum Envelope<A> {
     Act(A),
 }
 
 /// Sole sender to a live actor's mailbox; not `Clone` — dropping it (via registry removal) stops the actor (RAII).
-struct SoleMailboxHandle<SM: StateMachine> {
-    sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
+pub(crate) struct SoleMailboxHandle<SM: StateMachine> {
+    pub(crate) sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
 }
 
 impl<SM: StateMachine> SoleMailboxHandle<SM> {
@@ -38,21 +39,20 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     pub fn maybe_construct(&self, construction: SM::Construction) {
         use dashmap::mapref::entry::Entry as DEntry;
         let id = construction.get_id().clone();
-        match self.entities.entry(id.get_id_string()) {
+        match store::entry(&self.entities, id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let mut effects = Effects::new(id.clone());
                 let state = SM::construct(construction, &mut effects);
-                tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id, effects));
-                slot.insert(SoleMailboxHandle { sender: tx });
+                store::spawn_entity(slot, tx, rx, state, Arc::clone(&self.env), id, effects);
             }
         }
     }
 
     pub fn act(&self, id: SM::Id, action: SM::Action) {
         use dashmap::mapref::entry::Entry as DEntry;
-        match self.entities.entry(id.get_id_string()) {
+        match store::entry(&self.entities, id.get_id_string()) {
             DEntry::Occupied(slot) => slot.get().deliver(action),
             DEntry::Vacant(_) => eprintln!(
                 "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
@@ -66,7 +66,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 }
 
-async fn run_entity<SM: StateMachine>(
+pub(crate) async fn run_entity<SM: StateMachine>(
     mut state: SM::State,
     mut rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
     env: Arc<SM::Env>,
