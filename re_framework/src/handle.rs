@@ -1,5 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
+use anyhow::Context;
 use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -71,8 +72,10 @@ async fn run_entity<SM: StateMachine>(
     id: SM::Id,
     initial: Effects<SM>,
 ) {
-    persist_state::<SM>(&id, &state);
-    spawn_effects(initial);
+    match persist_state::<SM>(&id, &state) {
+        Ok(()) => spawn_effects(initial),
+        Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
+    }
 
     loop {
         let action = match SM::schedule(&state) {
@@ -96,11 +99,15 @@ async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
         match SM::transition(&state, &id, &env, &action, &mut effects) {
-            Ok(next) => {
-                state = next;
-                persist_state::<SM>(&id, &state);
-                spawn_effects(effects);
-            }
+            Ok(next) => match persist_state::<SM>(&id, &next) {
+                Ok(()) => {
+                    state = next;
+                    spawn_effects(effects);
+                }
+                Err(e) => {
+                    log_transition::<SM>(&format!("aborted — persistence failed: {e:#}"))
+                }
+            },
             Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
         }
     }
@@ -113,13 +120,10 @@ fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
 }
 
 // POC: write the latest state to framework_db/<state machine>/<entity id>.json on every transition.
-// Write-only for now — nothing reads it back yet. Best-effort: a failure logs and the actor continues.
-fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) {
+// Write-only for now — nothing reads it back yet. On failure the caller aborts the transition.
+fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
     let dir = std::path::Path::new("framework_db").join(SM::name());
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("[persist] create_dir_all {} failed: {e}", dir.display());
-        return;
-    }
+    std::fs::create_dir_all(&dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
     let safe_id: String = id
         .get_id_string()
         .chars()
@@ -127,20 +131,10 @@ fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) {
         .collect();
     let path = dir.join(format!("{safe_id}.json"));
     let tmp = dir.join(format!("{safe_id}.json.tmp"));
-    let bytes = match serde_json::to_vec_pretty(state) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("[persist] serialize {} failed: {e}", SM::name());
-            return;
-        }
-    };
-    if let Err(e) = std::fs::write(&tmp, &bytes) {
-        eprintln!("[persist] write {} failed: {e}", tmp.display());
-        return;
-    }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
-        eprintln!("[persist] rename to {} failed: {e}", path.display());
-    }
+    let bytes = serde_json::to_vec_pretty(state).context("serialize state")?;
+    std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("rename to {}", path.display()))?;
+    Ok(())
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {
