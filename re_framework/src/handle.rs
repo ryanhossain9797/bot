@@ -51,9 +51,10 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 
     pub fn act(&self, id: SM::Id, action: SM::Action) {
-        match self.entities.get(&id.get_id_string()) {
-            Some(mailbox) => mailbox.deliver(action),
-            None => eprintln!(
+        use dashmap::mapref::entry::Entry as DEntry;
+        match self.entities.entry(id.get_id_string()) {
+            DEntry::Occupied(slot) => slot.get().deliver(action),
+            DEntry::Vacant(_) => eprintln!(
                 "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
                 id.get_id_string()
             ),
