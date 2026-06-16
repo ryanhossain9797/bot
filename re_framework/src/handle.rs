@@ -63,8 +63,8 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 let state = SM::construct(construction, &mut effects);
                 match post_transition::<SM>(&id, &state, effects) {
                     Ok(()) => {
-                        slot.insert(SoleMailboxHandle { sender: tx });
                         tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id));
+                        slot.insert(SoleMailboxHandle { sender: tx });
                     }
                     Err(e) => {
                         log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}"))
