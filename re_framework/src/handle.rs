@@ -1,6 +1,5 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use crate::store;
 use anyhow::Context;
 use chrono::Utc;
 use dashmap::DashMap;
@@ -8,17 +7,17 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Mailbox message; single-variant for now, kept as an enum for planned control messages.
-pub(crate) enum Envelope<A> {
+enum Envelope<A> {
     Act(A),
 }
 
 /// Sole sender to a live actor's mailbox; not `Clone` — dropping it (via registry removal) stops the actor (RAII).
-pub(crate) struct SoleMailboxHandle<SM: StateMachine> {
-    pub(crate) sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
+struct SoleMailboxHandle<SM: StateMachine> {
+    sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
 }
 
 impl<SM: StateMachine> SoleMailboxHandle<SM> {
-    pub(crate) fn deliver(&self, action: SM::Action) {
+    fn deliver(&self, action: SM::Action) {
         let _ = self.sender.send(Envelope::Act(action));
     }
 }
@@ -36,20 +35,55 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
+    // Get the registry entry for `id`. If it's vacant but a snapshot exists on disk, hydrate it
+    // (resume the actor from the saved state — no construct, no construct effects) and hand back
+    // the now-occupied entry. Lazy: persisted entities come back to life on first lookup.
+    fn entry(&self, id: &SM::Id) -> dashmap::mapref::entry::Entry<'_, String, SoleMailboxHandle<SM>> {
+        use dashmap::mapref::entry::Entry as DEntry;
+        let key = id.get_id_string();
+        match self.entities.entry(key.clone()) {
+            DEntry::Vacant(slot) => match load_state::<SM>(id) {
+                Some(state) => {
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    // Resume only — already on disk, so no persist; construct effects belong to the past life.
+                    tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id.clone()));
+                    slot.insert(SoleMailboxHandle { sender: tx });
+                    self.entities.entry(key)
+                }
+                None => DEntry::Vacant(slot),
+            },
+            occupied => occupied,
+        }
+    }
+
     pub fn maybe_construct(&self, construction: SM::Construction) {
+        use dashmap::mapref::entry::Entry as DEntry;
         let id = construction.get_id().clone();
-        match store::entry(&self.entities, id.get_id_string()) {
-            store::Entry::Occupied(_) => {}
-            store::Entry::Vacant(slot) => {
-                slot.spawn_entity(construction, Arc::clone(&self.env), id);
+        match self.entry(&id) {
+            DEntry::Occupied(_) => {}
+            DEntry::Vacant(slot) => {
+                let (tx, rx) = mpsc::unbounded_channel();
+                let mut effects = Effects::new(id.clone());
+                let state = SM::construct(construction, &mut effects);
+                // Truly construct: only bring the entity up if its initial state persists.
+                match persist_and_fire::<SM>(&id, &state, effects) {
+                    Ok(()) => {
+                        slot.insert(SoleMailboxHandle { sender: tx });
+                        tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id));
+                    }
+                    Err(e) => {
+                        log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}"))
+                    }
+                }
             }
         }
     }
 
     pub fn act(&self, id: SM::Id, action: SM::Action) {
-        match store::entry(&self.entities, id.get_id_string()) {
-            store::Entry::Occupied(slot) => slot.deliver(action),
-            store::Entry::Vacant(_) => eprintln!(
+        use dashmap::mapref::entry::Entry as DEntry;
+        match self.entry(&id) {
+            DEntry::Occupied(slot) => slot.get().deliver(action),
+            DEntry::Vacant(_) => eprintln!(
                 "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
                 id.get_id_string()
             ),
@@ -61,18 +95,12 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 }
 
-pub(crate) async fn run_entity<SM: StateMachine>(
+async fn run_entity<SM: StateMachine>(
     mut state: SM::State,
     mut rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
     env: Arc<SM::Env>,
     id: SM::Id,
-    initial: Effects<SM>,
 ) {
-    match persist_state::<SM>(&id, &state) {
-        Ok(()) => spawn_effects(initial),
-        Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
-    }
-
     loop {
         let action = match SM::schedule(&state) {
             None => rx.recv().await,
@@ -95,18 +123,27 @@ pub(crate) async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
         match SM::transition(&state, &id, &env, &action, &mut effects) {
-            Ok(next) => match persist_state::<SM>(&id, &next) {
-                Ok(()) => {
-                    state = next;
-                    spawn_effects(effects);
-                }
-                Err(e) => {
-                    log_transition::<SM>(&format!("aborted — persistence failed: {e:#}"))
-                }
+            // Acted & changed: advance only if the new state persists.
+            Ok(next) => match persist_and_fire::<SM>(&id, &next, effects) {
+                Ok(()) => state = next,
+                Err(e) => log_transition::<SM>(&format!("aborted — persistence failed: {e:#}")),
             },
             Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
         }
     }
+}
+
+// Persist the state, then fire its side effects. Effects fire only after a durable write, so
+// nothing ever observes a state that isn't on disk. Err means the write failed — the caller must
+// abort (don't advance, don't bring the entity up).
+fn persist_and_fire<SM: StateMachine>(
+    id: &SM::Id,
+    state: &SM::State,
+    effects: Effects<SM>,
+) -> anyhow::Result<()> {
+    persist_state::<SM>(id, state)?;
+    spawn_effects(effects);
+    Ok(())
 }
 
 fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
@@ -115,22 +152,34 @@ fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     }
 }
 
-// POC: write the latest state to framework_db/<state machine>/<entity id>.json on every transition.
-// Write-only for now — nothing reads it back yet. On failure the caller aborts the transition.
-fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
-    let dir = std::path::Path::new("framework_db").join(SM::name());
-    std::fs::create_dir_all(&dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
+// framework_db/<state machine>/<entity id>.json — the snapshot path for one entity.
+fn entity_path<SM: StateMachine>(id: &SM::Id) -> std::path::PathBuf {
     let safe_id: String = id
         .get_id_string()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
         .collect();
-    let path = dir.join(format!("{safe_id}.json"));
-    let tmp = dir.join(format!("{safe_id}.json.tmp"));
+    std::path::Path::new("framework_db")
+        .join(SM::name())
+        .join(format!("{safe_id}.json"))
+}
+
+// Write the latest state atomically (temp file + rename). On failure the caller aborts the transition.
+fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
+    let path = entity_path::<SM>(id);
+    let dir = path.parent().expect("entity path always has a parent");
+    std::fs::create_dir_all(dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
+    let tmp = path.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(state).context("serialize state")?;
     std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
     std::fs::rename(&tmp, &path).with_context(|| format!("rename to {}", path.display()))?;
     Ok(())
+}
+
+// Read a persisted snapshot. Missing/unreadable/corrupt all yield None (caller falls back to construct).
+fn load_state<SM: StateMachine>(id: &SM::Id) -> Option<SM::State> {
+    let bytes = std::fs::read(entity_path::<SM>(id)).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {
