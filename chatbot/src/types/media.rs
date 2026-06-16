@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::ser::SerializeStructVariant;
+use serde::{Deserialize, Serialize, Serializer};
 use std::sync::Arc;
 
 const MAX_IMAGE_EDGE: u32 = 1024;
@@ -42,10 +43,23 @@ impl Image {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub enum MessageImage {
     Hydrated(Image),
     Dehydrated { byte_size: usize },
+}
+
+// Persisted state must never carry raw image bytes: always serialize as Dehydrated (size only).
+impl Serialize for MessageImage {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let byte_size = match self {
+            MessageImage::Hydrated(image) => image.bytes.len(),
+            MessageImage::Dehydrated { byte_size } => *byte_size,
+        };
+        let mut variant = serializer.serialize_struct_variant("MessageImage", 1, "Dehydrated", 1)?;
+        variant.serialize_field("byte_size", &byte_size)?;
+        variant.end()
+    }
 }
 
 impl MessageImage {
@@ -74,5 +88,23 @@ impl MessageImage {
                 MessageImage::Dehydrated { byte_size: *byte_size }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hydrated_serializes_as_dehydrated_and_round_trips() {
+        let hydrated = MessageImage::Hydrated(Image {
+            bytes: Arc::new(vec![1, 2, 3, 4, 5]),
+            mime: "image/png".to_string(),
+        });
+        let json = serde_json::to_string(&hydrated).unwrap();
+        assert_eq!(json, r#"{"Dehydrated":{"byte_size":5}}"#);
+
+        let back: MessageImage = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, MessageImage::Dehydrated { byte_size: 5 }));
     }
 }

@@ -1,5 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
+use anyhow::Context;
 use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -71,7 +72,10 @@ async fn run_entity<SM: StateMachine>(
     id: SM::Id,
     initial: Effects<SM>,
 ) {
-    spawn_effects(initial);
+    match persist_state::<SM>(&id, &state) {
+        Ok(()) => spawn_effects(initial),
+        Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
+    }
 
     loop {
         let action = match SM::schedule(&state) {
@@ -95,10 +99,15 @@ async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
         match SM::transition(&state, &id, &env, &action, &mut effects) {
-            Ok(next) => {
-                state = next;
-                spawn_effects(effects);
-            }
+            Ok(next) => match persist_state::<SM>(&id, &next) {
+                Ok(()) => {
+                    state = next;
+                    spawn_effects(effects);
+                }
+                Err(e) => {
+                    log_transition::<SM>(&format!("aborted — persistence failed: {e:#}"))
+                }
+            },
             Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
         }
     }
@@ -108,6 +117,24 @@ fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
     }
+}
+
+// POC: write the latest state to framework_db/<state machine>/<entity id>.json on every transition.
+// Write-only for now — nothing reads it back yet. On failure the caller aborts the transition.
+fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
+    let dir = std::path::Path::new("framework_db").join(SM::name());
+    std::fs::create_dir_all(&dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
+    let safe_id: String = id
+        .get_id_string()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    let path = dir.join(format!("{safe_id}.json"));
+    let tmp = dir.join(format!("{safe_id}.json.tmp"));
+    let bytes = serde_json::to_vec_pretty(state).context("serialize state")?;
+    std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("rename to {}", path.display()))?;
+    Ok(())
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {
