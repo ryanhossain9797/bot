@@ -1,6 +1,7 @@
 mod effects;
 mod handle;
 mod machine;
+mod persistence;
 
 #[cfg(test)]
 mod smoke;

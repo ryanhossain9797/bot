@@ -1,6 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use anyhow::Context;
+use crate::persistence::{delete_state, load_state, persist_state};
 use chrono::Utc;
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -61,7 +61,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let mut effects = Effects::new(id.clone());
                 let state = SM::construct(construction, &mut effects);
-                match persist_and_fire::<SM>(&id, &state, effects) {
+                match post_transition::<SM>(&id, &state, effects) {
                     Ok(()) => {
                         slot.insert(SoleMailboxHandle { sender: tx });
                         tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id));
@@ -88,7 +88,9 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     pub fn delete(&self, id: SM::Id) {
         use dashmap::mapref::entry::Entry as DEntry;
         if let DEntry::Occupied(slot) = self.entities.entry(id.get_id_string()) {
-            delete_state::<SM>(&id);
+            if let Err(e) = delete_state::<SM>(&id) {
+                log_transition::<SM>(&format!("delete — {e:#}"));
+            }
             slot.remove();
         }
     }
@@ -122,7 +124,7 @@ async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
         match SM::transition(&state, &id, &env, &action, &mut effects) {
-            Ok(next) => match persist_and_fire::<SM>(&id, &next, effects) {
+            Ok(next) => match post_transition::<SM>(&id, &next, effects) {
                 Ok(()) => state = next,
                 Err(e) => log_transition::<SM>(&format!("aborted — persistence failed: {e:#}")),
             },
@@ -131,7 +133,7 @@ async fn run_entity<SM: StateMachine>(
     }
 }
 
-fn persist_and_fire<SM: StateMachine>(
+fn post_transition<SM: StateMachine>(
     id: &SM::Id,
     state: &SM::State,
     effects: Effects<SM>,
@@ -144,42 +146,6 @@ fn persist_and_fire<SM: StateMachine>(
 fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     for outbound in effects.outbound {
         tokio::spawn(outbound);
-    }
-}
-
-fn entity_path<SM: StateMachine>(id: &SM::Id) -> std::path::PathBuf {
-    let safe_id: String = id
-        .get_id_string()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
-        .collect();
-    std::path::Path::new("framework_db")
-        .join(SM::name())
-        .join(format!("{safe_id}.json"))
-}
-
-fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
-    let path = entity_path::<SM>(id);
-    let dir = path.parent().expect("entity path always has a parent");
-    std::fs::create_dir_all(dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
-    let tmp = path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(state).context("serialize state")?;
-    std::fs::write(&tmp, &bytes).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).with_context(|| format!("rename to {}", path.display()))?;
-    Ok(())
-}
-
-fn load_state<SM: StateMachine>(id: &SM::Id) -> Option<SM::State> {
-    let bytes = std::fs::read(entity_path::<SM>(id)).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn delete_state<SM: StateMachine>(id: &SM::Id) {
-    let path = entity_path::<SM>(id);
-    if let Err(e) = std::fs::remove_file(&path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            log_transition::<SM>(&format!("delete — removing {} failed: {e}", path.display()));
-        }
     }
 }
 
