@@ -12,9 +12,9 @@ llama.cpp applies at runtime.
 
 ---
 
-## Model in use: Qwen3.6-35B-A3B-Q4_K_M
+## Model in use: Qwen3.6-35B-A3B-Q8_0
 
-- File: `chatbot/models/Qwen3.6-35B-A3B-Q4_K_M.gguf` (also in LM Studio cache).
+- File: `chatbot/models/Qwen3.6-35B-A3B-Q8_0.gguf` (also in LM Studio cache).
 - Base format: **ChatML**. Turn delimiters `<|im_start|>{role}\n … <|im_end|>\n`.
 - **EOS / end-of-turn token: `<|im_end|>`** — this is what stops generation (no grammar cap needed).
 - **Reasoning model:** has a `<think> … </think>` channel. `add_generation_prompt` opens

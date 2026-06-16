@@ -9,7 +9,7 @@ use llama_cpp_2::{
 };
 use std::{io::Write, num::NonZero};
 
-const MODEL: &str = "/home/zireael9797/Repos/bot/chatbot/models/Qwen3.6-35B-A3B-Q4_K_M.gguf";
+const MODEL: &str = "/home/zireael9797/Repos/bot/chatbot/models/Qwen3.6-35B-A3B-Q8_0.gguf";
 const MMPROJ: &str = "/home/zireael9797/Repos/bot/chatbot/models/mmproj-Qwen3.6-35B-A3B-BF16.gguf";
 const N_CTX: u32 = 8192;
 const N_BATCH: i32 = 512;

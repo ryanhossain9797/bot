@@ -6,8 +6,8 @@ FROM debian:trixie-slim
 WORKDIR /app
 
 # Copy model file (large, rarely changes)
-COPY models/Qwen3.6-35B-A3B-Q4_K_M.gguf /app/models/
-ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-35B-A3B-Q4_K_M.gguf
+COPY models/Qwen3.6-35B-A3B-Q8_0.gguf /app/models/
+ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-35B-A3B-Q8_0.gguf
 
 # Copy FastEmbed cache
 COPY .fastembed_cache* /app/.fastembed_cache

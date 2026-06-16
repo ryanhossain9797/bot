@@ -123,7 +123,7 @@ just deploy_local
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PRIMARY_MODEL_PATH` | Path to GGUF model | `models/Qwen3.6-35B-A3B-Q4_K_M.gguf` |
+| `PRIMARY_MODEL_PATH` | Path to GGUF model | `models/Qwen3.6-35B-A3B-Q8_0.gguf` |
 | `RUST_LOG` | Log level | `info` |
 
 ## Dependencies

@@ -32,6 +32,14 @@ impl Platform {
             Platform::Discord => "Discord",
         }
     }
+
+    // Platform-specific rendering note for the conversation footer.
+    pub fn formatting_note(&self) -> &'static str {
+        match self {
+            Platform::Discord => "Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align).",
+            Platform::Telegram => "Platform: Telegram — supports a limited markdown subset (bold, italic, `code`, links); no tables, headers, or bullet lists. For tabular data use a ```code block```.",
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
