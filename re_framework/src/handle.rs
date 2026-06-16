@@ -35,9 +35,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    // Get the registry entry for `id`. If it's vacant but a snapshot exists on disk, hydrate it
-    // (resume the actor from the saved state — no construct, no construct effects) and hand back
-    // the now-occupied entry. Lazy: persisted entities come back to life on first lookup.
     fn entry(&self, id: &SM::Id) -> dashmap::mapref::entry::Entry<'_, String, SoleMailboxHandle<SM>> {
         use dashmap::mapref::entry::Entry as DEntry;
         let key = id.get_id_string();
@@ -45,7 +42,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             DEntry::Vacant(slot) => match load_state::<SM>(id) {
                 Some(state) => {
                     let (tx, rx) = mpsc::unbounded_channel();
-                    // Resume only — already on disk, so no persist; construct effects belong to the past life.
                     tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id.clone()));
                     slot.insert(SoleMailboxHandle { sender: tx });
                     self.entities.entry(key)
@@ -65,7 +61,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 let (tx, rx) = mpsc::unbounded_channel();
                 let mut effects = Effects::new(id.clone());
                 let state = SM::construct(construction, &mut effects);
-                // Truly construct: only bring the entity up if its initial state persists.
                 match persist_and_fire::<SM>(&id, &state, effects) {
                     Ok(()) => {
                         slot.insert(SoleMailboxHandle { sender: tx });
@@ -91,7 +86,11 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 
     pub fn delete(&self, id: SM::Id) {
-        self.entities.remove(&id.get_id_string());
+        use dashmap::mapref::entry::Entry as DEntry;
+        if let DEntry::Occupied(slot) = self.entities.entry(id.get_id_string()) {
+            delete_state::<SM>(&id);
+            slot.remove();
+        }
     }
 }
 
@@ -123,7 +122,6 @@ async fn run_entity<SM: StateMachine>(
         log_transition::<SM>(&format!("Action: {action:?}"));
         let mut effects = Effects::new(id.clone());
         match SM::transition(&state, &id, &env, &action, &mut effects) {
-            // Acted & changed: advance only if the new state persists.
             Ok(next) => match persist_and_fire::<SM>(&id, &next, effects) {
                 Ok(()) => state = next,
                 Err(e) => log_transition::<SM>(&format!("aborted — persistence failed: {e:#}")),
@@ -133,9 +131,6 @@ async fn run_entity<SM: StateMachine>(
     }
 }
 
-// Persist the state, then fire its side effects. Effects fire only after a durable write, so
-// nothing ever observes a state that isn't on disk. Err means the write failed — the caller must
-// abort (don't advance, don't bring the entity up).
 fn persist_and_fire<SM: StateMachine>(
     id: &SM::Id,
     state: &SM::State,
@@ -152,7 +147,6 @@ fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
     }
 }
 
-// framework_db/<state machine>/<entity id>.json — the snapshot path for one entity.
 fn entity_path<SM: StateMachine>(id: &SM::Id) -> std::path::PathBuf {
     let safe_id: String = id
         .get_id_string()
@@ -164,7 +158,6 @@ fn entity_path<SM: StateMachine>(id: &SM::Id) -> std::path::PathBuf {
         .join(format!("{safe_id}.json"))
 }
 
-// Write the latest state atomically (temp file + rename). On failure the caller aborts the transition.
 fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Result<()> {
     let path = entity_path::<SM>(id);
     let dir = path.parent().expect("entity path always has a parent");
@@ -176,10 +169,18 @@ fn persist_state<SM: StateMachine>(id: &SM::Id, state: &SM::State) -> anyhow::Re
     Ok(())
 }
 
-// Read a persisted snapshot. Missing/unreadable/corrupt all yield None (caller falls back to construct).
 fn load_state<SM: StateMachine>(id: &SM::Id) -> Option<SM::State> {
     let bytes = std::fs::read(entity_path::<SM>(id)).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+fn delete_state<SM: StateMachine>(id: &SM::Id) {
+    let path = entity_path::<SM>(id);
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            log_transition::<SM>(&format!("delete — removing {} failed: {e}", path.display()));
+        }
+    }
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {
