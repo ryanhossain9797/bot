@@ -18,7 +18,7 @@ pub(crate) struct SoleMailboxHandle<SM: StateMachine> {
 }
 
 impl<SM: StateMachine> SoleMailboxHandle<SM> {
-    fn deliver(&self, action: SM::Action) {
+    pub(crate) fn deliver(&self, action: SM::Action) {
         let _ = self.sender.send(Envelope::Act(action));
     }
 }
@@ -37,21 +37,19 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     }
 
     pub fn maybe_construct(&self, construction: SM::Construction) {
-        use dashmap::mapref::entry::Entry as DEntry;
         let id = construction.get_id().clone();
         match store::entry(&self.entities, id.get_id_string()) {
-            DEntry::Occupied(_) => {}
-            DEntry::Vacant(slot) => {
-                store::spawn_entity(slot, construction, Arc::clone(&self.env), id);
+            store::Entry::Occupied(_) => {}
+            store::Entry::Vacant(slot) => {
+                slot.spawn_entity(construction, Arc::clone(&self.env), id);
             }
         }
     }
 
     pub fn act(&self, id: SM::Id, action: SM::Action) {
-        use dashmap::mapref::entry::Entry as DEntry;
         match store::entry(&self.entities, id.get_id_string()) {
-            DEntry::Occupied(slot) => slot.get().deliver(action),
-            DEntry::Vacant(_) => eprintln!(
+            store::Entry::Occupied(slot) => slot.deliver(action),
+            store::Entry::Vacant(_) => eprintln!(
                 "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
                 id.get_id_string()
             ),
