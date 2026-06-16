@@ -42,10 +42,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         match store::entry(&self.entities, id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
-                let (tx, rx) = mpsc::unbounded_channel();
-                let mut effects = Effects::new(id.clone());
-                let state = SM::construct(construction, &mut effects);
-                store::spawn_entity(slot, tx, rx, state, Arc::clone(&self.env), id, effects);
+                store::spawn_entity(slot, construction, Arc::clone(&self.env), id);
             }
         }
     }

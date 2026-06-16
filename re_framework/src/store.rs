@@ -1,5 +1,5 @@
 use crate::effects::Effects;
-use crate::handle::{run_entity, Envelope, SoleMailboxHandle};
+use crate::handle::{run_entity, SoleMailboxHandle};
 use crate::machine::StateMachine;
 use dashmap::mapref::entry::{Entry, VacantEntry};
 use dashmap::DashMap;
@@ -12,13 +12,13 @@ pub fn entry<V>(entities: &DashMap<String, V>, id: String) -> Entry<'_, String, 
 
 pub fn spawn_entity<SM: StateMachine>(
     slot: VacantEntry<'_, String, SoleMailboxHandle<SM>>,
-    tx: mpsc::UnboundedSender<Envelope<SM::Action>>,
-    rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
-    state: SM::State,
+    construction: SM::Construction,
     env: Arc<SM::Env>,
     id: SM::Id,
-    effects: Effects<SM>,
 ) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let mut effects = Effects::new(id.clone());
+    let state = SM::construct(construction, &mut effects);
     tokio::spawn(run_entity::<SM>(state, rx, env, id, effects));
     slot.insert(SoleMailboxHandle { sender: tx });
 }
