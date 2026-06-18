@@ -45,13 +45,13 @@ fn session_context_block(
     let setting = if is_group {
         "GROUP CHAT (multiple participants)"
     } else {
-        "DIRECT MESSAGE (one-to-one with the user)"
+        "DIRECT MESSAGE (one-to-one with the user), not a group chat- every message is meant for you, there is no one else."
     };
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
 
     let mut lines = vec![
         "=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===".to_string(),
-        format!("Your username in this conversation: {bot_identity}"),
+        format!("Your username in this conversation: {bot_identity}. Respond to both this name and Terminal Alpha Beta"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
         platform.formatting_note().to_string(),
@@ -65,13 +65,14 @@ fn session_context_block(
     lines.push(
         "If you already have something worth sharing — a partial answer, or what you're about to do — say it right after your thinking and before the tool call, instead of calling silently.".to_string(),
     );
+    lines.push(
+        "The user cannot see tool results — you must send the information as a message.".to_string(),
+    );
 
     if is_group {
         lines.push(
             "Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise your whole reply must be the literal token <empty> (exactly those seven characters with angle brackets, nothing else — never (empty), empty, or any variant). Match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
         );
-    } else {
-        lines.push("Reminder: you are Terminal Alpha Beta.".to_string());
     }
 
     // Private role: stripped out in respond_blocking and re-injected as a system block past the
