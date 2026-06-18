@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y \
 
 # Docker CLI (client only — no daemon) so the bot can drive the host daemon via the mounted
 # socket to spawn per-conversation worker containers. Static binary keeps it to just the client.
-ARG DOCKER_CLI_VERSION=27.5.1
+ARG DOCKER_CLI_VERSION=29.5.3
 RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz \
     && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
     && mv /tmp/docker/docker /usr/local/bin/docker \
