@@ -115,7 +115,7 @@ async fn download_images(message: &DMessage) -> Vec<MessageImage> {
 }
 
 fn identity(name: &str, id: u64) -> String {
-    format!("{name} (id:{id})")
+    format!("({id}) {name}")
 }
 
 fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String> {
