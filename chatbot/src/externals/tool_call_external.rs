@@ -1,15 +1,12 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
-    externals::{recall_long_term_external::recall_long, recall_short_term_external::recall_short},
     types::conversation::{
-        HistoryEntry, MathOperation, ToolCall, ToolResultData, ToolType, ConversationAction,
+        MathOperation, ToolCall, ToolResultData, ToolType, ConversationAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
-    Env,
 };
 use rs_trafilatura::extract;
 use serde::Deserialize;
-use std::sync::Arc;
 
 async fn execute_math(operations: Vec<MathOperation>) -> ToolResultData {
     let mut results = Vec::new();
@@ -418,32 +415,18 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
-async fn run_tool(
-    env: Arc<Env>,
-    tool_type: ToolType,
-    conversation_id: String,
-    history: Vec<HistoryEntry>,
-) -> Result<ToolResultData, String> {
+async fn run_tool(tool_type: ToolType) -> Result<ToolResultData, String> {
     match tool_type {
         ToolType::GetWeather { location } => fetch_weather(&location).await.map_err(|e| e.to_string()),
         ToolType::MathCalculation { operations } => Ok(execute_math(operations).await),
         ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
-        ToolType::RecallShortTerm { .. } => Ok(recall_short(&history)),
-        ToolType::RecallLongTerm { search_term } => {
-            recall_long(env, conversation_id, search_term).await.map_err(|e| e.to_string())
-        }
     }
 }
 
-pub async fn execute_tool(
-    env: Arc<Env>,
-    tool_call: ToolCall,
-    conversation_id: String,
-    history: Vec<HistoryEntry>,
-) -> ConversationAction {
+pub async fn execute_tool(tool_call: ToolCall) -> ConversationAction {
     let tool_name = tool_call.tool_type.wire_name().to_string();
-    let result = run_tool(env, tool_call.tool_type, conversation_id, history).await;
+    let result = run_tool(tool_call.tool_type).await;
     if let Err(err) = &result {
         eprintln!("[tool {tool_name} id {}] failed: {err}", tool_call.id);
     }
