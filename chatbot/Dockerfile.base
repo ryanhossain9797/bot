@@ -14,6 +14,7 @@ ENV RUST_LOG=info
 # Update package list and install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    curl \
     libssl3 \
     libgomp1 \
     libvulkan1 \
@@ -21,6 +22,15 @@ RUN apt-get update && apt-get install -y \
     vulkan-tools \
     && (getent group render || groupadd -r render) \
     && rm -rf /var/lib/apt/lists/*
+
+# Docker CLI (client only — no daemon) so the bot can drive the host daemon via the mounted
+# socket to spawn per-conversation worker containers. Static binary keeps it to just the client.
+ARG DOCKER_CLI_VERSION=27.5.1
+RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz \
+    && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \
+    && mv /tmp/docker/docker /usr/local/bin/docker \
+    && rm -rf /tmp/docker /tmp/docker.tgz \
+    && docker --version
 
 # Copy multimodal projector (vision) — appended last so the model/apt layers stay cached
 COPY models/mmproj-Qwen3.6-35B-A3B-BF16.gguf /app/models/

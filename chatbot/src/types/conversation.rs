@@ -257,6 +257,8 @@ pub enum ToolType {
     MathCalculation { operations: Vec<MathOperation> },
     WebSearch { query: String },
     VisitUrl { url: String },
+    RunBashCommand { command: String },
+    ResetBashContainer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

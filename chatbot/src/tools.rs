@@ -19,6 +19,11 @@ struct VisitUrlArgs {
     url: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct RunBashArgs {
+    command: String,
+}
+
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
     serde_json::from_str(arguments)
         .map_err(|e| anyhow::anyhow!("{name} arguments failed to bind: {e} — raw: {arguments}"))
@@ -31,6 +36,8 @@ impl ToolKind {
             ToolKind::MathCalculation => "math_calculation",
             ToolKind::WebSearch => "web_search",
             ToolKind::VisitUrl => "visit_url",
+            ToolKind::RunBashCommand => "run_bash_command",
+            ToolKind::ResetBashContainer => "reset_bash_container",
         }
     }
 
@@ -78,6 +85,28 @@ impl ToolKind {
                     }
                 }
             })),
+            ToolKind::RunBashCommand => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": { "type": "string", "description": "The bash command to run, e.g. \"python3 -c 'print(2**10)'\" or \"pip install requests && python3 script.py\". Multi-line scripts are fine." }
+                        },
+                        "required": ["command"]
+                    }
+                }
+            })),
+            ToolKind::ResetBashContainer => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Wipe your sandbox and start fresh — destroys the current Linux environment (files, installed packages, processes) and the next run_bash_command boots a clean one. Use if it's in a broken state or you want a clean slate.",
+                    "parameters": { "type": "object", "properties": {}, "required": [] }
+                }
+            })),
             ToolKind::MathCalculation => None,
         }
     }
@@ -99,6 +128,8 @@ impl ToolType {
             ToolType::MathCalculation { operations } => json!({ "operations": operations }),
             ToolType::WebSearch { query } => json!({ "query": query }),
             ToolType::VisitUrl { url } => json!({ "url": url }),
+            ToolType::RunBashCommand { command } => json!({ "command": command }),
+            ToolType::ResetBashContainer => json!({}),
         }
         .to_string()
     }
@@ -118,6 +149,10 @@ impl ToolType {
             ToolKind::VisitUrl => Ok(ToolType::VisitUrl {
                 url: parse_args::<VisitUrlArgs>(name, arguments)?.url,
             }),
+            ToolKind::RunBashCommand => Ok(ToolType::RunBashCommand {
+                command: parse_args::<RunBashArgs>(name, arguments)?.command,
+            }),
+            ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
             ToolKind::MathCalculation => {
                 Err(anyhow::anyhow!("tool '{name}' is not wired for binding yet"))
             }

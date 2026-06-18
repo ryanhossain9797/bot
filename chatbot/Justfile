@@ -29,6 +29,9 @@ run_local tag="latest":
     # Host networking: the bot shares the host's network stack (no bridge/NAT), so it reaches
     # host-published services like the SearxNG instance at http://localhost:8080 directly — see
     # SEARXNG_URL. The bot has no inbound listener (Discord gateway is outbound), so no port clash.
+    # Mount the Docker socket so the bot can spawn per-conversation worker containers.
+    # The bot drives the daemon with fixed flags (the LLM only runs bash *inside* a worker,
+    # which has no socket/host access).
     docker run -d \
         --name bot \
         --network host \
@@ -36,6 +39,7 @@ run_local tag="latest":
         --device=/dev/dri \
         --group-add video \
         --group-add render \
+        -v /var/run/docker.sock:/var/run/docker.sock \
         --restart unless-stopped \
         zireael9797/bot:{{tag}}
 

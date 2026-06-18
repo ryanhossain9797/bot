@@ -43,6 +43,15 @@ async fn main() -> anyhow::Result<!> {
     let env = init_env().await?;
     init_conversation_state_machine(env);
 
+    // Pre-build the bash sandbox image in the background so the first run_bash_command isn't slow;
+    // boot doesn't wait on it, and spawning a worker rebuilds it if this hasn't finished/failed.
+    tokio::spawn(async {
+        match externals::bash_container_external::ensure_worker_image().await {
+            Ok(()) => println!("[startup] bash sandbox image ready"),
+            Err(e) => eprintln!("[startup] bash sandbox image prebuild failed: {e} (will retry on first use)"),
+        }
+    });
+
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
     let mut set = JoinSet::new();

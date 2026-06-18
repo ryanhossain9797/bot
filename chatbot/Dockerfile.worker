@@ -1,0 +1,19 @@
+# Sandbox image the bot spawns (one per conversation) to run model-authored bash.
+# No host access — the bot's harness runs it with --cap-drop ALL, resource caps, and no mounts.
+# Built locally and kept on the host (workers spawn with network on but can't pull at spawn time).
+FROM debian:trixie-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    coreutils \
+    ca-certificates \
+    curl \
+    git \
+    jq \
+    python3 \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+CMD ["sleep", "infinity"]

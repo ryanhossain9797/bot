@@ -1,5 +1,6 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
+    externals::bash_container_external::{reset_bash, run_bash},
     types::conversation::{
         MathOperation, ToolCall, ToolResultData, ToolType, ConversationAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
@@ -415,18 +416,20 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
-async fn run_tool(tool_type: ToolType) -> Result<ToolResultData, String> {
+async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResultData, String> {
     match tool_type {
         ToolType::GetWeather { location } => fetch_weather(&location).await.map_err(|e| e.to_string()),
         ToolType::MathCalculation { operations } => Ok(execute_math(operations).await),
         ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
+        ToolType::RunBashCommand { command } => run_bash(conversation_id, &command).await,
+        ToolType::ResetBashContainer => reset_bash(conversation_id).await,
     }
 }
 
-pub async fn execute_tool(tool_call: ToolCall) -> ConversationAction {
+pub async fn execute_tool(conversation_id: String, tool_call: ToolCall) -> ConversationAction {
     let tool_name = tool_call.tool_type.wire_name().to_string();
-    let result = run_tool(tool_call.tool_type).await;
+    let result = run_tool(&conversation_id, tool_call.tool_type).await;
     if let Err(err) = &result {
         eprintln!("[tool {tool_name} id {}] failed: {err}", tool_call.id);
     }

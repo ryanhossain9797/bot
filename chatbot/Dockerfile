@@ -42,6 +42,10 @@ COPY --from=builder /app/target/release/chatbot /app/chatbot
 # Copy commit message file
 COPY --from=builder /app/commit.txt /app/commit.txt
 
+# Sandbox image recipe — the bot builds bot-worker:latest from this on first run_bash_command
+# (via the mounted docker socket), so no separate image build/push is needed.
+COPY chatbot/Dockerfile.worker /app/worker/Dockerfile
+
 # Note: configuration.rs must be provided at build time
 # The DISCORD_TOKEN is read from configuration::client_tokens::DISCORD_TOKEN at compile time
 # Make sure src/configuration.rs exists with your token before building
