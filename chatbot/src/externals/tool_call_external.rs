@@ -1,126 +1,13 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
+    externals::bash_container_external::{reset_bash, run_bash},
     types::conversation::{
-        MathOperation, ToolCall, ToolResultData, ToolType, ConversationAction,
+        ToolCall, ToolResultData, ToolType, ConversationAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
     },
 };
 use rs_trafilatura::extract;
 use serde::Deserialize;
-
-async fn execute_math(operations: Vec<MathOperation>) -> ToolResultData {
-    let mut results = Vec::new();
-
-    for (index, op) in operations.iter().enumerate() {
-        let result = match op {
-            MathOperation::Add(a, b) => {
-                let res = *a + *b;
-                format!("{} + {} = {}", a, b, res)
-            }
-            MathOperation::Sub(a, b) => {
-                let res = *a - *b;
-                format!("{} - {} = {}", a, b, res)
-            }
-            MathOperation::Mul(a, b) => {
-                let res = *a * *b;
-                format!("{} × {} = {}", a, b, res)
-            }
-            MathOperation::Div(a, b) => {
-                if *b == 0.0 {
-                    format!("{} ÷ {} = Error: Division by zero", a, b)
-                } else {
-                    let res = *a / *b;
-                    format!("{} ÷ {} = {}", a, b, res)
-                }
-            }
-            MathOperation::Exp(a, b) => {
-                let res = (*a as f64).powf(*b as f64);
-                format!("{} ^ {} = {}", a, b, res)
-            }
-        };
-        results.push(format!("Operation {}: {}", index + 1, result));
-    }
-
-    let actual = format!("Calculation results:\n{}", results.join("\n"));
-
-    ToolResultData {
-        simplified: actual.clone(),
-        actual,
-    }
-}
-
-#[derive(Deserialize)]
-struct GeocodingResponse {
-    results: Option<Vec<GeocodingResult>>,
-}
-
-#[derive(Deserialize)]
-struct GeocodingResult {
-    latitude: f64,
-    longitude: f64,
-}
-
-#[derive(Deserialize)]
-struct WeatherResponse {
-    current: CurrentWeather,
-}
-
-#[derive(Deserialize)]
-struct CurrentWeather {
-    temperature_2m: f64,
-    relative_humidity_2m: u32,
-    wind_speed_10m: f64,
-}
-
-async fn fetch_weather(location: &str) -> anyhow::Result<ToolResultData> {
-    let geocoding_url = format!(
-        "https://geocoding-api.open-meteo.com/v1/search?name={}&count=1",
-        urlencoding::encode(location)
-    );
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-
-    let geocoding_response = client
-        .get(&geocoding_url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to geocoding service: {}", e))?
-        .json::<GeocodingResponse>()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse geocoding response: {}", e))?;
-
-    let result = geocoding_response
-        .results
-        .and_then(|mut r| r.pop())
-        .ok_or_else(|| anyhow::anyhow!("Location '{}' not found.", location))?;
-
-    let weather_url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={}&longitude={}&current=temperature_2m,relative_humidity_2m,wind_speed_10m",
-        result.latitude, result.longitude
-    );
-
-    let weather_response = client
-        .get(&weather_url)
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to connect to weather service: {}", e))?
-        .json::<WeatherResponse>()
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse weather response: {}", e))?;
-
-    let weather = weather_response.current;
-
-    let actual = format!(
-        "Temperature: {}°C, Humidity: {}%, Wind Speed: {} km/h",
-        weather.temperature_2m, weather.relative_humidity_2m, weather.wind_speed_10m
-    );
-    Ok(ToolResultData {
-        simplified: actual.clone(),
-        actual,
-    })
-}
 
 #[derive(Deserialize)]
 struct SearxngResponse {
@@ -415,18 +302,18 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData { actual, simplified })
 }
 
-async fn run_tool(tool_type: ToolType) -> Result<ToolResultData, String> {
+async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResultData, String> {
     match tool_type {
-        ToolType::GetWeather { location } => fetch_weather(&location).await.map_err(|e| e.to_string()),
-        ToolType::MathCalculation { operations } => Ok(execute_math(operations).await),
         ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
+        ToolType::RunBashCommand { command } => run_bash(conversation_id, &command).await,
+        ToolType::ResetBashContainer => reset_bash(conversation_id).await,
     }
 }
 
-pub async fn execute_tool(tool_call: ToolCall) -> ConversationAction {
+pub async fn execute_tool(conversation_id: String, tool_call: ToolCall) -> ConversationAction {
     let tool_name = tool_call.tool_type.wire_name().to_string();
-    let result = run_tool(tool_call.tool_type).await;
+    let result = run_tool(&conversation_id, tool_call.tool_type).await;
     if let Err(err) = &result {
         eprintln!("[tool {tool_name} id {}] failed: {err}", tool_call.id);
     }
@@ -441,57 +328,10 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_fetch_weather() {
-        let weather = fetch_weather("London").await.unwrap();
-        assert!(weather.actual.contains("Temperature"));
-        assert!(weather.actual.contains("Humidity"));
-        assert!(weather.actual.contains("Wind Speed"));
-    }
-
-    #[tokio::test]
     async fn test_fetch_web_search() {
         let search_results = fetch_web_search("Rust programming").await.unwrap();
         assert!(search_results.actual.contains("Search results for"));
         assert!(search_results.actual.contains("Rust programming"));
-    }
-
-    #[tokio::test]
-    async fn test_math_operations() {
-        let operations = vec![
-            MathOperation::Add(5.0, 3.0),
-            MathOperation::Sub(10.0, 4.0),
-            MathOperation::Mul(6.0, 7.0),
-            MathOperation::Div(20.0, 4.0),
-            MathOperation::Exp(2.0, 8.0),
-        ];
-
-        let result = execute_math(operations).await;
-        assert!(result.actual.contains("5 + 3 = 8"));
-        assert!(result.actual.contains("10 - 4 = 6"));
-        assert!(result.actual.contains("6 × 7 = 42"));
-        assert!(result.actual.contains("20 ÷ 4 = 5"));
-        assert!(result.actual.contains("2 ^ 8 = 256"));
-    }
-
-    #[tokio::test]
-    async fn test_division_by_zero() {
-        let operations = vec![MathOperation::Div(10.0, 0.0)];
-        let result = execute_math(operations).await;
-        assert!(result.actual.contains("Division by zero"));
-    }
-
-    #[tokio::test]
-    async fn test_float_operations() {
-        let operations = vec![
-            MathOperation::Add(5.5, 3.2),
-            MathOperation::Div(7.0, 2.0),
-            MathOperation::Exp(2.0, 0.5),
-        ];
-
-        let result = execute_math(operations).await;
-        assert!(result.actual.contains("5.5 + 3.2 = 8.7"));
-        assert!(result.actual.contains("7 ÷ 2 = 3.5"));
-        assert!(result.actual.contains("2 ^ 0.5"));
     }
 
     #[tokio::test]

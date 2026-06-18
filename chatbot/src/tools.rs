@@ -5,11 +5,6 @@ use strum::IntoEnumIterator;
 use crate::types::conversation::{ToolKind, ToolType};
 
 #[derive(Debug, Deserialize)]
-struct GetWeatherArgs {
-    city: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct WebSearchArgs {
     query: String,
 }
@@ -17,6 +12,11 @@ struct WebSearchArgs {
 #[derive(Debug, Deserialize)]
 struct VisitUrlArgs {
     url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunBashArgs {
+    command: String,
 }
 
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
@@ -27,29 +27,15 @@ fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> an
 impl ToolKind {
     fn wire_name(&self) -> &'static str {
         match self {
-            ToolKind::GetWeather => "get_weather",
-            ToolKind::MathCalculation => "math_calculation",
             ToolKind::WebSearch => "web_search",
             ToolKind::VisitUrl => "visit_url",
+            ToolKind::RunBashCommand => "run_bash_command",
+            ToolKind::ResetBashContainer => "reset_bash_container",
         }
     }
 
         fn definition(&self) -> Option<Value> {
         match self {
-            ToolKind::GetWeather => Some(json!({
-                "type": "function",
-                "function": {
-                    "name": self.wire_name(),
-                    "description": "Get the current weather for a city.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "city": { "type": "string", "description": "City name, e.g. \"Paris\" or \"London\"" }
-                        },
-                        "required": ["city"]
-                    }
-                }
-            })),
             ToolKind::WebSearch => Some(json!({
                 "type": "function",
                 "function": {
@@ -78,7 +64,28 @@ impl ToolKind {
                     }
                 }
             })),
-            ToolKind::MathCalculation => None,
+            ToolKind::RunBashCommand => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": { "type": "string", "description": "The bash command to run, e.g. \"python3 -c 'print(2**10)'\" or \"pip install requests && python3 script.py\". Multi-line scripts are fine." }
+                        },
+                        "required": ["command"]
+                    }
+                }
+            })),
+            ToolKind::ResetBashContainer => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Wipe your sandbox and start fresh — destroys the current Linux environment (files, installed packages, processes) and the next run_bash_command boots a clean one. Use if it's in a broken state or you want a clean slate.",
+                    "parameters": { "type": "object", "properties": {}, "required": [] }
+                }
+            })),
         }
     }
 }
@@ -95,10 +102,10 @@ impl ToolType {
 
         pub fn wire_arguments(&self) -> String {
         match self {
-            ToolType::GetWeather { location } => json!({ "city": location }),
-            ToolType::MathCalculation { operations } => json!({ "operations": operations }),
             ToolType::WebSearch { query } => json!({ "query": query }),
             ToolType::VisitUrl { url } => json!({ "url": url }),
+            ToolType::RunBashCommand { command } => json!({ "command": command }),
+            ToolType::ResetBashContainer => json!({}),
         }
         .to_string()
     }
@@ -109,18 +116,16 @@ impl ToolType {
             .ok_or_else(|| anyhow::anyhow!("model called an unknown tool: {name}"))?;
 
         match kind {
-            ToolKind::GetWeather => Ok(ToolType::GetWeather {
-                location: parse_args::<GetWeatherArgs>(name, arguments)?.city,
-            }),
             ToolKind::WebSearch => Ok(ToolType::WebSearch {
                 query: parse_args::<WebSearchArgs>(name, arguments)?.query,
             }),
             ToolKind::VisitUrl => Ok(ToolType::VisitUrl {
                 url: parse_args::<VisitUrlArgs>(name, arguments)?.url,
             }),
-            ToolKind::MathCalculation => {
-                Err(anyhow::anyhow!("tool '{name}' is not wired for binding yet"))
-            }
+            ToolKind::RunBashCommand => Ok(ToolType::RunBashCommand {
+                command: parse_args::<RunBashArgs>(name, arguments)?.command,
+            }),
+            ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
         }
     }
 }

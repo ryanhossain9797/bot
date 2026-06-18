@@ -77,6 +77,7 @@ fn state_label(state: &ConversationState) -> &'static str {
 }
 
 fn handle_outcome(
+    conversation_id: &ConversationId,
     response: LLMResponse,
     recent_conversation: RecentConversation,
     pending: Vec<ConversationMessage>,
@@ -98,7 +99,7 @@ fn handle_outcome(
     } else {
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
-            effects.enqueue_external(execute_tool(tool_call.clone()));
+            effects.enqueue_external(execute_tool(conversation_id.to_string(), tool_call.clone()));
             pending_tools.insert(tool_call.id.clone(), tool_call);
         }
 
@@ -208,6 +209,7 @@ fn conversation_transition(
                     })
                 } else {
                     handle_outcome(
+                        conversation_id,
                         response.clone(),
                         updated_conversation,
                         conversation.pending,
@@ -235,6 +237,7 @@ fn conversation_transition(
             },
             ConversationAction::MessageSent(_res),
         ) => handle_outcome(
+            conversation_id,
             outcome,
             recent_conversation,
             conversation.pending,
