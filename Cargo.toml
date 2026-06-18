@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "chatbot", "framework", "probe", "re_framework", "lancedb_playground",
+    "chatbot", "framework", "probe", "re_framework",
 ]
 resolver = "3"
 

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use crate::types::media::MessageImage;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::sync::Arc;
 use strum::{EnumDiscriminants, EnumIter};
@@ -40,6 +40,14 @@ impl Platform {
             Platform::Telegram => "Platform: Telegram — supports a limited markdown subset (bold, italic, `code`, links); no tables, headers, or bullet lists. For tabular data use a ```code block```.",
         }
     }
+
+    // Render `text` as de-emphasized subtext in this platform's markup.
+    pub fn subtext(&self, text: &str) -> String {
+        match self {
+            Platform::Discord => format!("-# *{text}*"),
+            Platform::Telegram => format!("_{text}_"),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize, Deserialize)]
@@ -57,23 +65,36 @@ impl re_framework::EntityId for ConversationId {
     }
 }
 
+/// Rolling window of the most recent conversation entries — this is the bot's whole memory.
+pub const RECENT_WINDOW: usize = 30;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecentConversation {
     pub thoughts: String,
-    pub history: Vec<HistoryEntry>,
+    pub history: VecDeque<HistoryEntry>,
 }
 impl RecentConversation {
+    pub fn empty() -> Self {
+        RecentConversation { thoughts: String::new(), history: VecDeque::new() }
+    }
+
+    /// Build from a flat history, keeping only the last `RECENT_WINDOW` entries.
+    pub fn new(thoughts: String, history: Vec<HistoryEntry>) -> Self {
+        let mut window: VecDeque<HistoryEntry> = history.into();
+        while window.len() > RECENT_WINDOW {
+            window.pop_front();
+        }
+        RecentConversation { thoughts, history: window }
+    }
+
     pub fn history(&self) -> Vec<HistoryEntry> {
-        self.history.clone()
+        self.history.iter().cloned().collect()
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConversationState {
     Idle {
-        recent_conversation: Option<(RecentConversation, DateTime<Utc>)>,
-    },
-    CommitingToMemory {
         recent_conversation: RecentConversation,
     },
     AwaitingLLMDecision {
@@ -96,7 +117,7 @@ pub enum ConversationState {
 impl Default for ConversationState {
     fn default() -> Self {
         ConversationState::Idle {
-            recent_conversation: None,
+            recent_conversation: RecentConversation::empty(),
         }
     }
 }
@@ -236,8 +257,6 @@ pub enum ToolType {
     MathCalculation { operations: Vec<MathOperation> },
     WebSearch { query: String },
     VisitUrl { url: String },
-    RecallShortTerm { reason: String },
-    RecallLongTerm { search_term: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,38 +318,6 @@ pub enum HistoryEntry {
     Output(LLMResponse),
 }
 
-impl HistoryEntry {
-    pub fn format_simplified(&self) -> String {
-        match self {
-            HistoryEntry::Input(llm_input) => match llm_input {
-                LLMInput::ConversationMessage(m) => format!("User:\n{}", m.text),
-                LLMInput::ToolResults(results, user_msg) => {
-                    let joined = results
-                        .iter()
-                        .map(|r| r.data.simplified.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let assistant = format!("Assistant:\n{joined}");
-                    match user_msg {
-                        Some(msg) => format!("{assistant}\nUser:\n{}", msg.text),
-                        None => assistant,
-                    }
-                }
-            },
-            HistoryEntry::Output(LLMResponse { message, tool_calls, .. }) => {
-                let mut parts = Vec::new();
-                if let Some(msg) = message {
-                    parts.push(msg.clone());
-                }
-                if !tool_calls.is_empty() {
-                    parts.push(format!("{tool_calls:?}"));
-                }
-                format!("Assistant:\n{}", parts.join("\n"))
-            }
-        }
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
     ForceReset,
@@ -340,8 +327,6 @@ pub enum ConversationAction {
         name: String,
         images: Vec<MessageImage>,
     },
-    Timeout,
-    CommitResult(Result<(), String>),
     LLMDecisionResult(Result<LLMResponse, String>),
     MessageSent(Result<(), String>),
         ToolResult {
@@ -361,8 +346,6 @@ impl std::fmt::Debug for ConversationAction {
         match self {
             ConversationAction::ForceReset => write!(f, "ForceReset"),
             ConversationAction::NewMessage { .. } => write!(f, "NewMessage"),
-            ConversationAction::Timeout => write!(f, "Timeout"),
-            ConversationAction::CommitResult(_) => write!(f, "CommitResult"),
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
             ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),

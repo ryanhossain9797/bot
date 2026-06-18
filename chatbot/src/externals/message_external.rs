@@ -33,7 +33,30 @@ fn split_for_discord(content: &str) -> Vec<String> {
     chunks
 }
 
-pub async fn send_message(env: Arc<Env>, conversation_id: ConversationId, message: String) -> ConversationAction {
+// Compose the user-facing text from semantic pieces, styled for the platform.
+// message → as-is; announced tools → de-emphasized subtext footer underneath.
+fn compose(platform: &Platform, message: Option<String>, tool_names: &[String]) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(m) = message {
+        parts.push(m);
+    }
+    if !tool_names.is_empty() {
+        let body = match tool_names {
+            [one] => format!("using tool: {one}"),
+            many => format!("using multiple tools: {}", many.join(", ")),
+        };
+        parts.push(platform.subtext(&body));
+    }
+    parts.join("\n")
+}
+
+pub async fn send_message(
+    env: Arc<Env>,
+    conversation_id: ConversationId,
+    message: Option<String>,
+    tool_names: Vec<String>,
+) -> ConversationAction {
+    let message = compose(&conversation_id.0, message, &tool_names);
     match conversation_id.0 {
         Platform::Discord => {
             let channel = match conversation_id.1.parse::<u64>() {

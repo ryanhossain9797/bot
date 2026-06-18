@@ -9,7 +9,7 @@ This is a multi-component project that provides a sophisticated AI chatbot exper
 - **Discord Integration**: Responds to direct messages and mentions
 - **Local LLM**: Uses Qwen3.6-35B-A3B running locally via llama.cpp
 - **Tool Calling**: Supports multi-turn tool execution (weather, web search, etc.)
-- **Memory Systems**: Short-term and long-term memory via LanceDB with embeddings
+- **Memory**: A rolling window of the most recent conversation entries, persisted per conversation
 - **Type-Safe Architecture**: Built on a custom Rust state machine framework
 
 ## Project Structure
@@ -47,7 +47,6 @@ The main application that orchestrates:
 
 - **DiscordService**: Handles WebSocket events and HTTP via `serenity`
 - **LlamaCppService**: Manages local LLM inference with session caching
-- **LanceService**: Vector database for memory/embedding storage
 - **Primary Agent**: Single model that decides and emits the structured tool call directly
   (the former separate "executor" translation agent has been removed)
 
@@ -59,8 +58,6 @@ The main application that orchestrates:
 | `get-weather` | Look up weather for a city |
 | `web-search` | Search the web for information |
 | `visit-url` | Fetch and extract content from a URL |
-| `recall-short-term` | Retrieve recent conversation context |
-| `recall-long-term` | Search long-term memory by topic |
 
 ### Framework (`framework/`)
 
@@ -75,15 +72,15 @@ A reusable Rust library providing:
 ### Agent Flow
 
 ```
-User Message → DiscordService → UserStateMachine → PrimaryAgent
+User Message → DiscordService → ConversationStateMachine → PrimaryAgent
                                                     ↓
-                              ┌─────────────────────┼─────────────────────┐
-                              ↓                     ↓                     ↓
-                      message-user            Tool Call            Recall Memory
-                              ↓                     ↓                     ↓
-                      DiscordService         (execute tool)        LanceService
-                              ↓                     ↓                     ↓
-                              └─────────────────────┼─────────────────────┘
+                              ┌─────────────────────┴─────────────────────┐
+                              ↓                                           ↓
+                      message-user                                  Tool Call
+                              ↓                                           ↓
+                      DiscordService                              (execute tool)
+                              ↓                                           ↓
+                              └─────────────────────┬─────────────────────┘
                                                     ↓
                                             back to PrimaryAgent
                                                     ↓
@@ -132,8 +129,6 @@ just deploy_local
 
 - **llama-cpp-2**: Local LLM inference (Vulkan support)
 - **serenity**: Discord API client
-- **lancedb**: Vector database for memory
-- **fastembed**: Embedding generation
 - **tokio**: Async runtime
 
 ## License

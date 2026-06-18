@@ -31,8 +31,6 @@ impl ToolKind {
             ToolKind::MathCalculation => "math_calculation",
             ToolKind::WebSearch => "web_search",
             ToolKind::VisitUrl => "visit_url",
-            ToolKind::RecallShortTerm => "recall_short_term",
-            ToolKind::RecallLongTerm => "recall_long_term",
         }
     }
 
@@ -80,7 +78,7 @@ impl ToolKind {
                     }
                 }
             })),
-            ToolKind::MathCalculation | ToolKind::RecallShortTerm | ToolKind::RecallLongTerm => None,
+            ToolKind::MathCalculation => None,
         }
     }
 }
@@ -101,8 +99,6 @@ impl ToolType {
             ToolType::MathCalculation { operations } => json!({ "operations": operations }),
             ToolType::WebSearch { query } => json!({ "query": query }),
             ToolType::VisitUrl { url } => json!({ "url": url }),
-            ToolType::RecallShortTerm { reason } => json!({ "reason": reason }),
-            ToolType::RecallLongTerm { search_term } => json!({ "search_term": search_term }),
         }
         .to_string()
     }
@@ -122,7 +118,7 @@ impl ToolType {
             ToolKind::VisitUrl => Ok(ToolType::VisitUrl {
                 url: parse_args::<VisitUrlArgs>(name, arguments)?.url,
             }),
-            ToolKind::MathCalculation | ToolKind::RecallShortTerm | ToolKind::RecallLongTerm => {
+            ToolKind::MathCalculation => {
                 Err(anyhow::anyhow!("tool '{name}' is not wired for binding yet"))
             }
         }

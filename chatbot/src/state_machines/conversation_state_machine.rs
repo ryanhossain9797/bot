@@ -1,4 +1,3 @@
-use crate::externals::long_term_memory_external::commit_to_memory;
 use crate::externals::{
     llama_cpp_external::get_llm_decision, message_external::send_message,
     tool_call_external::execute_tool,
@@ -71,7 +70,6 @@ pub fn init_conversation_state_machine(env: Env) {
 fn state_label(state: &ConversationState) -> &'static str {
     match state {
         ConversationState::Idle { .. } => "Idle",
-        ConversationState::CommitingToMemory { .. } => "CommitingToMemory",
         ConversationState::AwaitingLLMDecision { .. } => "AwaitingLLMDecision",
         ConversationState::SendingMessage { .. } => "SendingMessage",
         ConversationState::RunningTools { .. } => "RunningTools",
@@ -79,8 +77,6 @@ fn state_label(state: &ConversationState) -> &'static str {
 }
 
 fn handle_outcome(
-    env: &Arc<Env>,
-    conversation_id: &ConversationId,
     response: LLMResponse,
     recent_conversation: RecentConversation,
     pending: Vec<ConversationMessage>,
@@ -92,7 +88,7 @@ fn handle_outcome(
     if response.tool_calls.is_empty() {
         Ok(Conversation {
             state: ConversationState::Idle {
-                recent_conversation: Some((recent_conversation, Utc::now())),
+                recent_conversation,
             },
             last_transition: Utc::now(),
             pending,
@@ -102,12 +98,7 @@ fn handle_outcome(
     } else {
         let mut pending_tools = HashMap::new();
         for tool_call in response.tool_calls {
-            effects.enqueue_external(execute_tool(
-                Arc::clone(env),
-                tool_call.clone(),
-                conversation_id.to_string(),
-                recent_conversation.history.clone(),
-            ));
+            effects.enqueue_external(execute_tool(tool_call.clone()));
             pending_tools.insert(tool_call.id.clone(), tool_call);
         }
 
@@ -184,46 +175,39 @@ fn conversation_transition(
                 updated_history.push(HistoryEntry::Input(recorded_input));
                 updated_history.push(HistoryEntry::Output(response.clone()));
 
-                let updated_conversation = RecentConversation {
-                    thoughts: response.thoughts.clone(),
-                    history: updated_history,
+                let updated_conversation =
+                    RecentConversation::new(response.thoughts.clone(), updated_history);
+
+                // Semantic pieces only — the send layer composes + styles them per platform.
+                let announce_tools: Vec<String> = if env.announce_tool_use {
+                    response
+                        .tool_calls
+                        .iter()
+                        .map(|tc| tc.tool_type.wire_name().to_string())
+                        .collect()
+                } else {
+                    Vec::new()
                 };
 
-                let message_to_send = response.message.clone().or_else(|| {
-                    (!response.tool_calls.is_empty() && env.announce_tool_use).then(|| {
-                        let names: Vec<&str> = response
-                            .tool_calls
-                            .iter()
-                            .map(|tc| tc.tool_type.wire_name())
-                            .collect();
-                        match names.as_slice() {
-                            [one] => format!("-# *using tool: {one}*"),
-                            many => format!("-# *using multiple tools: {}*", many.join(", ")),
-                        }
+                if response.message.is_some() || !announce_tools.is_empty() {
+                    effects.enqueue_external(send_message(
+                        Arc::clone(env),
+                        conversation_id.clone(),
+                        response.message.clone(),
+                        announce_tools,
+                    ));
+
+                    Ok(Conversation {
+                        state: ConversationState::SendingMessage {
+                            outcome: response.clone(),
+                            recent_conversation: updated_conversation,
+                            tool_rounds,
+                        },
+                        last_transition: Utc::now(),
+                        ..conversation
                     })
-                });
-
-                match message_to_send {
-                    Some(message) => {
-                        effects.enqueue_external(send_message(
-                            Arc::clone(env),
-                            conversation_id.clone(),
-                            message,
-                        ));
-
-                        Ok(Conversation {
-                            state: ConversationState::SendingMessage {
-                                outcome: response.clone(),
-                                recent_conversation: updated_conversation,
-                                tool_rounds,
-                            },
-                            last_transition: Utc::now(),
-                            ..conversation
-                        })
-                    }
-                    None => handle_outcome(
-                        env,
-                        conversation_id,
+                } else {
+                    handle_outcome(
                         response.clone(),
                         updated_conversation,
                         conversation.pending,
@@ -231,12 +215,13 @@ fn conversation_transition(
                         conversation.is_group,
                         conversation.bot_identity.clone(),
                         effects,
-                    ),
+                    )
                 }
             }
+            // LLM failed — keep the rolling window so a transient error doesn't wipe memory.
             Err(_) => Ok(Conversation {
                 state: ConversationState::Idle {
-                    recent_conversation: None,
+                    recent_conversation: RecentConversation::new(String::new(), history),
                 },
                 last_transition: Utc::now(),
                 ..conversation
@@ -250,8 +235,6 @@ fn conversation_transition(
             },
             ConversationAction::MessageSent(_res),
         ) => handle_outcome(
-            env,
-            conversation_id,
             outcome,
             recent_conversation,
             conversation.pending,
@@ -335,39 +318,6 @@ fn conversation_transition(
                 })
             }
         }
-        (
-            ConversationState::Idle {
-                recent_conversation: Some((recent_conversation, _)),
-            },
-            ConversationAction::Timeout,
-        ) => {
-            println!("Timed Out");
-
-            effects.enqueue_external(commit_to_memory(
-                Arc::clone(env),
-                conversation_id.to_string(),
-                recent_conversation.history.clone(),
-            ));
-
-            Ok(Conversation {
-                state: ConversationState::CommitingToMemory {
-                    recent_conversation,
-                },
-                last_transition: Utc::now(),
-                ..conversation
-            })
-        }
-        (ConversationState::CommitingToMemory { .. }, ConversationAction::CommitResult(_)) => {
-            println!("Commited to Memory");
-
-            Ok(Conversation {
-                state: ConversationState::Idle {
-                    recent_conversation: None,
-                },
-                last_transition: Utc::now(),
-                ..conversation
-            })
-        }
         _ => Err(anyhow::anyhow!(
             "no transition for {action:?} in state {from}"
         )),
@@ -423,17 +373,14 @@ fn post_transition(
     let is_group = conversation.is_group;
     let bot_identity = conversation.bot_identity.clone();
 
-    let history = recent_conversation
-        .as_ref()
-        .map(|(rc, _)| rc.history())
-        .unwrap_or_else(Vec::new);
+    let history = recent_conversation.history();
 
     let current_input = LLMInput::ConversationMessage(msg);
 
     effects.enqueue_external(get_llm_decision(
         Arc::clone(env),
         current_input.clone(),
-        recent_conversation.map(|(rc, _)| rc),
+        Some(recent_conversation),
         0,
         MAX_TOOL_ROUNDS,
         is_group,
@@ -456,20 +403,14 @@ fn post_transition(
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
     match conversation.state {
-        ConversationState::Idle {
-            recent_conversation: Some((_, last_activity)),
-        } => Some(Scheduled {
-            at: last_activity + ChronoDuration::milliseconds(900_000),
-            action: ConversationAction::Timeout,
-        }),
+        // No idle timeout — the rolling window is the memory and persists. Idle just waits.
+        ConversationState::Idle { .. } => None,
         ConversationState::AwaitingLLMDecision { .. }
         | ConversationState::SendingMessage { .. }
-        | ConversationState::CommitingToMemory { .. }
         | ConversationState::RunningTools { .. } => Some(Scheduled {
             at: conversation.last_transition + ChronoDuration::milliseconds(600_000),
             action: ConversationAction::ForceReset,
         }),
-        _ => None,
     }
 }
 
