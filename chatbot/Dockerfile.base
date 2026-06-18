@@ -9,9 +9,6 @@ WORKDIR /app
 COPY models/Qwen3.6-35B-A3B-Q8_0.gguf /app/models/
 ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-35B-A3B-Q8_0.gguf
 
-# Copy FastEmbed cache
-COPY .fastembed_cache* /app/.fastembed_cache
-
 ENV RUST_LOG=info
 
 # Update package list and install runtime dependencies

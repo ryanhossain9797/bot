@@ -23,11 +23,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY chatbot/src ./chatbot/src
 COPY chatbot/Cargo.toml ./chatbot/
 COPY re_framework ./re_framework
-# framework, probe, and lancedb_playground are non-compiled workspace members; cargo needs their
-# manifests to load the workspace, but they are not built (we build --package chatbot).
+# framework and probe are non-compiled workspace members; cargo needs their manifests to load the
+# workspace, but they are not built (we build --package chatbot).
 COPY framework ./framework
 COPY probe ./probe
-COPY lancedb_playground ./lancedb_playground
 COPY .git ./.git
 
 RUN cargo build --release --package chatbot
