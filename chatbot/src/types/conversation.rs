@@ -239,22 +239,11 @@ impl LLMInput {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MathOperation {
-    Add(f32, f32),
-    Sub(f32, f32),
-    Mul(f32, f32),
-    Div(f32, f32),
-    Exp(f32, f32),
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, EnumDiscriminants)]
 #[strum_discriminants(name(ToolKind))]
 #[strum_discriminants(derive(EnumIter))]
 #[strum_discriminants(vis(pub))]
 pub enum ToolType {
-    GetWeather { location: String },
-    MathCalculation { operations: Vec<MathOperation> },
     WebSearch { query: String },
     VisitUrl { url: String },
     RunBashCommand { command: String },

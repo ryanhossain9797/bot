@@ -5,11 +5,6 @@ use strum::IntoEnumIterator;
 use crate::types::conversation::{ToolKind, ToolType};
 
 #[derive(Debug, Deserialize)]
-struct GetWeatherArgs {
-    city: String,
-}
-
-#[derive(Debug, Deserialize)]
 struct WebSearchArgs {
     query: String,
 }
@@ -32,8 +27,6 @@ fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> an
 impl ToolKind {
     fn wire_name(&self) -> &'static str {
         match self {
-            ToolKind::GetWeather => "get_weather",
-            ToolKind::MathCalculation => "math_calculation",
             ToolKind::WebSearch => "web_search",
             ToolKind::VisitUrl => "visit_url",
             ToolKind::RunBashCommand => "run_bash_command",
@@ -43,20 +36,6 @@ impl ToolKind {
 
         fn definition(&self) -> Option<Value> {
         match self {
-            ToolKind::GetWeather => Some(json!({
-                "type": "function",
-                "function": {
-                    "name": self.wire_name(),
-                    "description": "Get the current weather for a city.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "city": { "type": "string", "description": "City name, e.g. \"Paris\" or \"London\"" }
-                        },
-                        "required": ["city"]
-                    }
-                }
-            })),
             ToolKind::WebSearch => Some(json!({
                 "type": "function",
                 "function": {
@@ -107,7 +86,6 @@ impl ToolKind {
                     "parameters": { "type": "object", "properties": {}, "required": [] }
                 }
             })),
-            ToolKind::MathCalculation => None,
         }
     }
 }
@@ -124,8 +102,6 @@ impl ToolType {
 
         pub fn wire_arguments(&self) -> String {
         match self {
-            ToolType::GetWeather { location } => json!({ "city": location }),
-            ToolType::MathCalculation { operations } => json!({ "operations": operations }),
             ToolType::WebSearch { query } => json!({ "query": query }),
             ToolType::VisitUrl { url } => json!({ "url": url }),
             ToolType::RunBashCommand { command } => json!({ "command": command }),
@@ -140,9 +116,6 @@ impl ToolType {
             .ok_or_else(|| anyhow::anyhow!("model called an unknown tool: {name}"))?;
 
         match kind {
-            ToolKind::GetWeather => Ok(ToolType::GetWeather {
-                location: parse_args::<GetWeatherArgs>(name, arguments)?.city,
-            }),
             ToolKind::WebSearch => Ok(ToolType::WebSearch {
                 query: parse_args::<WebSearchArgs>(name, arguments)?.query,
             }),
@@ -153,9 +126,6 @@ impl ToolType {
                 command: parse_args::<RunBashArgs>(name, arguments)?.command,
             }),
             ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
-            ToolKind::MathCalculation => {
-                Err(anyhow::anyhow!("tool '{name}' is not wired for binding yet"))
-            }
         }
     }
 }
