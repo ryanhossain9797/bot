@@ -2,8 +2,9 @@ use crate::types::conversation::ToolResultData;
 use tokio::process::Command;
 
 // One sandbox container per conversation. The bot never sees the name — the harness derives it
-// from the conversation id. The container has no host mounts, no docker socket, dropped caps; the
-// model-authored bash inside it can only reach the network, not this host.
+// from the conversation id. The container has no host mounts and no docker socket (default Docker
+// capability set + no-new-privileges); the model-authored bash inside it can reach the network but
+// not this host.
 const WORKER_IMAGE: &str = "bot-worker:latest";
 // The bot image ships the worker Dockerfile here; the image is built from it on first use.
 const WORKER_BUILD_CONTEXT: &str = "/app/worker";
@@ -77,7 +78,7 @@ async fn spawn_worker(name: &str) -> Result<(), String> {
     let out = docker(&[
         "run", "-d", "--name", name,
         "--memory", "1g", "--cpus", "2", "--pids-limit", "512",
-        "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--security-opt", "no-new-privileges",
         WORKER_IMAGE, "sleep", "infinity",
     ])
     .await?;
