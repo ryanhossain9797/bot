@@ -19,6 +19,11 @@ struct RunBashArgs {
     command: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct PathArgs {
+    path: String,
+}
+
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
     serde_json::from_str(arguments)
         .map_err(|e| anyhow::anyhow!("{name} arguments failed to bind: {e} — raw: {arguments}"))
@@ -31,6 +36,8 @@ impl ToolKind {
             ToolKind::VisitUrl => "visit_url",
             ToolKind::RunBashCommand => "run_bash_command",
             ToolKind::ResetBashContainer => "reset_bash_container",
+            ToolKind::ViewImage => "view_image",
+            ToolKind::SendImageToUser => "send_image_to_user",
         }
     }
 
@@ -86,6 +93,34 @@ impl ToolKind {
                     "parameters": { "type": "object", "properties": {}, "required": [] }
                 }
             })),
+            ToolKind::ViewImage => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Look at an image file from your bash sandbox so you can see its contents. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). Only you see it — it is hidden from the user. Use it to inspect plots, screenshots, or downloaded images before deciding what to do next.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Path to the image file inside your bash sandbox, e.g. \"/tmp/plot.png\" or \"chart.png\" (relative to the sandbox working directory)." }
+                        },
+                        "required": ["path"]
+                    }
+                }
+            })),
+            ToolKind::SendImageToUser => Some(json!({
+                "type": "function",
+                "function": {
+                    "name": self.wire_name(),
+                    "description": "Send an image file from your bash sandbox to the user in this chat. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). It goes to the user — they see it in the chat — and you see it too (it counts as a message you sent). Use it to deliver plots, generated images, or processed pictures.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string", "description": "Path to the image file inside your bash sandbox, e.g. \"/tmp/plot.png\" or \"chart.png\" (relative to the sandbox working directory)." }
+                        },
+                        "required": ["path"]
+                    }
+                }
+            })),
         }
     }
 }
@@ -106,6 +141,8 @@ impl ToolType {
             ToolType::VisitUrl { url } => json!({ "url": url }),
             ToolType::RunBashCommand { command } => json!({ "command": command }),
             ToolType::ResetBashContainer => json!({}),
+            ToolType::ViewImage { path } => json!({ "path": path }),
+            ToolType::SendImageToUser { path } => json!({ "path": path }),
         }
         .to_string()
     }
@@ -126,6 +163,12 @@ impl ToolType {
                 command: parse_args::<RunBashArgs>(name, arguments)?.command,
             }),
             ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
+            ToolKind::ViewImage => Ok(ToolType::ViewImage {
+                path: parse_args::<PathArgs>(name, arguments)?.path,
+            }),
+            ToolKind::SendImageToUser => Ok(ToolType::SendImageToUser {
+                path: parse_args::<PathArgs>(name, arguments)?.path,
+            }),
         }
     }
 }

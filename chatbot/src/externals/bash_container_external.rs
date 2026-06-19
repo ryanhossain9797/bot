@@ -1,12 +1,9 @@
 use crate::types::conversation::ToolResultData;
+use crate::types::media::{Image, MessageImage};
+use std::sync::Arc;
 use tokio::process::Command;
 
-// One sandbox container per conversation. The bot never sees the name — the harness derives it
-// from the conversation id. The container has no host mounts and no docker socket (default Docker
-// capability set + no-new-privileges); the model-authored bash inside it can reach the network but
-// not this host.
 const WORKER_IMAGE: &str = "bot-worker:latest";
-// The bot image ships the worker Dockerfile here; the image is built from it on first use.
 const WORKER_BUILD_CONTEXT: &str = "/app/worker";
 
 fn worker_name(conversation_id: &str) -> String {
@@ -32,28 +29,22 @@ async fn is_running(name: &str) -> bool {
     }
 }
 
-// Reuse the conversation's existing sandbox whenever possible so its filesystem/packages persist:
-// running -> reuse as-is; stopped -> restart it; absent/unrecoverable -> spawn fresh.
 async fn ensure_worker(name: &str) -> Result<(), String> {
     match docker(&["inspect", "-f", "{{.State.Running}}", name]).await {
         Ok(out) if out.status.success() => {
             if String::from_utf8_lossy(&out.stdout).trim() == "true" {
-                return Ok(()); // already live — reuse
+                return Ok(()); 
             }
-            // exists but stopped — restart, preserving its state
             if docker(&["start", name]).await.map(|o| o.status.success()).unwrap_or(false) {
                 return Ok(());
             }
-            let _ = docker(&["rm", "-f", name]).await; // dead/unrecoverable — recreate
+            let _ = docker(&["rm", "-f", name]).await; 
         }
-        _ => {} // doesn't exist — create
+        _ => {} 
     }
     spawn_worker(name).await
 }
 
-// Build the sandbox image from the Dockerfile shipped in the bot image, if not already present.
-// Runs on the host daemon over the mounted socket; built once, then cached across calls/restarts.
-// Called at startup (so the first command isn't slow) and again before spawning (idempotent).
 pub(crate) async fn ensure_worker_image() -> Result<(), String> {
     let present = docker(&["image", "inspect", WORKER_IMAGE])
         .await
@@ -72,7 +63,6 @@ pub(crate) async fn ensure_worker_image() -> Result<(), String> {
     Ok(())
 }
 
-// Spawn flags are the security boundary — fixed here, never influenced by the model.
 async fn spawn_worker(name: &str) -> Result<(), String> {
     ensure_worker_image().await?;
     let out = docker(&[
@@ -85,7 +75,6 @@ async fn spawn_worker(name: &str) -> Result<(), String> {
     if out.status.success() {
         return Ok(());
     }
-    // A concurrent tool call in the same round may have created it first — that's fine.
     if is_running(name).await {
         return Ok(());
     }
@@ -115,12 +104,34 @@ pub async fn run_bash(conversation_id: &str, command: &str) -> Result<ToolResult
     let code = out.status.code().unwrap_or(-1);
 
     let body = format!("exit code: {code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}");
-    Ok(ToolResultData { actual: body.clone(), simplified: body })
+    Ok(ToolResultData::text(body.clone(), body))
+}
+
+pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImage, String> {
+    let name = worker_name(conversation_id);
+    ensure_worker(&name).await?;
+
+    let out = docker(&["exec", &name, "cat", "--", path]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not read '{path}': {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    let bytes = out.stdout;
+    let format = image::guess_format(&bytes)
+        .map_err(|_| format!("'{path}' is not a valid image (expected PNG, JPEG, GIF, or WebP)"))?;
+    let image = Image {
+        bytes: Arc::new(bytes),
+        mime: format.to_mime_type().to_string(),
+    };
+    Ok(MessageImage::Hydrated(image).downscaled())
 }
 
 pub async fn reset_bash(conversation_id: &str) -> Result<ToolResultData, String> {
     let name = worker_name(conversation_id);
     let _ = docker(&["rm", "-f", &name]).await;
     let msg = "Sandbox reset — a fresh environment starts on the next command.".to_string();
-    Ok(ToolResultData { actual: msg.clone(), simplified: msg })
+    Ok(ToolResultData::text(msg.clone(), msg))
 }

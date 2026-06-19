@@ -33,7 +33,6 @@ impl Platform {
         }
     }
 
-    // Platform-specific rendering note for the conversation footer.
     pub fn formatting_note(&self) -> &'static str {
         match self {
             Platform::Discord => "Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align).",
@@ -41,7 +40,6 @@ impl Platform {
         }
     }
 
-    // Render `text` as de-emphasized subtext in this platform's markup.
     pub fn subtext(&self, text: &str) -> String {
         match self {
             Platform::Discord => format!("-# *{text}*"),
@@ -103,9 +101,8 @@ pub enum ConversationState {
                 tool_rounds: usize,
     },
     SendingMessage {
-        outcome: LLMResponse,
         recent_conversation: RecentConversation,
-        tool_rounds: usize,
+        post_send: PostSend,
     },
     RunningTools {
         recent_conversation: RecentConversation,
@@ -120,6 +117,25 @@ impl Default for ConversationState {
             recent_conversation: RecentConversation::empty(),
         }
     }
+}
+
+/// What `SendingMessage` does once its in-flight send is confirmed. Each variant
+/// carries exactly what its continuation needs — nothing more.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum PostSend {
+    /// Nothing follows — go Idle.
+    Nothing,
+    /// The message was delivered; now run these tools.
+    CallTools {
+        tool_rounds: usize,
+        tool_calls: Vec<ToolCall>,
+    },
+    /// The user-facing part was delivered; now relay the results to the LLM.
+    SendToolResponse {
+        tool_rounds: usize,
+        results: Vec<ToolResult>,
+        followup: Option<ConversationMessage>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,16 +239,52 @@ impl LLMInput {
                 (vec![json!({ "role": "user", "content": content })], bytes)
             }
             LLMInput::ToolResults(results, user_msg) => {
-                let mut messages: Vec<Value> = results
-                    .iter()
-                    .map(|r| json!({ "role": "tool", "tool_call_id": r.id, "content": r.data.actual }))
-                    .collect();
-                let mut bytes = Vec::new();
+                let mut messages: Vec<Value> = Vec::new();
+                let mut bytes: Vec<Arc<Vec<u8>>> = Vec::new();
+                let mut delivered: Vec<Arc<Vec<u8>>> = Vec::new();
+
+                for r in results {
+                    let mut parts: Vec<String> = Vec::new();
+                    if !r.data.actual.is_empty() {
+                        parts.push(r.data.actual.clone());
+                    }
+                    if let Some(image) = &r.data.image_for_user {
+                        match image.hydrated_bytes() {
+                            Some(b) => {
+                                parts.push("[The image you produced was delivered to the user as your message — shown below.]".to_string());
+                                delivered.push(b);
+                            }
+                            None => parts.push(
+                                "[An image was delivered to the user as your message earlier in the conversation.]".to_string(),
+                            ),
+                        }
+                    }
+                    if let Some(image) = &r.data.image_for_assistant {
+                        match image.hydrated_bytes() {
+                            Some(b) => {
+                                parts.push(marker.to_string());
+                                bytes.push(b);
+                            }
+                            None => parts.push(
+                                "[A tool-result image from earlier in the conversation — you saw it at the time, not re-attached here.]".to_string(),
+                            ),
+                        }
+                    }
+                    messages.push(json!({ "role": "tool", "tool_call_id": r.id, "content": parts.join("\n") }));
+                }
+
+                if !delivered.is_empty() {
+                    let content = vec![marker.to_string(); delivered.len()].join("\n");
+                    messages.push(json!({ "role": "assistant", "content": content }));
+                    bytes.extend(delivered);
+                }
+
                 if let Some(msg) = user_msg {
                     let (content, b) = msg.content_and_media(marker);
                     messages.push(json!({ "role": "user", "content": content }));
-                    bytes = b;
+                    bytes.extend(b);
                 }
+
                 (messages, bytes)
             }
         }
@@ -248,6 +300,8 @@ pub enum ToolType {
     VisitUrl { url: String },
     RunBashCommand { command: String },
     ResetBashContainer,
+    ViewImage { path: String },
+    SendImageToUser { path: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,6 +384,17 @@ pub enum ConversationAction {
 pub struct ToolResultData {
     pub actual: String,
     pub simplified: String,
+    /// Image fed back into the model alongside `actual` (multimodal tool result).
+    pub image_for_assistant: Option<MessageImage>,
+    /// Image delivered straight to the chat, bypassing the model.
+    pub image_for_user: Option<MessageImage>,
+}
+
+impl ToolResultData {
+    /// Text-only result — no images for either side. The common case.
+    pub fn text(actual: String, simplified: String) -> Self {
+        ToolResultData { actual, simplified, image_for_assistant: None, image_for_user: None }
+    }
 }
 
 impl std::fmt::Debug for ConversationAction {

@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use crate::{
     types::conversation::{ConversationAction, Platform, ConversationId},
+    types::media::MessageImage,
     Env,
 };
-use serenity::all::CreateMessage;
+use serenity::all::{CreateAttachment, CreateMessage};
 
 const DISCORD_MESSAGE_LIMIT: usize = 2000;
 
@@ -33,8 +34,6 @@ fn split_for_discord(content: &str) -> Vec<String> {
     chunks
 }
 
-// Compose the user-facing text from semantic pieces, styled for the platform.
-// message → as-is; announced tools → de-emphasized subtext footer underneath.
 fn compose(platform: &Platform, message: Option<String>, tool_names: &[String]) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(m) = message {
@@ -50,13 +49,49 @@ fn compose(platform: &Platform, message: Option<String>, tool_names: &[String]) 
     parts.join("\n")
 }
 
+/// Everything that gets delivered to a conversation in one send. `message` and
+/// `tool_names` compose into the text body; `attachments` ride alongside as files.
+/// Text and attachments may both be present — the type models that even though no
+/// current flow produces both at once.
+pub struct OutboundMessage {
+    pub message: Option<String>,
+    pub tool_names: Vec<String>,
+    pub attachments: Vec<Attachment>,
+}
+
+pub enum Attachment {
+    Image(MessageImage),
+}
+
+impl OutboundMessage {
+    pub fn is_empty(&self) -> bool {
+        self.message.is_none() && self.tool_names.is_empty() && self.attachments.is_empty()
+    }
+}
+
+fn discord_attachment(attachment: &Attachment, index: usize) -> Option<CreateAttachment> {
+    let image = match attachment {
+        Attachment::Image(image) => image,
+    };
+    let MessageImage::Hydrated(image) = image else {
+        return None; 
+    };
+    let ext = match image.mime.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "bin",
+    };
+    Some(CreateAttachment::bytes((*image.bytes).clone(), format!("attachment_{index}.{ext}")))
+}
+
 pub async fn send_message(
     env: Arc<Env>,
     conversation_id: ConversationId,
-    message: Option<String>,
-    tool_names: Vec<String>,
+    outbound: OutboundMessage,
 ) -> ConversationAction {
-    let message = compose(&conversation_id.0, message, &tool_names);
+    let text = compose(&conversation_id.0, outbound.message, &outbound.tool_names);
     match conversation_id.0 {
         Platform::Discord => {
             let channel = match conversation_id.1.parse::<u64>() {
@@ -67,11 +102,38 @@ pub async fn send_message(
                 }
             };
 
-            for chunk in split_for_discord(&message) {
-                if let Err(err) = channel
-                    .send_message(&env.discord_http, CreateMessage::new().content(&chunk))
-                    .await
-                {
+            let files: Vec<CreateAttachment> = outbound
+                .attachments
+                .iter()
+                .enumerate()
+                .filter_map(|(i, a)| discord_attachment(a, i))
+                .collect();
+
+            let chunks = split_for_discord(&text);
+
+            if chunks.is_empty() {
+                if !files.is_empty() {
+                    if let Err(err) = channel
+                        .send_message(&env.discord_http, CreateMessage::new().files(files))
+                        .await
+                    {
+                        eprintln!("[send] Discord send failed: {err}");
+                        return ConversationAction::MessageSent(Err(err.to_string()));
+                    }
+                }
+                return ConversationAction::MessageSent(Ok(()));
+            }
+
+            let last = chunks.len() - 1;
+            let mut files = Some(files);
+            for (i, chunk) in chunks.into_iter().enumerate() {
+                let mut builder = CreateMessage::new().content(&chunk);
+                if i == last {
+                    if let Some(files) = files.take().filter(|f| !f.is_empty()) {
+                        builder = builder.files(files);
+                    }
+                }
+                if let Err(err) = channel.send_message(&env.discord_http, builder).await {
                     eprintln!("[send] Discord send failed: {err}");
                     return ConversationAction::MessageSent(Err(err.to_string()));
                 }

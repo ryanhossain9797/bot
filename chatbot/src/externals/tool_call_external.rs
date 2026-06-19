@@ -1,6 +1,6 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
-    externals::bash_container_external::{reset_bash, run_bash},
+    externals::bash_container_external::{pull_image, reset_bash, run_bash},
     types::conversation::{
         ToolCall, ToolResultData, ToolType, ConversationAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
@@ -133,7 +133,7 @@ async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
 
     let actual = format!("{simplified}\n{}", secondary.join("\n"));
 
-    Ok(ToolResultData { actual, simplified })
+    Ok(ToolResultData::text(actual, simplified))
 }
 
 #[allow(dead_code)]
@@ -232,7 +232,7 @@ async fn fetch_web_search_brave(query: &str) -> anyhow::Result<ToolResultData> {
 
     let actual = format!("{simplified}\n{}", secondary.join("\n"));
 
-    Ok(ToolResultData { actual, simplified })
+    Ok(ToolResultData::text(actual, simplified))
 }
 
 #[allow(dead_code)]
@@ -299,7 +299,7 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     let actual = format!("Content of {url}:\n{actual_content}");
     let simplified = format!("Content of {url}:\n{simplified_content}");
 
-    Ok(ToolResultData { actual, simplified })
+    Ok(ToolResultData::text(actual, simplified))
 }
 
 async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResultData, String> {
@@ -308,6 +308,26 @@ async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResu
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
         ToolType::RunBashCommand { command } => run_bash(conversation_id, &command).await,
         ToolType::ResetBashContainer => reset_bash(conversation_id).await,
+        ToolType::ViewImage { path } => {
+            let image = pull_image(conversation_id, &path).await?;
+            let note = format!("Image '{path}' loaded — shown below. Only you can see it; it is hidden from the user.");
+            Ok(ToolResultData {
+                actual: note.clone(),
+                simplified: note,
+                image_for_assistant: Some(image),
+                image_for_user: None,
+            })
+        }
+        ToolType::SendImageToUser { path } => {
+            let image = pull_image(conversation_id, &path).await?;
+            let note = format!("Image '{path}' sent to the user — they can see it in the chat, and you can see it too.");
+            Ok(ToolResultData {
+                actual: note.clone(),
+                simplified: note,
+                image_for_assistant: None,
+                image_for_user: Some(image),
+            })
+        }
     }
 }
 
