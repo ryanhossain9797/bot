@@ -1,12 +1,14 @@
 use crate::externals::{
-    llama_cpp_external::get_llm_decision, message_external::send_message,
+    llama_cpp_external::get_llm_decision,
+    message_external::{send_message, Attachment, OutboundMessage},
     tool_call_external::execute_tool,
 };
-use crate::types::conversation::{LLMResponse, ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::conversation::{ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
 use crate::{
     types::conversation::{
         Conversation, ConversationAction, ConversationConstructor, ConversationId,
-        ConversationMessage, ConversationState, HistoryEntry, LLMInput, RecentConversation,
+        ConversationMessage, ConversationState, HistoryEntry, LLMInput, PostSend,
+        RecentConversation,
     },
     Env,
 };
@@ -76,18 +78,60 @@ fn state_label(state: &ConversationState) -> &'static str {
     }
 }
 
-fn handle_outcome(
+fn send_then(
+    env: &Arc<Env>,
     conversation_id: &ConversationId,
-    response: LLMResponse,
+    outbound: OutboundMessage,
+    post_send: PostSend,
     recent_conversation: RecentConversation,
     pending: Vec<ConversationMessage>,
-    tool_rounds: usize,
     is_group: bool,
     bot_identity: String,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
-    if response.tool_calls.is_empty() {
-        Ok(Conversation {
+    if outbound.is_empty() {
+        return apply_post_send(
+            env,
+            conversation_id,
+            post_send,
+            recent_conversation,
+            pending,
+            is_group,
+            bot_identity,
+            effects,
+        );
+    }
+
+    effects.enqueue_external(send_message(
+        Arc::clone(env),
+        conversation_id.clone(),
+        outbound,
+    ));
+
+    Ok(Conversation {
+        state: ConversationState::SendingMessage {
+            recent_conversation,
+            post_send,
+        },
+        last_transition: Utc::now(),
+        pending,
+        is_group,
+        bot_identity,
+    })
+}
+
+fn apply_post_send(
+    env: &Arc<Env>,
+    conversation_id: &ConversationId,
+    post_send: PostSend,
+    recent_conversation: RecentConversation,
+    pending: Vec<ConversationMessage>,
+    is_group: bool,
+    bot_identity: String,
+    effects: &mut ConversationEffects,
+) -> ConversationTransitionResult {
+    match post_send {
+        PostSend::Nothing => Ok(Conversation {
             state: ConversationState::Idle {
                 recent_conversation,
             },
@@ -95,26 +139,60 @@ fn handle_outcome(
             pending,
             is_group,
             bot_identity,
-        })
-    } else {
-        let mut pending_tools = HashMap::new();
-        for tool_call in response.tool_calls {
-            effects.enqueue_external(execute_tool(conversation_id.to_string(), tool_call.clone()));
-            pending_tools.insert(tool_call.id.clone(), tool_call);
-        }
+        }),
+        PostSend::CallTools {
+            tool_rounds,
+            tool_calls,
+        } => {
+            let mut pending_tools = HashMap::new();
+            for tool_call in tool_calls {
+                effects.enqueue_external(execute_tool(conversation_id.to_string(), tool_call.clone()));
+                pending_tools.insert(tool_call.id.clone(), tool_call);
+            }
 
-        Ok(Conversation {
-            state: ConversationState::RunningTools {
-                recent_conversation,
-                tool_rounds: tool_rounds + 1,
-                pending_tools,
-                completed_tools: Vec::new(),
-            },
-            last_transition: Utc::now(),
-            pending,
-            is_group,
-            bot_identity,
-        })
+            Ok(Conversation {
+                state: ConversationState::RunningTools {
+                    recent_conversation,
+                    tool_rounds: tool_rounds + 1,
+                    pending_tools,
+                    completed_tools: Vec::new(),
+                },
+                last_transition: Utc::now(),
+                pending,
+                is_group,
+                bot_identity,
+            })
+        }
+        PostSend::SendToolResponse {
+            tool_rounds,
+            results,
+            followup,
+        } => {
+            let current_input = LLMInput::ToolResults(results, followup);
+            let history = recent_conversation.history();
+            effects.enqueue_external(get_llm_decision(
+                Arc::clone(env),
+                current_input.clone(),
+                Some(recent_conversation),
+                tool_rounds,
+                MAX_TOOL_ROUNDS,
+                is_group,
+                bot_identity.clone(),
+                conversation_id.0.clone(),
+            ));
+
+            Ok(Conversation {
+                state: ConversationState::AwaitingLLMDecision {
+                    history,
+                    current_input,
+                    tool_rounds,
+                },
+                last_transition: Utc::now(),
+                pending,
+                is_group,
+                bot_identity,
+            })
+        }
     }
 }
 
@@ -179,7 +257,6 @@ fn conversation_transition(
                 let updated_conversation =
                     RecentConversation::new(response.thoughts.clone(), updated_history);
 
-                // Semantic pieces only — the send layer composes + styles them per platform.
                 let announce_tools: Vec<String> = if env.announce_tool_use {
                     response
                         .tool_calls
@@ -190,37 +267,31 @@ fn conversation_transition(
                     Vec::new()
                 };
 
-                if response.message.is_some() || !announce_tools.is_empty() {
-                    effects.enqueue_external(send_message(
-                        Arc::clone(env),
-                        conversation_id.clone(),
-                        response.message.clone(),
-                        announce_tools,
-                    ));
-
-                    Ok(Conversation {
-                        state: ConversationState::SendingMessage {
-                            outcome: response.clone(),
-                            recent_conversation: updated_conversation,
-                            tool_rounds,
-                        },
-                        last_transition: Utc::now(),
-                        ..conversation
-                    })
+                let post_send = if response.tool_calls.is_empty() {
+                    PostSend::Nothing
                 } else {
-                    handle_outcome(
-                        conversation_id,
-                        response.clone(),
-                        updated_conversation,
-                        conversation.pending,
+                    PostSend::CallTools {
                         tool_rounds,
-                        conversation.is_group,
-                        conversation.bot_identity.clone(),
-                        effects,
-                    )
-                }
+                        tool_calls: response.tool_calls.clone(),
+                    }
+                };
+
+                send_then(
+                    env,
+                    conversation_id,
+                    OutboundMessage {
+                        message: response.message.clone(),
+                        tool_names: announce_tools,
+                        attachments: Vec::new(),
+                    },
+                    post_send,
+                    updated_conversation,
+                    conversation.pending,
+                    conversation.is_group,
+                    conversation.bot_identity.clone(),
+                    effects,
+                )
             }
-            // LLM failed — keep the rolling window so a transient error doesn't wipe memory.
             Err(_) => Ok(Conversation {
                 state: ConversationState::Idle {
                     recent_conversation: RecentConversation::new(String::new(), history),
@@ -231,17 +302,16 @@ fn conversation_transition(
         },
         (
             ConversationState::SendingMessage {
-                outcome,
                 recent_conversation,
-                tool_rounds,
+                post_send,
             },
             ConversationAction::MessageSent(_res),
-        ) => handle_outcome(
+        ) => apply_post_send(
+            env,
             conversation_id,
-            outcome,
+            post_send,
             recent_conversation,
             conversation.pending,
-            tool_rounds,
             conversation.is_group,
             conversation.bot_identity.clone(),
             effects,
@@ -260,10 +330,7 @@ fn conversation_transition(
                     Ok(data) => data.clone(),
                     Err(error_msg) => {
                         let msg = format!("Tool execution failed: {error_msg}");
-                        ToolResultData {
-                            actual: msg.clone(),
-                            simplified: msg,
-                        }
+                        ToolResultData::text(msg.clone(), msg)
                     }
                 };
                 completed_tools.push((tool_call, data));
@@ -273,6 +340,13 @@ fn conversation_transition(
 
             if pending_tools.is_empty() {
                 completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
+
+                let attachments: Vec<Attachment> = completed_tools
+                    .iter()
+                    .filter_map(|(_, data)| data.image_for_user.clone())
+                    .map(Attachment::Image)
+                    .collect();
+
                 let results = completed_tools
                     .into_iter()
                     .map(|(tool_call, data)| ToolResult {
@@ -280,34 +354,29 @@ fn conversation_transition(
                         data,
                     })
                     .collect();
+
                 let mut pending = conversation.pending;
-                let current_input = LLMInput::ToolResults(results, take_pending(&mut pending));
-                let is_group = conversation.is_group;
-                let bot_identity = conversation.bot_identity.clone();
+                let followup = take_pending(&mut pending);
 
-                let history = recent_conversation.history();
-                effects.enqueue_external(get_llm_decision(
-                    Arc::clone(env),
-                    current_input.clone(),
-                    Some(recent_conversation),
-                    tool_rounds,
-                    MAX_TOOL_ROUNDS,
-                    is_group,
-                    bot_identity.clone(),
-                    conversation_id.0.clone(),
-                ));
-
-                Ok(Conversation {
-                    state: ConversationState::AwaitingLLMDecision {
-                        history,
-                        current_input,
-                        tool_rounds,
+                send_then(
+                    env,
+                    conversation_id,
+                    OutboundMessage {
+                        message: None,
+                        tool_names: Vec::new(),
+                        attachments,
                     },
-                    last_transition: Utc::now(),
+                    PostSend::SendToolResponse {
+                        tool_rounds,
+                        results,
+                        followup,
+                    },
+                    recent_conversation,
                     pending,
-                    is_group,
-                    bot_identity,
-                })
+                    conversation.is_group,
+                    conversation.bot_identity.clone(),
+                    effects,
+                )
             } else {
                 Ok(Conversation {
                     state: ConversationState::RunningTools {
@@ -406,7 +475,6 @@ fn post_transition(
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
     match conversation.state {
-        // No idle timeout — the rolling window is the memory and persists. Idle just waits.
         ConversationState::Idle { .. } => None,
         ConversationState::AwaitingLLMDecision { .. }
         | ConversationState::SendingMessage { .. }
