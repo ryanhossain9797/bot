@@ -345,7 +345,7 @@ impl LLMResponse {
             Reply::Said(text) => text.as_str(),
             Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]",
             Reply::Empty => "",
-            Reply::Malformed => "[EMPTY]",
+            Reply::Malformed => "[MALFORMED — assistant generated no usable output: no message and no tool call]",
         };
         let mut msg = json!({
             "role": "assistant",
