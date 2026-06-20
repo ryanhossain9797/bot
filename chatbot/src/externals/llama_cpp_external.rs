@@ -1,6 +1,6 @@
 use crate::{
     types::conversation::{
-        HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation, ToolCall,
+        HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation, Reply, ToolCall,
         ToolType, ConversationAction,
     },
     services::llama_cpp::LlamaCppService,
@@ -71,12 +71,10 @@ fn session_context_block(
 
     if is_group {
         lines.push(
-            "Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise your whole reply must be the literal token <empty> (exactly those seven characters with angle brackets, nothing else — never (empty), empty, or any variant). Match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
+            "Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise your whole reply must be the literal token [EMPTY] (exactly those seven characters with square brackets, nothing else — never (empty), empty, or any variant). Match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
         );
     }
 
-    // Private role: stripped out in respond_blocking and re-injected as a system block past the
-    // template's "system must be first" guard — so this renders as a true system footer, not a user turn.
     json!({ "role": "footer", "content": lines.join("\n") })
 }
 
@@ -193,8 +191,6 @@ async fn get_response_from_llm(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .unwrap_or("");
-    let explicit_empty = content.eq_ignore_ascii_case("<empty>");
-    let message = (!content.is_empty() && !explicit_empty).then(|| content.to_string());
 
     let calls = all_tool_calls(&parsed);
     let mut tool_calls = Vec::with_capacity(calls.len());
@@ -204,15 +200,24 @@ async fn get_response_from_llm(
     }
     tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
 
-    if message.is_none() && tool_calls.is_empty() && !explicit_empty {
+    let explicit_empty = content.eq_ignore_ascii_case("[EMPTY]");
+    let reply = if !content.is_empty() && !explicit_empty {
+        Reply::Said(content.to_string())
+    } else if explicit_empty || !tool_calls.is_empty() {
+        Reply::Empty
+    } else {
+        Reply::Malformed
+    };
+
+    if matches!(reply, Reply::Malformed) {
         eprintln!(
-            "[llm] implicit empty response — model produced no message and no tool calls; nothing will be sent"
+            "[llm] malformed response — no message, no tool call, and no [EMPTY] token; nothing will be sent"
         );
     }
 
     Ok(LLMResponse {
         thoughts,
-        message,
+        reply,
         tool_calls,
     })
 }
