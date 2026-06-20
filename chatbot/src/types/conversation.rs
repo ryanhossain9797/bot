@@ -316,23 +316,36 @@ pub struct ToolResult {
     pub data: ToolResultData,
 }
 
+/// What the model produced for the message slot. `Empty` is a deliberate non-reply
+/// (the [EMPTY] token, or a silent tool call); `Malformed` is a failed/blank generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Reply {
+    Said(String),
+    Empty,
+    Malformed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
         pub thoughts: String,
-        pub message: Option<String>,
+        pub reply: Reply,
         pub tool_calls: Vec<ToolCall>,
 }
 
 impl LLMResponse {
-        pub fn is_empty(&self) -> bool {
-        self.message.as_deref().map_or(true, str::is_empty) && self.tool_calls.is_empty()
+        pub fn message(&self) -> Option<&str> {
+        match &self.reply {
+            Reply::Said(text) => Some(text),
+            Reply::Empty | Reply::Malformed => None,
+        }
     }
 
     pub fn to_openai_message(&self) -> Value {
-        let content = if self.is_empty() {
-            "(stayed silent — chose not to reply)"
-        } else {
-            self.message.as_deref().unwrap_or("")
+        let content = match &self.reply {
+            Reply::Said(text) => text.as_str(),
+            Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]",
+            Reply::Empty => "",
+            Reply::Malformed => "[EMPTY]",
         };
         let mut msg = json!({
             "role": "assistant",

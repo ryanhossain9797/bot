@@ -280,7 +280,7 @@ fn conversation_transition(
                     env,
                     conversation_id,
                     OutboundMessage {
-                        message: response.message.clone(),
+                        message: response.message().map(str::to_string),
                         tool_names: announce_tools,
                         attachments: Vec::new(),
                     },
