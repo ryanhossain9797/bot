@@ -1,8 +1,6 @@
 use llama_cpp_2::gguf::GgufContext;
 use std::path::{Path, PathBuf};
 
-const DEFAULT_MODEL: &str =
-    "/home/zireael9797/Repos/bot/chatbot/models/Qwen3.6-35B-A3B-Q8_0.gguf";
 const DEFAULT_ROOT: &str = "extracted";
 
 const T_UINT8: u32 = 0;
@@ -121,7 +119,9 @@ fn model_dir_name(g: &GgufContext, model_path: &str) -> String {
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let model_path = args.next().unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let model_path = args
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("usage: extractor <model.gguf> [out_root]"))?;
     let root = args.next().unwrap_or_else(|| DEFAULT_ROOT.to_string());
 
     let g = GgufContext::from_file(Path::new(&model_path))

@@ -24,8 +24,7 @@ For each model it creates `extracted/<model-id>/` containing:
 ## Run it
 
 ```bash
-cargo run -p extractor                       # defaults to the chatbot's Qwen3.6 GGUF -> extracted/
-cargo run -p extractor -- /path/to/model.gguf [out_root]
+cargo run -p extractor -- /path/to/model.gguf [out_root]   # out_root defaults to extracted/
 ```
 
 Reads only the header via `GgufContext`, so it's instant even on a 35 GB file.
