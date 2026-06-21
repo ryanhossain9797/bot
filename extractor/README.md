@@ -25,6 +25,11 @@ For each model it creates `extracted/<model-id>/` containing:
 
 ```bash
 cargo run -p extractor -- /path/to/model.gguf [out_root]   # out_root defaults to extracted/
+cargo run -p extractor -- /path/to/model.gguf --verify     # also cross-check the extract
 ```
 
 Reads only the header via `GgufContext`, so it's instant even on a 35 GB file.
+
+`--verify` additionally does a **vocab-only** model load (no weights, no GPU) and confirms the
+extracted template is byte-for-byte identical to what llama.cpp's own `model.chat_template()`
+returns — i.e. the extract faithfully matches what inference uses.

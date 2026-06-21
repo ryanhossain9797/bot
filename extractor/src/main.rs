@@ -118,11 +118,13 @@ fn model_dir_name(g: &GgufContext, model_path: &str) -> String {
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    let model_path = args
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let verify = raw.iter().any(|a| a == "--verify");
+    let mut positional = raw.iter().filter(|a| !a.starts_with("--")).cloned();
+    let model_path = positional
         .next()
-        .ok_or_else(|| anyhow::anyhow!("usage: extractor <model.gguf> [out_root]"))?;
-    let root = args.next().unwrap_or_else(|| DEFAULT_ROOT.to_string());
+        .ok_or_else(|| anyhow::anyhow!("usage: extractor <model.gguf> [out_root] [--verify]"))?;
+    let root = positional.next().unwrap_or_else(|| DEFAULT_ROOT.to_string());
 
     let g = GgufContext::from_file(Path::new(&model_path))
         .ok_or_else(|| anyhow::anyhow!("could not open GGUF (missing or invalid): {model_path}"))?;
@@ -157,5 +159,40 @@ fn main() -> anyhow::Result<()> {
     std::fs::write(out.join("metadata.tsv"), &report)?;
 
     println!("{} keys, {} tensors -> {}", n, g.n_tensors(), out.display());
+
+    if verify {
+        verify_template(&model_path, &out)?;
+    }
     Ok(())
+}
+
+// Cross-check the raw GgufContext extract against what llama.cpp's own model API returns
+// (a different code path reading the same GGUF). Vocab-only load — no weights, no GPU.
+fn verify_template(model_path: &str, out: &Path) -> anyhow::Result<()> {
+    use llama_cpp_2::llama_backend::LlamaBackend;
+    use llama_cpp_2::model::params::LlamaModelParams;
+    use llama_cpp_2::model::LlamaModel;
+
+    let extracted = std::fs::read_to_string(out.join("chat_template.jinja"))?;
+    let backend = LlamaBackend::init()?;
+    let model = LlamaModel::load_from_file(
+        &backend,
+        model_path,
+        &LlamaModelParams::default().with_vocab_only(true),
+    )?;
+    let via_api = model.chat_template(None)?.to_string()?;
+
+    if via_api == extracted {
+        println!(
+            "verify: OK — matches model.chat_template() byte-for-byte ({} bytes)",
+            extracted.len()
+        );
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "verify: MISMATCH — extracted {} bytes vs llama.cpp api {} bytes",
+            extracted.len(),
+            via_api.len()
+        )
+    }
 }
