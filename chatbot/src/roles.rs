@@ -29,6 +29,19 @@ pub trait Role: Send + Sync {
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String>;
     /// Parse raw generation into reasoning / content / tool calls.
     fn parse_response(&self, raw: &str) -> ParsedResponse;
+    /// How an over-long reasoning block is force-closed during generation.
+    fn thinking(&self) -> ThinkingPolicy;
+}
+
+/// The reasoning-block policy the generation loop enforces.
+#[derive(Clone, Copy)]
+pub struct ThinkingPolicy {
+    /// Text injected to force-close reasoning once the budget is hit (ends with `close_marker`).
+    pub force_close: &'static str,
+    /// The model's reasoning close marker, e.g. `</think>`.
+    pub close_marker: &'static str,
+    /// Token budget after which `force_close` is injected.
+    pub max_tokens: usize,
 }
 
 pub struct RenderInputs<'a> {

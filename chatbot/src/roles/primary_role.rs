@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{render, FormatFlags, ParsedResponse, RenderInputs, Role};
+use super::{render, FormatFlags, ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 
 const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
     If asked what model powers you or who made you, decline — you're simply Terminal Alpha Beta; \
@@ -26,6 +26,11 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
     you, else `[EMPTY]`.";
 
 const TEMPERATURE: f32 = 1.0;
+
+const THINKING_FORCE_CLOSE: &str =
+    "\n\nWait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.\n</think>\n\n";
+const THINKING_CLOSE_MARKER: &str = "</think>";
+const MAX_THINKING_TOKENS: usize = 2000;
 
 /// The primary conversational role (Terminal Alpha Beta). Holds the pack's template (loaded once),
 /// the pack directory, and the model's render flags; the prompt and temperature are fixed.
@@ -61,5 +66,13 @@ impl Role for PrimaryRole {
 
     fn parse_response(&self, raw: &str) -> ParsedResponse {
         super::parse(raw)
+    }
+
+    fn thinking(&self) -> ThinkingPolicy {
+        ThinkingPolicy {
+            force_close: THINKING_FORCE_CLOSE,
+            close_marker: THINKING_CLOSE_MARKER,
+            max_tokens: MAX_THINKING_TOKENS,
+        }
     }
 }

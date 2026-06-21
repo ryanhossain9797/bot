@@ -17,14 +17,11 @@ use tokio::task::{spawn_blocking, JoinHandle};
 use crate::{
     configuration::debug::DEBUG_LIVE_LLM_OUTPUT,
     model_pack::Pack,
-    roles::{FormatFlags, PrimaryRole, Role},
+    roles::{FormatFlags, PrimaryRole, Role, ThinkingPolicy},
 };
 
-const MAX_THINKING_TOKENS: usize = 2000;
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 const DRY_BREAKS_LONG_STRINGS: bool = true;
-const THINKING_FORCE_CLOSE: &str =
-    "\n\nWait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.\n</think>\n\n";
 
 pub struct PrimaryModel {
     pub mtmd: MtmdContext,
@@ -131,11 +128,12 @@ impl LlamaCppService {
         let primary = Arc::clone(&self.primary);
         let backend = Arc::clone(&self.backend);
         let cfg = Arc::clone(&self.cfg);
+        let thinking = self.role.thinking();
         spawn_blocking(move || {
             if images.is_empty() {
-                run_generation_text(&primary, &backend, &cfg, &prompt, temperature)
+                run_generation_text(&primary, &backend, &cfg, &prompt, temperature, thinking)
             } else {
-                run_generation_mtmd(&primary, &backend, &cfg, &prompt, &images, temperature)
+                run_generation_mtmd(&primary, &backend, &cfg, &prompt, &images, temperature, thinking)
             }
         })
         .await?
@@ -167,6 +165,7 @@ fn run_generation_text(
     cfg: &GenConfig,
     prompt: &str,
     temperature: f32,
+    thinking: ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let model = primary.model.as_ref();
     let mut ctx = model.new_context(backend, context_params(cfg))?;
@@ -202,7 +201,7 @@ fn run_generation_text(
     }
 
     log_prompt(prompt);
-    generate(model, &mut ctx, tokens.len() as i32, temperature, cfg)
+    generate(model, &mut ctx, tokens.len() as i32, temperature, cfg, thinking)
 }
 
 fn run_generation_mtmd(
@@ -212,6 +211,7 @@ fn run_generation_mtmd(
     prompt: &str,
     images: &[Arc<Vec<u8>>],
     temperature: f32,
+    thinking: ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let model = primary.model.as_ref();
     let mtmd = &primary.mtmd;
@@ -236,7 +236,7 @@ fn run_generation_mtmd(
     let n_past = chunks.eval_chunks(mtmd, &ctx, 0, 0, cfg.batch_chunk as i32, true)?;
 
     log_prompt(prompt);
-    generate(model, &mut ctx, n_past, temperature, cfg)
+    generate(model, &mut ctx, n_past, temperature, cfg, thinking)
 }
 
 fn generate(
@@ -245,6 +245,7 @@ fn generate(
     mut n_cur: i32,
     temperature: f32,
     cfg: &GenConfig,
+    thinking: ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let mut samplers: Vec<LlamaSampler> = Vec::new();
     if !DRY_BREAKS_LONG_STRINGS {
@@ -284,9 +285,10 @@ fn generate(
         }};
     }
 
+    let close_marker = thinking.close_marker.as_bytes();
     for i in 0..cfg.max_generation_tokens {
-        if !thinking_closed && i >= MAX_THINKING_TOKENS {
-            for forced in model.str_to_token(THINKING_FORCE_CLOSE, AddBos::Never)? {
+        if !thinking_closed && i >= thinking.max_tokens {
+            for forced in model.str_to_token(thinking.force_close, AddBos::Never)? {
                 emit_token!(forced);
             }
             thinking_closed = true;
@@ -298,7 +300,7 @@ fn generate(
         }
         emit_token!(token);
 
-        if !thinking_closed && out_bytes.windows(8).any(|w| w == b"</think>") {
+        if !thinking_closed && out_bytes.windows(close_marker.len()).any(|w| w == close_marker) {
             thinking_closed = true;
         }
     }
