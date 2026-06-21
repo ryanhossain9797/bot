@@ -1,16 +1,9 @@
-# Base image with runtime dependencies (model is NOT baked — see below)
-# Always build for linux/amd64 (x86_64)
 FROM debian:trixie-slim
 
-# Set working directory
 WORKDIR /app
 
-# The model pack (weights + mmproj + template + manifest) is mounted at runtime via MODEL_PACK_DIR,
-# not baked into the image — so swapping a model or editing a template is just a file change + a
-# restart, no rebuild. See run_local in the Justfile.
 ENV RUST_LOG=info
 
-# Update package list and install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
@@ -22,8 +15,6 @@ RUN apt-get update && apt-get install -y \
     && (getent group render || groupadd -r render) \
     && rm -rf /var/lib/apt/lists/*
 
-# Docker CLI (client only — no daemon) so the bot can drive the host daemon via the mounted
-# socket to spawn per-conversation worker containers. Static binary keeps it to just the client.
 ARG DOCKER_CLI_VERSION=29.5.3
 RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz \
     && tar -xzf /tmp/docker.tgz -C /tmp docker/docker \

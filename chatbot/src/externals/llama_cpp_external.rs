@@ -145,8 +145,6 @@ async fn get_response_from_llm(
         println!("[image] feeding {} image(s) to the model", images.len());
     }
 
-    // Render the prompt ourselves (Role + authored template), generate, then parse ourselves —
-    // no llama.cpp OpenAI-compat layer in the format path.
     let role = llama_cpp.role();
     let tools: Option<Value> = if allow_tools {
         Some(serde_json::from_str(&ToolType::tools_json())?)

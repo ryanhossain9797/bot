@@ -44,8 +44,6 @@ async fn main() -> anyhow::Result<!> {
     let env = init_env().await?;
     init_conversation_state_machine(env);
 
-    // Pre-build the bash sandbox image in the background so the first run_bash_command isn't slow;
-    // boot doesn't wait on it, and spawning a worker rebuilds it if this hasn't finished/failed.
     tokio::spawn(async {
         match externals::bash_container_external::ensure_worker_image().await {
             Ok(()) => println!("[startup] bash sandbox image ready"),

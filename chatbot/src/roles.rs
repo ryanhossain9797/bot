@@ -56,11 +56,7 @@ pub struct ParsedResponse {
     pub tool_calls: Vec<ParsedToolCall>,
 }
 
-// ───────────────────────────── render ─────────────────────────────
 
-// minja (llama.cpp) serializes JSON like Python's json.dumps: ", " / ": " separators, insertion
-// order, no HTML escaping. This formatter (+ the preserve_order feature) reproduces it, keeping the
-// tools block in the model's training distribution.
 struct Spaced;
 impl serde_json::ser::Formatter for Spaced {
     fn begin_array_value<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
@@ -82,15 +78,10 @@ fn json_spaced(value: &Json) -> String {
     String::from_utf8(buf).expect("serde_json emits valid utf-8")
 }
 
-// Pre-serialize each tool definition to a JSON string; the template emits it verbatim.
 fn prepare_tools(tools: &Json) -> Vec<String> {
     tools.as_array().map(|a| a.iter().map(json_spaced).collect()).unwrap_or_default()
 }
 
-// Normalize each tool call's `arguments` into an object whose values are all strings, so the
-// template can `|items` over it and splice each value directly. `arguments` may arrive either as
-// the OpenAI wire form (a JSON string, as stored history does) or as an object; both are handled.
-// String values stay raw, everything else becomes spaced-JSON.
 fn normalize_tool_args(messages: &mut Json) {
     for msg in messages.as_array_mut().into_iter().flatten() {
         let Some(tool_calls) = msg.get_mut("tool_calls").and_then(|v| v.as_array_mut()) else {
@@ -100,7 +91,6 @@ fn normalize_tool_args(messages: &mut Json) {
             let Some(field) = tc.pointer_mut("/function/arguments") else {
                 continue;
             };
-            // Coerce to a map: parse the wire string, or take the object as-is.
             let map = match field {
                 Json::String(s) => match serde_json::from_str::<Json>(s) {
                     Ok(Json::Object(m)) => m,
@@ -153,7 +143,6 @@ fn render(
     Ok(rendered)
 }
 
-// ───────────────────────────── parse ──────────────────────────────
 
 static CALL_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
@@ -161,10 +150,6 @@ static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<function=([^>\n]+)>").u
 static PARAM_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<parameter=([^>\n]+)>\n(.*?)\n</parameter>").unwrap());
 
-// Parse the raw generation into reasoning / content / tool calls. The prompt primes `<think>\n`, so
-// the output starts inside the think block. Mirrors llama.cpp's parse_response_oaicompat on every
-// well-formed shape (verified in probe), and degrades safely on truncated output: incomplete tool
-// calls are dropped and never leaked into content.
 fn parse(raw: &str) -> ParsedResponse {
     let (reasoning, body) = match raw.split_once("</think>") {
         Some((r, b)) => (r.trim().to_string(), b),
@@ -185,8 +170,6 @@ fn parse(raw: &str) -> ParsedResponse {
         tool_calls.push(ParsedToolCall { name, arguments });
     }
 
-    // Content is the body minus complete tool-call blocks; a dangling (truncated) `<tool_call>`
-    // is dropped, never shown to the user as raw text.
     let mut content = CALL_RE.replace_all(body, "").into_owned();
     if let Some(idx) = content.find("<tool_call>") {
         content.truncate(idx);
