@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::{render, FormatFlags, ParsedResponse, RenderInputs, Role, ThinkingPolicy};
+use super::{parse, render, FormatFlags, ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 
 const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
     If asked what model powers you or who made you, decline — you're simply Terminal Alpha Beta; \
@@ -64,11 +64,11 @@ impl Role for PrimaryRole {
     }
 
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String> {
-        render(&self.template, self.system_prompt(), inputs, self.flags)
+        render::render(&self.template, self.system_prompt(), inputs, self.flags)
     }
 
     fn parse_response(&self, raw: &str) -> ParsedResponse {
-        super::parse(raw)
+        parse::parse(raw)
     }
 
     fn thinking(&self) -> ThinkingPolicy {

@@ -1,24 +1,9 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use strum::IntoEnumIterator;
 
+use crate::chat_format::{ToolDefFunction, ToolDefinition};
 use crate::types::conversation::{ToolKind, ToolType};
-
-/// A tool definition in the shape the chat template serializes into the `<tools>` block. The
-/// `parameters` JSON schema is genuinely dynamic, so it stays a `Value`; the rest is typed.
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolDefinition {
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-    pub function: ToolDefFunction,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolDefFunction {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub parameters: Value,
-}
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {

@@ -1,5 +1,6 @@
 #![feature(never_type)]
 
+mod chat_format;
 mod configuration;
 mod externals;
 mod model_pack;

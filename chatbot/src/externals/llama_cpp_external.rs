@@ -1,9 +1,10 @@
 use crate::{
+    chat_format::ChatMessage,
     roles::RenderInputs,
     services::llama_cpp::LlamaCppService,
     types::conversation::{
-        ChatMessage, ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform,
-        RecentConversation, Reply, ToolCall, ToolType,
+        ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation,
+        Reply, ToolCall, ToolType,
     },
     Env,
 };

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
 use crate::types::media::MessageImage;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -310,82 +310,6 @@ pub struct ToolCall {
     pub tool_type: ToolType,
 }
 
-/// A chat message in the shape the chat template consumes (OpenAI-ish). This is the typed contract
-/// the Role renders from — built from the domain types, never hand-assembled JSON.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ChatRole {
-    System,
-    User,
-    Assistant,
-    Tool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tool_calls: Vec<MessageToolCall>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-}
-
-impl ChatMessage {
-    pub fn system(content: impl Into<String>) -> Self {
-        Self::bare(ChatRole::System, content)
-    }
-    pub fn user(content: impl Into<String>) -> Self {
-        Self::bare(ChatRole::User, content)
-    }
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self::bare(ChatRole::Assistant, content)
-    }
-    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<MessageToolCall>) -> Self {
-        Self { role: ChatRole::Assistant, content: content.into(), tool_calls, tool_call_id: None }
-    }
-    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Self {
-            role: ChatRole::Tool,
-            content: content.into(),
-            tool_calls: Vec::new(),
-            tool_call_id: Some(tool_call_id.into()),
-        }
-    }
-    fn bare(role: ChatRole, content: impl Into<String>) -> Self {
-        Self { role, content: content.into(), tool_calls: Vec::new(), tool_call_id: None }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MessageToolCall {
-    pub id: String,
-    #[serde(rename = "type")]
-    pub kind: &'static str,
-    pub function: MessageToolCallFunction,
-}
-
-impl MessageToolCall {
-    pub fn from_call(call: &ToolCall) -> Self {
-        Self {
-            id: call.id.clone(),
-            kind: "function",
-            function: MessageToolCallFunction {
-                name: call.tool_type.wire_name(),
-                arguments: call.tool_type.arguments_map(),
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MessageToolCallFunction {
-    pub name: &'static str,
-    /// Argument values, already stringified and order-preserving — the template splices each
-    /// directly, so no JSON re-parsing happens at render time.
-    pub arguments: Map<String, Value>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub id: String,
@@ -429,7 +353,18 @@ impl LLMResponse {
         if self.tool_calls.is_empty() {
             ChatMessage::assistant(content)
         } else {
-            let calls = self.tool_calls.iter().map(MessageToolCall::from_call).collect();
+            let calls = self
+                .tool_calls
+                .iter()
+                .map(|tc| MessageToolCall {
+                    id: tc.id.clone(),
+                    kind: "function",
+                    function: MessageToolCallFunction {
+                        name: tc.tool_type.wire_name(),
+                        arguments: tc.tool_type.arguments_map(),
+                    },
+                })
+                .collect();
             ChatMessage::assistant_with_tools(content, calls)
         }
     }
