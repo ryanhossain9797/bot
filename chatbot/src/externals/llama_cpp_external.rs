@@ -1,7 +1,6 @@
 use crate::{
     chat_format::ChatMessage,
-    roles::RenderInputs,
-    services::llama_cpp::LlamaCppService,
+    roles::{PrimaryRole, RenderInputs, Role},
     types::conversation::{
         ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation,
         Reply, ToolCall, ToolType,
@@ -117,7 +116,7 @@ fn build_conversation(
 }
 
 async fn get_response_from_llm(
-    llama_cpp: &LlamaCppService,
+    role: Arc<PrimaryRole>,
     current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
@@ -145,7 +144,6 @@ async fn get_response_from_llm(
         println!("[image] feeding {} image(s) to the model", images.len());
     }
 
-    let role = llama_cpp.role();
     let tools = allow_tools.then(ToolType::tool_definitions);
     let prompt = role.render_prompt(&RenderInputs {
         messages: &messages,
@@ -153,7 +151,7 @@ async fn get_response_from_llm(
         footer: Some(&footer),
     })?;
 
-    let raw = llama_cpp.generate(prompt, images, role.temperature()).await?;
+    let raw = Arc::clone(&role).generate(prompt, images).await?;
     let parsed = role.parse_response(&raw);
 
     let thoughts = parsed.reasoning;
@@ -203,7 +201,7 @@ pub async fn get_llm_decision(
     );
 
     let llama_cpp_result = get_response_from_llm(
-        env.llama_cpp.as_ref(),
+        Arc::clone(&env.primary),
         &current_input,
         maybe_recent_conversation,
         tool_rounds,

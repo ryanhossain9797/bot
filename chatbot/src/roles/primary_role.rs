@@ -1,6 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use llama_cpp_2::llama_backend::LlamaBackend;
+use tokio::task::spawn_blocking;
+
+use super::engine::{self, GenConfig, PrimaryModel};
 use super::{parse, render, FormatFlags, ParsedResponse, RenderInputs, Role, ThinkingPolicy};
+use crate::model_pack::Pack;
 
 const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
     If asked what model powers you or who made you, decline — you're simply Terminal Alpha Beta; \
@@ -33,20 +38,32 @@ const THINKING_NUDGE: &str =
     "Wait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.";
 const MAX_THINKING_TOKENS: usize = 2000;
 
-/// The primary conversational role (Terminal Alpha Beta). Holds the pack's template (loaded once),
-/// the pack directory, the model's render flags, and the model's reasoning close marker; the prompt
-/// and temperature are fixed.
+/// The primary conversational role (Terminal Alpha Beta). Owns its loaded model, the pack's
+/// inference config and template, the model's render flags, and its reasoning close marker; the
+/// system prompt and temperature are fixed.
 pub struct PrimaryRole {
+    model: PrimaryModel,
+    cfg: GenConfig,
     template: String,
-    #[allow(dead_code)]
-    model_dir: PathBuf,
     flags: FormatFlags,
     close_marker: String,
 }
 
 impl PrimaryRole {
-    pub fn new(template: String, model_dir: PathBuf, flags: FormatFlags, close_marker: String) -> Self {
-        PrimaryRole { template, model_dir, flags, close_marker }
+    /// Load the role from a pack: read its config + template and load the weights into memory,
+    /// taking an `Arc` to the shared backend to store inside the model.
+    pub fn load(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Result<Self> {
+        let model = engine::load_model(backend, pack)?;
+        Ok(PrimaryRole {
+            model,
+            cfg: GenConfig::from_pack(pack),
+            template: pack.template.clone(),
+            flags: FormatFlags {
+                enable_thinking: pack.manifest.format.enable_thinking,
+                add_generation_prompt: pack.manifest.format.add_generation_prompt,
+            },
+            close_marker: pack.manifest.thinking.close_marker.clone(),
+        })
     }
 }
 
@@ -59,12 +76,21 @@ impl Role for PrimaryRole {
         TEMPERATURE
     }
 
-    fn model_dir(&self) -> &Path {
-        &self.model_dir
-    }
-
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String> {
         render::render(&self.template, self.system_prompt(), inputs, self.flags)
+    }
+
+    async fn generate(
+        self: Arc<Self>,
+        prompt: String,
+        images: Vec<Arc<Vec<u8>>>,
+    ) -> anyhow::Result<String> {
+        let thinking = self.thinking();
+        let temperature = self.temperature();
+        spawn_blocking(move || {
+            engine::run(&self.model, &self.cfg, &prompt, &images, temperature, &thinking)
+        })
+        .await?
     }
 
     fn parse_response(&self, raw: &str) -> ParsedResponse {

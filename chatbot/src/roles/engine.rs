@@ -1,3 +1,10 @@
+//! Inference mechanics shared by every role — the generic llama.cpp plumbing that turns a rendered
+//! prompt + a loaded model into raw text. A role owns the *what* (its `PrimaryModel` + `GenConfig` +
+//! `ThinkingPolicy`); this module is the *how* (tokenize, eval, sample, force-close), so roles never
+//! duplicate the decode loop. The `LlamaBackend` is a process singleton, created once in `init_env`
+//! and `Arc`-cloned into each `PrimaryModel` — so it's self-contained for inference, and the `Role`
+//! contract never has to mention it (a remote model would carry no backend at all).
+
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
     llama_backend::LlamaBackend,
@@ -6,138 +13,87 @@ use llama_cpp_2::{
     mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputText},
     sampling::LlamaSampler,
 };
-use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use std::{
     io::{self, Write},
     num::NonZero,
     sync::Arc,
 };
-use tokio::task::{spawn_blocking, JoinHandle};
 
-use crate::{
-    configuration::debug::DEBUG_LIVE_LLM_OUTPUT,
-    model_pack::Pack,
-    roles::{FormatFlags, PrimaryRole, Role, ThinkingPolicy},
-};
+use super::ThinkingPolicy;
+use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, model_pack::Pack};
 
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 const DRY_BREAKS_LONG_STRINGS: bool = true;
 
-pub struct PrimaryModel {
+/// A model loaded into memory: the weights, its multimodal projector, and a handle to the shared
+/// llama.cpp backend. Self-contained for inference — everything `run` needs lives here.
+pub(super) struct PrimaryModel {
     pub mtmd: MtmdContext,
-    pub model: Arc<LlamaModel>,
+    pub model: LlamaModel,
+    pub backend: Arc<LlamaBackend>,
 }
 
-/// Inference knobs sourced from the pack manifest.
-struct GenConfig {
-    n_ctx: u32,
-    n_batch: i32,
-    batch_chunk: usize,
-    max_generation_tokens: usize,
-    top_k: i32,
-    top_p: f32,
+/// Inference knobs sourced from a pack manifest.
+pub(super) struct GenConfig {
+    pub n_ctx: u32,
+    pub n_batch: i32,
+    pub batch_chunk: usize,
+    pub max_generation_tokens: usize,
+    pub top_k: i32,
+    pub top_p: f32,
 }
 
-pub struct LlamaCppService {
-    primary: Arc<PrimaryModel>,
-    backend: Arc<LlamaBackend>,
-    role: PrimaryRole,
-    cfg: Arc<GenConfig>,
-}
-
-impl LlamaCppService {
-    fn primary_model(
-        backend: &LlamaBackend,
-        model_params: &LlamaModelParams,
-        pack: &Pack,
-    ) -> anyhow::Result<LlamaModel> {
-        let path = pack.model_path();
-        println!("Loading primary model from: {}", path.display());
-        let model = LlamaModel::load_from_file(backend, &path, model_params)?;
-        println!("Loaded primary model from: {}", path.display());
-        Ok(model)
-    }
-
-    fn mtmd_context(model: &LlamaModel, pack: &Pack) -> anyhow::Result<MtmdContext> {
-        let path = pack.mmproj_path();
-        println!("Loading multimodal projector from: {}", path.display());
-        let path_str = path
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("mmproj path is not valid UTF-8: {}", path.display()))?;
-        let mtmd = MtmdContext::init_from_file(path_str, model, &MtmdContextParams::default())?;
-        println!(
-            "Loaded multimodal projector from: {} (vision={}, audio={})",
-            path.display(),
-            mtmd.support_vision(),
-            mtmd.support_audio()
-        );
-        Ok(mtmd)
-    }
-
-    pub async fn new() -> anyhow::Result<Self> {
-        send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
-
-        let pack = Pack::load()?;
-        println!("Loaded model pack from: {}", pack.dir.display());
-
-        let cfg = Arc::new(GenConfig {
+impl GenConfig {
+    pub(super) fn from_pack(pack: &Pack) -> Self {
+        GenConfig {
             n_ctx: pack.manifest.context.n_ctx,
             n_batch: pack.manifest.context.n_batch,
             batch_chunk: pack.manifest.context.batch_chunk,
             max_generation_tokens: pack.manifest.context.max_generation_tokens,
             top_k: pack.manifest.sampling.top_k,
             top_p: pack.manifest.sampling.top_p,
-        });
-        let role = PrimaryRole::new(
-            pack.template.clone(),
-            pack.dir.clone(),
-            FormatFlags {
-                enable_thinking: pack.manifest.format.enable_thinking,
-                add_generation_prompt: pack.manifest.format.add_generation_prompt,
-            },
-            pack.manifest.thinking.close_marker.clone(),
-        );
-
-        let backend = Arc::new(LlamaBackend::init()?);
-
-        let primary_task: JoinHandle<anyhow::Result<Arc<PrimaryModel>>> = {
-            let backend = Arc::clone(&backend);
-            spawn_blocking(move || {
-                let model_params = LlamaModelParams::default();
-                let model = Arc::new(Self::primary_model(backend.as_ref(), &model_params, &pack)?);
-                let mtmd = Self::mtmd_context(&model, &pack)?;
-                Ok(Arc::new(PrimaryModel { mtmd, model }))
-            })
-        };
-        let primary = primary_task.await??;
-
-        Ok(Self { primary, backend, role, cfg })
+        }
     }
+}
 
-    pub fn role(&self) -> &dyn Role {
-        &self.role
-    }
+/// Load a pack's weights and multimodal projector into memory, taking an `Arc` to the shared backend
+/// to store alongside them. The loaded `PrimaryModel` then needs nothing external to run.
+pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Result<PrimaryModel> {
+    let model_path = pack.model_path();
+    println!("Loading primary model from: {}", model_path.display());
+    let model = LlamaModel::load_from_file(&backend, &model_path, &LlamaModelParams::default())?;
+    println!("Loaded primary model from: {}", model_path.display());
 
-    /// Run inference on an already-rendered prompt and return the raw generated text. Tokenizes,
-    /// evaluates the prompt (text or multimodal), and samples until EOG or the token budget.
-    pub async fn generate(
-        &self,
-        prompt: String,
-        images: Vec<Arc<Vec<u8>>>,
-        temperature: f32,
-    ) -> anyhow::Result<String> {
-        let primary = Arc::clone(&self.primary);
-        let backend = Arc::clone(&self.backend);
-        let cfg = Arc::clone(&self.cfg);
-        let thinking = self.role.thinking();
-        spawn_blocking(move || {
-            if images.is_empty() {
-                run_generation_text(&primary, &backend, &cfg, &prompt, temperature, &thinking)
-            } else {
-                run_generation_mtmd(&primary, &backend, &cfg, &prompt, &images, temperature, &thinking)
-            }
-        })
-        .await?
+    let mmproj_path = pack.mmproj_path();
+    println!("Loading multimodal projector from: {}", mmproj_path.display());
+    let mmproj_str = mmproj_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("mmproj path is not valid UTF-8: {}", mmproj_path.display()))?;
+    let mtmd = MtmdContext::init_from_file(mmproj_str, &model, &MtmdContextParams::default())?;
+    println!(
+        "Loaded multimodal projector from: {} (vision={}, audio={})",
+        mmproj_path.display(),
+        mtmd.support_vision(),
+        mtmd.support_audio()
+    );
+
+    Ok(PrimaryModel { mtmd, model, backend })
+}
+
+/// Run inference on an already-rendered prompt and return the raw generated text. Picks the text or
+/// multimodal path by whether any images were supplied. Blocking; callers run it on a blocking task.
+pub(super) fn run(
+    primary: &PrimaryModel,
+    cfg: &GenConfig,
+    prompt: &str,
+    images: &[Arc<Vec<u8>>],
+    temperature: f32,
+    thinking: &ThinkingPolicy,
+) -> anyhow::Result<String> {
+    if images.is_empty() {
+        run_generation_text(primary, cfg, prompt, temperature, thinking)
+    } else {
+        run_generation_mtmd(primary, cfg, prompt, images, temperature, thinking)
     }
 }
 
@@ -162,14 +118,13 @@ fn log_prompt(prompt: &str) {
 
 fn run_generation_text(
     primary: &PrimaryModel,
-    backend: &LlamaBackend,
     cfg: &GenConfig,
     prompt: &str,
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
-    let model = primary.model.as_ref();
-    let mut ctx = model.new_context(backend, context_params(cfg))?;
+    let model = &primary.model;
+    let mut ctx = model.new_context(&primary.backend, context_params(cfg))?;
 
     let mut tokens = model.str_to_token(
         prompt,
@@ -207,14 +162,13 @@ fn run_generation_text(
 
 fn run_generation_mtmd(
     primary: &PrimaryModel,
-    backend: &LlamaBackend,
     cfg: &GenConfig,
     prompt: &str,
     images: &[Arc<Vec<u8>>],
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
-    let model = primary.model.as_ref();
+    let model = &primary.model;
     let mtmd = &primary.mtmd;
 
     let bitmaps = images
@@ -223,7 +177,7 @@ fn run_generation_mtmd(
         .collect::<Result<Vec<_>, _>>()?;
     let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
 
-    let mut ctx = model.new_context(backend, context_params(cfg))?;
+    let mut ctx = model.new_context(&primary.backend, context_params(cfg))?;
 
     let chunks = mtmd.tokenize(
         MtmdInputText {

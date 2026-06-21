@@ -10,32 +10,44 @@ mod state_machines;
 mod tools;
 mod types;
 
+use llama_cpp_2::{llama_backend::LlamaBackend, send_logs_to_tracing, LogOptions};
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
-use services::llama_cpp::LlamaCppService;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
+use crate::model_pack::Pack;
+use crate::roles::PrimaryRole;
 use crate::state_machines::conversation_state_machine::init_conversation_state_machine;
 
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
-    llama_cpp: Arc<LlamaCppService>,
+    /// The primary conversational role, owning its loaded model (and a handle to the shared
+    /// backend). Future roles (e.g. a memory compactor on its own model) become additional fields
+    /// here; local ones share the one backend via its `Arc`.
+    primary: Arc<PrimaryRole>,
     announce_tool_use: bool,
 }
 
 async fn init_env() -> anyhow::Result<Env> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
-    let llama_cpp_service = LlamaCppService::new().await?;
+    send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
+    let pack = Pack::load()?;
+    println!("Loaded model pack from: {}", pack.dir.display());
+    // The backend is the one process singleton; it's cloned into each local model and otherwise
+    // lives nowhere — the roles keep it alive.
+    let backend = Arc::new(LlamaBackend::init()?);
+    let primary =
+        Arc::new(tokio::task::spawn_blocking(move || PrimaryRole::load(backend, &pack)).await??);
 
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
     Ok(Env {
         discord_http,
-        llama_cpp: Arc::new(llama_cpp_service),
+        primary,
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
     })
 }

@@ -1,27 +1,36 @@
+mod engine;
 mod parse;
 mod primary_role;
 mod render;
 
-use std::path::Path;
+use std::sync::Arc;
 
 use crate::chat_format::{ChatMessage, ToolDefinition};
 
 pub use primary_role::PrimaryRole;
 
-/// A role owns the identity/format contract (system prompt, footer placement, sampling temperature)
-/// and the path to its model pack, and turns conversation data into a prompt and raw output back
-/// into structured pieces. Everything model-specific lives in files under the pack — the role only
-/// holds the loaded template + the pack path. The render/parse machinery lives in the `render` and
-/// `parse` submodules.
+/// A role owns everything about producing output from one model: its identity/format contract
+/// (system prompt, footer placement, sampling temperature), the loaded model itself, and the logic
+/// to turn conversation data into a prompt, run inference, and decode raw output back into structured
+/// pieces. Everything model-specific lives in files under the pack — the role loads them once. The
+/// render/parse/inference machinery lives in the `render`, `parse`, and `engine` submodules.
+///
+/// The contract is deliberately location-agnostic: `generate` takes only a prompt and produces text,
+/// with no mention of a backend or any inference engine. A local role holds its model (and the
+/// shared `LlamaBackend`) internally; a future remote role could satisfy the same contract with an
+/// HTTP call. Where the model lives is the implementor's business, not the trait's.
 pub trait Role: Send + Sync {
     fn system_prompt(&self) -> &str;
     fn temperature(&self) -> f32;
-    /// Path to this role's model pack. Part of the Role contract; reserved for diagnostics and
-    /// multi-model selection.
-    #[allow(dead_code)]
-    fn model_dir(&self) -> &Path;
     /// Render the final prompt string from conversation inputs (option-b: JSON rendered in Rust).
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String>;
+    /// Run inference on a rendered prompt and return the raw generated text. Takes `Arc<Self>` so it
+    /// can move into a blocking inference task; everything else it needs, it already holds.
+    async fn generate(
+        self: Arc<Self>,
+        prompt: String,
+        images: Vec<Arc<Vec<u8>>>,
+    ) -> anyhow::Result<String>;
     /// Parse raw generation into reasoning / content / tool calls.
     fn parse_response(&self, raw: &str) -> ParsedResponse;
     /// How an over-long reasoning block is force-closed during generation.
