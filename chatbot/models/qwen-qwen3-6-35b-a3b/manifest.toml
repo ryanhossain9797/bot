@@ -15,3 +15,6 @@ max_generation_tokens = 8192
 [format]
 enable_thinking       = true
 add_generation_prompt = true
+
+[thinking]
+close_marker = "</think>"

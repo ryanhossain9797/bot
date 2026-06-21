@@ -27,23 +27,26 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
 
 const TEMPERATURE: f32 = 1.0;
 
-const THINKING_FORCE_CLOSE: &str =
-    "\n\nWait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.\n</think>\n\n";
-const THINKING_CLOSE_MARKER: &str = "</think>";
+/// The force-close nudge (the role's voice). The model's close marker is appended at runtime, so
+/// this stays marker-agnostic.
+const THINKING_NUDGE: &str =
+    "Wait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.";
 const MAX_THINKING_TOKENS: usize = 2000;
 
 /// The primary conversational role (Terminal Alpha Beta). Holds the pack's template (loaded once),
-/// the pack directory, and the model's render flags; the prompt and temperature are fixed.
+/// the pack directory, the model's render flags, and the model's reasoning close marker; the prompt
+/// and temperature are fixed.
 pub struct PrimaryRole {
     template: String,
     #[allow(dead_code)]
     model_dir: PathBuf,
     flags: FormatFlags,
+    close_marker: String,
 }
 
 impl PrimaryRole {
-    pub fn new(template: String, model_dir: PathBuf, flags: FormatFlags) -> Self {
-        PrimaryRole { template, model_dir, flags }
+    pub fn new(template: String, model_dir: PathBuf, flags: FormatFlags, close_marker: String) -> Self {
+        PrimaryRole { template, model_dir, flags, close_marker }
     }
 }
 
@@ -70,8 +73,8 @@ impl Role for PrimaryRole {
 
     fn thinking(&self) -> ThinkingPolicy {
         ThinkingPolicy {
-            force_close: THINKING_FORCE_CLOSE,
-            close_marker: THINKING_CLOSE_MARKER,
+            force_close: format!("\n\n{THINKING_NUDGE}\n{}\n\n", self.close_marker),
+            close_marker: self.close_marker.clone(),
             max_tokens: MAX_THINKING_TOKENS,
         }
     }

@@ -33,13 +33,14 @@ pub trait Role: Send + Sync {
     fn thinking(&self) -> ThinkingPolicy;
 }
 
-/// The reasoning-block policy the generation loop enforces.
-#[derive(Clone, Copy)]
+/// The reasoning-block policy the generation loop enforces. Composed by the role from its own
+/// nudge prose and the model's `close_marker` (sourced from the pack manifest).
+#[derive(Clone)]
 pub struct ThinkingPolicy {
     /// Text injected to force-close reasoning once the budget is hit (ends with `close_marker`).
-    pub force_close: &'static str,
+    pub force_close: String,
     /// The model's reasoning close marker, e.g. `</think>`.
-    pub close_marker: &'static str,
+    pub close_marker: String,
     /// Token budget after which `force_close` is injected.
     pub max_tokens: usize,
 }

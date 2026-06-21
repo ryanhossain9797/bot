@@ -95,6 +95,7 @@ impl LlamaCppService {
                 enable_thinking: pack.manifest.format.enable_thinking,
                 add_generation_prompt: pack.manifest.format.add_generation_prompt,
             },
+            pack.manifest.thinking.close_marker.clone(),
         );
 
         let backend = Arc::new(LlamaBackend::init()?);
@@ -131,9 +132,9 @@ impl LlamaCppService {
         let thinking = self.role.thinking();
         spawn_blocking(move || {
             if images.is_empty() {
-                run_generation_text(&primary, &backend, &cfg, &prompt, temperature, thinking)
+                run_generation_text(&primary, &backend, &cfg, &prompt, temperature, &thinking)
             } else {
-                run_generation_mtmd(&primary, &backend, &cfg, &prompt, &images, temperature, thinking)
+                run_generation_mtmd(&primary, &backend, &cfg, &prompt, &images, temperature, &thinking)
             }
         })
         .await?
@@ -165,7 +166,7 @@ fn run_generation_text(
     cfg: &GenConfig,
     prompt: &str,
     temperature: f32,
-    thinking: ThinkingPolicy,
+    thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let model = primary.model.as_ref();
     let mut ctx = model.new_context(backend, context_params(cfg))?;
@@ -211,7 +212,7 @@ fn run_generation_mtmd(
     prompt: &str,
     images: &[Arc<Vec<u8>>],
     temperature: f32,
-    thinking: ThinkingPolicy,
+    thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let model = primary.model.as_ref();
     let mtmd = &primary.mtmd;
@@ -245,7 +246,7 @@ fn generate(
     mut n_cur: i32,
     temperature: f32,
     cfg: &GenConfig,
-    thinking: ThinkingPolicy,
+    thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let mut samplers: Vec<LlamaSampler> = Vec::new();
     if !DRY_BREAKS_LONG_STRINGS {
@@ -288,7 +289,7 @@ fn generate(
     let close_marker = thinking.close_marker.as_bytes();
     for i in 0..cfg.max_generation_tokens {
         if !thinking_closed && i >= thinking.max_tokens {
-            for forced in model.str_to_token(thinking.force_close, AddBos::Never)? {
+            for forced in model.str_to_token(&thinking.force_close, AddBos::Never)? {
                 emit_token!(forced);
             }
             thinking_closed = true;

@@ -20,6 +20,7 @@ pub struct Manifest {
     pub sampling: Sampling,
     pub context: Context,
     pub format: Format,
+    pub thinking: Thinking,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +41,12 @@ pub struct Context {
 pub struct Format {
     pub enable_thinking: bool,
     pub add_generation_prompt: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Thinking {
+    /// The model's reasoning close marker, e.g. `</think>` (varies model to model).
+    pub close_marker: String,
 }
 
 const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
