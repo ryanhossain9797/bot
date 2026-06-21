@@ -9,6 +9,9 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::Value as Json;
 
+use crate::tools::ToolDefinition;
+use crate::types::conversation::ChatMessage;
+
 pub use primary_role::PrimaryRole;
 
 /// A role owns the identity/format contract (system prompt, footer placement, sampling temperature)
@@ -30,9 +33,9 @@ pub trait Role: Send + Sync {
 
 pub struct RenderInputs<'a> {
     /// Conversation messages (history + live), without the system prompt or footer.
-    pub messages: &'a Json,
-    /// Tool definitions (array), or `None` when tools are disabled this turn.
-    pub tools: Option<&'a Json>,
+    pub messages: &'a [ChatMessage],
+    /// Tool definitions, or `None` when tools are disabled this turn.
+    pub tools: Option<&'a [ToolDefinition]>,
     /// Dynamic metadata footer; the role places it (a final system block before the gen prompt).
     pub footer: Option<&'a str>,
 }
@@ -70,7 +73,7 @@ impl serde_json::ser::Formatter for Spaced {
     }
 }
 
-fn json_spaced(value: &Json) -> String {
+fn json_spaced<T: Serialize>(value: &T) -> String {
     let mut buf = Vec::new();
     value
         .serialize(&mut serde_json::Serializer::with_formatter(&mut buf, Spaced))
@@ -78,37 +81,8 @@ fn json_spaced(value: &Json) -> String {
     String::from_utf8(buf).expect("serde_json emits valid utf-8")
 }
 
-fn prepare_tools(tools: &Json) -> Vec<String> {
-    tools.as_array().map(|a| a.iter().map(json_spaced).collect()).unwrap_or_default()
-}
-
-fn normalize_tool_args(messages: &mut Json) {
-    for msg in messages.as_array_mut().into_iter().flatten() {
-        let Some(tool_calls) = msg.get_mut("tool_calls").and_then(|v| v.as_array_mut()) else {
-            continue;
-        };
-        for tc in tool_calls {
-            let Some(field) = tc.pointer_mut("/function/arguments") else {
-                continue;
-            };
-            let map = match field {
-                Json::String(s) => match serde_json::from_str::<Json>(s) {
-                    Ok(Json::Object(m)) => m,
-                    _ => continue,
-                },
-                Json::Object(m) => std::mem::take(m),
-                _ => continue,
-            };
-            let normalized = map
-                .into_iter()
-                .map(|(k, v)| {
-                    let s = v.as_str().map(str::to_string).unwrap_or_else(|| json_spaced(&v));
-                    (k, Json::String(s))
-                })
-                .collect();
-            *field = Json::Object(normalized);
-        }
-    }
+fn prepare_tools(tools: &[ToolDefinition]) -> Vec<String> {
+    tools.iter().map(json_spaced).collect()
 }
 
 fn render(
@@ -117,12 +91,9 @@ fn render(
     inputs: &RenderInputs,
     flags: FormatFlags,
 ) -> anyhow::Result<String> {
-    let mut msgs = vec![serde_json::json!({ "role": "system", "content": system_prompt })];
-    if let Some(arr) = inputs.messages.as_array() {
-        msgs.extend(arr.iter().cloned());
-    }
-    let mut messages = Json::Array(msgs);
-    normalize_tool_args(&mut messages);
+    let mut messages = Vec::with_capacity(inputs.messages.len() + 1);
+    messages.push(ChatMessage::system(system_prompt));
+    messages.extend(inputs.messages.iter().cloned());
 
     let tools = inputs.tools.map(prepare_tools);
 

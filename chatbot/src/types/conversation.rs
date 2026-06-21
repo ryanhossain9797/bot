@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Map, Value};
 use crate::types::media::MessageImage;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -232,14 +232,14 @@ impl LLMInput {
         }
     }
 
-    pub fn messages_and_media(&self, marker: &str) -> (Vec<Value>, Vec<Arc<Vec<u8>>>) {
+    pub fn messages_and_media(&self, marker: &str) -> (Vec<ChatMessage>, Vec<Arc<Vec<u8>>>) {
         match self {
             LLMInput::ConversationMessage(msg) => {
                 let (content, bytes) = msg.content_and_media(marker);
-                (vec![json!({ "role": "user", "content": content })], bytes)
+                (vec![ChatMessage::user(content)], bytes)
             }
             LLMInput::ToolResults(results, user_msg) => {
-                let mut messages: Vec<Value> = Vec::new();
+                let mut messages: Vec<ChatMessage> = Vec::new();
                 let mut bytes: Vec<Arc<Vec<u8>>> = Vec::new();
                 let mut delivered: Vec<Arc<Vec<u8>>> = Vec::new();
 
@@ -270,18 +270,18 @@ impl LLMInput {
                             ),
                         }
                     }
-                    messages.push(json!({ "role": "tool", "tool_call_id": r.id, "content": parts.join("\n") }));
+                    messages.push(ChatMessage::tool(r.id.clone(), parts.join("\n")));
                 }
 
                 if !delivered.is_empty() {
                     let content = vec![marker.to_string(); delivered.len()].join("\n");
-                    messages.push(json!({ "role": "assistant", "content": content }));
+                    messages.push(ChatMessage::assistant(content));
                     bytes.extend(delivered);
                 }
 
                 if let Some(msg) = user_msg {
                     let (content, b) = msg.content_and_media(marker);
-                    messages.push(json!({ "role": "user", "content": content }));
+                    messages.push(ChatMessage::user(content));
                     bytes.extend(b);
                 }
 
@@ -308,6 +308,82 @@ pub enum ToolType {
 pub struct ToolCall {
     pub id: String,
     pub tool_type: ToolType,
+}
+
+/// A chat message in the shape the chat template consumes (OpenAI-ish). This is the typed contract
+/// the Role renders from — built from the domain types, never hand-assembled JSON.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatRole {
+    System,
+    User,
+    Assistant,
+    Tool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<MessageToolCall>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn system(content: impl Into<String>) -> Self {
+        Self::bare(ChatRole::System, content)
+    }
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::bare(ChatRole::User, content)
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self::bare(ChatRole::Assistant, content)
+    }
+    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<MessageToolCall>) -> Self {
+        Self { role: ChatRole::Assistant, content: content.into(), tool_calls, tool_call_id: None }
+    }
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: ChatRole::Tool,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+    fn bare(role: ChatRole, content: impl Into<String>) -> Self {
+        Self { role, content: content.into(), tool_calls: Vec::new(), tool_call_id: None }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageToolCall {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub kind: &'static str,
+    pub function: MessageToolCallFunction,
+}
+
+impl MessageToolCall {
+    pub fn from_call(call: &ToolCall) -> Self {
+        Self {
+            id: call.id.clone(),
+            kind: "function",
+            function: MessageToolCallFunction {
+                name: call.tool_type.wire_name(),
+                arguments: call.tool_type.arguments_map(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageToolCallFunction {
+    pub name: &'static str,
+    /// Argument values, already stringified and order-preserving — the template splices each
+    /// directly, so no JSON re-parsing happens at render time.
+    pub arguments: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,34 +416,24 @@ impl LLMResponse {
         }
     }
 
-    pub fn to_openai_message(&self) -> Value {
+    pub fn to_chat_message(&self) -> ChatMessage {
         let content = match &self.reply {
-            Reply::Said(text) => text.as_str(),
-            Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]",
-            Reply::Empty => "",
-            Reply::Malformed => "[MALFORMED — assistant generated no usable output: no message and no tool call]",
+            Reply::Said(text) => text.clone(),
+            Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]".to_string(),
+            Reply::Empty => String::new(),
+            Reply::Malformed => {
+                "[MALFORMED — assistant generated no usable output: no message and no tool call]"
+                    .to_string()
+            }
         };
-        let mut msg = json!({
-            "role": "assistant",
-            "content": content,
-        });
-        if !self.tool_calls.is_empty() {
-            msg["tool_calls"] = Value::Array(
-                self.tool_calls
-                    .iter()
-                    .map(|tc| json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.tool_type.wire_name(),
-                            "arguments": tc.tool_type.wire_arguments()
-                        }
-                    }))
-                    .collect(),
-            );
+        if self.tool_calls.is_empty() {
+            ChatMessage::assistant(content)
+        } else {
+            let calls = self.tool_calls.iter().map(MessageToolCall::from_call).collect();
+            ChatMessage::assistant_with_tools(content, calls)
         }
-        msg
     }
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

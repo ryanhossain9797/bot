@@ -2,14 +2,13 @@ use crate::{
     roles::RenderInputs,
     services::llama_cpp::LlamaCppService,
     types::conversation::{
-        ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation,
-        Reply, ToolCall, ToolType,
+        ChatMessage, ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform,
+        RecentConversation, Reply, ToolCall, ToolType,
     },
     Env,
 };
 use chrono::Utc;
 use llama_cpp_2::mtmd::mtmd_default_marker;
-use serde_json::Value;
 
 use std::sync::Arc;
 
@@ -87,13 +86,13 @@ fn build_conversation(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
-) -> (Value, String, Vec<Arc<Vec<u8>>>) {
+) -> (Vec<ChatMessage>, String, Vec<Arc<Vec<u8>>>) {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
         .unwrap_or_default();
 
     let marker = mtmd_default_marker();
-    let mut messages: Vec<Value> = Vec::new();
+    let mut messages: Vec<ChatMessage> = Vec::new();
     let mut images: Vec<Arc<Vec<u8>>> = Vec::new();
 
     for entry in &history {
@@ -103,7 +102,7 @@ fn build_conversation(
                 messages.extend(msgs);
                 images.extend(bytes);
             }
-            HistoryEntry::Output(response) => messages.push(response.to_openai_message()),
+            HistoryEntry::Output(response) => messages.push(response.to_chat_message()),
         }
     }
 
@@ -113,7 +112,7 @@ fn build_conversation(
 
     let footer = session_footer(is_group, bot_identity, platform, tool_rounds, max_tool_rounds);
 
-    (Value::Array(messages), footer, images)
+    (messages, footer, images)
 }
 
 async fn get_response_from_llm(
@@ -146,14 +145,10 @@ async fn get_response_from_llm(
     }
 
     let role = llama_cpp.role();
-    let tools: Option<Value> = if allow_tools {
-        Some(serde_json::from_str(&ToolType::tools_json())?)
-    } else {
-        None
-    };
+    let tools = allow_tools.then(ToolType::tool_definitions);
     let prompt = role.render_prompt(&RenderInputs {
         messages: &messages,
-        tools: tools.as_ref(),
+        tools: tools.as_deref(),
         footer: Some(&footer),
     })?;
 
