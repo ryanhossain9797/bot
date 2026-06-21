@@ -1,0 +1,21 @@
+# Model pack manifest — everything model-specific the runtime needs.
+# Swap this folder (+ MODEL_PACK_DIR) and restart to change models; no rebuild.
+# Weight files (*.gguf) live alongside this manifest and are gitignored.
+
+model    = "Qwen3.6-35B-A3B-Q8_0.gguf"
+mmproj   = "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
+template = "chat_template.jinja"
+
+[sampling]
+top_k = 20
+top_p = 0.95
+
+[context]
+n_ctx = 32768
+n_batch = 4096
+batch_chunk = 2048
+max_generation_tokens = 8192
+
+[format]
+enable_thinking       = true
+add_generation_prompt = true

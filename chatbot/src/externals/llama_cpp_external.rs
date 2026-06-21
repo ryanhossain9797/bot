@@ -1,14 +1,15 @@
 use crate::{
-    types::conversation::{
-        HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation, Reply, ToolCall,
-        ToolType, ConversationAction,
-    },
+    roles::RenderInputs,
     services::llama_cpp::LlamaCppService,
+    types::conversation::{
+        ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation,
+        Reply, ToolCall, ToolType,
+    },
     Env,
 };
 use chrono::Utc;
 use llama_cpp_2::mtmd::mtmd_default_marker;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use std::sync::Arc;
 
@@ -35,13 +36,13 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     }
 }
 
-fn session_context_block(
+fn session_footer(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
     tool_rounds: usize,
     max_tool_rounds: usize,
-) -> Value {
+) -> String {
     let setting = if is_group {
         "GROUP CHAT (multiple participants)"
     } else {
@@ -75,7 +76,7 @@ fn session_context_block(
         );
     }
 
-    json!({ "role": "footer", "content": lines.join("\n") })
+    lines.join("\n")
 }
 
 fn build_conversation(
@@ -86,7 +87,7 @@ fn build_conversation(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
-) -> (Value, Vec<Arc<Vec<u8>>>) {
+) -> (Value, String, Vec<Arc<Vec<u8>>>) {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
         .unwrap_or_default();
@@ -110,39 +111,9 @@ fn build_conversation(
     messages.extend(live_msgs);
     images.extend(live_bytes);
 
-    messages.push(session_context_block(
-        is_group,
-        bot_identity,
-        platform,
-        tool_rounds,
-        max_tool_rounds,
-    ));
+    let footer = session_footer(is_group, bot_identity, platform, tool_rounds, max_tool_rounds);
 
-    (Value::Array(messages), images)
-}
-
-fn all_tool_calls(parsed: &Value) -> Vec<(String, String, String)> {
-    let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-
-    calls
-        .iter()
-        .filter_map(|call| {
-            let id = call
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("call_0")
-                .to_string();
-            let name = call.pointer("/function/name").and_then(|v| v.as_str())?.to_string();
-            let arguments = call
-                .pointer("/function/arguments")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}")
-                .to_string();
-            Some((id, name, arguments))
-        })
-        .collect()
+    (Value::Array(messages), footer, images)
 }
 
 async fn get_response_from_llm(
@@ -156,7 +127,7 @@ async fn get_response_from_llm(
     bot_identity: &str,
     platform: &Platform,
 ) -> anyhow::Result<LLMResponse> {
-    let (conversation, images) = build_conversation(
+    let (messages, footer, images) = build_conversation(
         current_input,
         maybe_recent_conversation,
         tool_rounds,
@@ -167,42 +138,41 @@ async fn get_response_from_llm(
     );
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&conversation).unwrap_or_default()
-    );
+    println!("{}", serde_json::to_string_pretty(&messages).unwrap_or_default());
+    println!("---- footer ----\n{footer}");
 
     if !images.is_empty() {
         println!("[image] feeding {} image(s) to the model", images.len());
     }
 
-    let parsed = llama_cpp
-        .get_primary_response(conversation, images, allow_tools)
-        .await?;
+    // Render the prompt ourselves (Role + authored template), generate, then parse ourselves —
+    // no llama.cpp OpenAI-compat layer in the format path.
+    let role = llama_cpp.role();
+    let tools: Option<Value> = if allow_tools {
+        Some(serde_json::from_str(&ToolType::tools_json())?)
+    } else {
+        None
+    };
+    let prompt = role.render_prompt(&RenderInputs {
+        messages: &messages,
+        tools: tools.as_ref(),
+        footer: Some(&footer),
+    })?;
 
-    let thoughts = parsed
-        .get("reasoning_content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let raw = llama_cpp.generate(prompt, images, role.temperature()).await?;
+    let parsed = role.parse_response(&raw);
 
-    let content = parsed
-        .get("content")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .unwrap_or("");
-
-    let calls = all_tool_calls(&parsed);
-    let mut tool_calls = Vec::with_capacity(calls.len());
-    for (id, name, arguments) in calls {
-        let tool_type = ToolType::bind(&name, &arguments)?;
-        tool_calls.push(ToolCall { id, tool_type });
+    let thoughts = parsed.reasoning;
+    let content = parsed.content;
+    let mut tool_calls = Vec::with_capacity(parsed.tool_calls.len());
+    for (i, call) in parsed.tool_calls.iter().enumerate() {
+        let tool_type = ToolType::bind(&call.name, &call.arguments)?;
+        tool_calls.push(ToolCall { id: format!("call_{i}"), tool_type });
     }
-    tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
 
     let explicit_empty = content.eq_ignore_ascii_case("[EMPTY]");
     let reply = if !content.is_empty() && !explicit_empty {
-        Reply::Said(content.to_string())
+        Reply::Said(content)
     } else if explicit_empty || !tool_calls.is_empty() {
         Reply::Empty
     } else {

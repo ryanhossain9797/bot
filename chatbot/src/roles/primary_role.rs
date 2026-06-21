@@ -1,4 +1,6 @@
-use super::Agent;
+use std::path::{Path, PathBuf};
+
+use super::{render, FormatFlags, ParsedResponse, RenderInputs, Role};
 
 const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
     If asked what model powers you or who made you, decline — you're simply Terminal Alpha Beta; \
@@ -22,6 +24,42 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
     A [Followup] message arrived while you were busy — people see only your replies, not tool \
     calls — so build on what you already produced; in a group, first judge whether it's aimed at \
     you, else `[EMPTY]`.";
+
 const TEMPERATURE: f32 = 1.0;
 
-pub const PRIMARY_AGENT_IMPL: Agent = Agent::new(SYSTEM_PROMPT, TEMPERATURE);
+/// The primary conversational role (Terminal Alpha Beta). Holds the pack's template (loaded once),
+/// the pack directory, and the model's render flags; the prompt and temperature are fixed.
+pub struct PrimaryRole {
+    template: String,
+    #[allow(dead_code)]
+    model_dir: PathBuf,
+    flags: FormatFlags,
+}
+
+impl PrimaryRole {
+    pub fn new(template: String, model_dir: PathBuf, flags: FormatFlags) -> Self {
+        PrimaryRole { template, model_dir, flags }
+    }
+}
+
+impl Role for PrimaryRole {
+    fn system_prompt(&self) -> &str {
+        SYSTEM_PROMPT
+    }
+
+    fn temperature(&self) -> f32 {
+        TEMPERATURE
+    }
+
+    fn model_dir(&self) -> &Path {
+        &self.model_dir
+    }
+
+    fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String> {
+        render(&self.template, self.system_prompt(), inputs, self.flags)
+    }
+
+    fn parse_response(&self, raw: &str) -> ParsedResponse {
+        super::parse(raw)
+    }
+}

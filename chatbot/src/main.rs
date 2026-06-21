@@ -1,12 +1,13 @@
 #![feature(never_type)]
 
-mod agents;
 mod configuration;
 mod externals;
-mod types;
+mod model_pack;
+mod roles;
 mod services;
 mod state_machines;
 mod tools;
+mod types;
 
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;

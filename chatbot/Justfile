@@ -32,6 +32,9 @@ run_local tag="latest":
     # Mount the Docker socket so the bot can spawn per-conversation worker containers.
     # The bot drives the daemon with fixed flags (the LLM only runs bash *inside* a worker,
     # which has no socket/host access).
+    # Mount the model pack (weights + template + manifest) read-only and point MODEL_PACK_DIR at
+    # it. Mounting (rather than baking) is what makes "edit the template / manifest on the host,
+    # restart the container" work without rebuilding any image.
     docker run -d \
         --name bot \
         --network host \
@@ -40,6 +43,8 @@ run_local tag="latest":
         --group-add video \
         --group-add render \
         -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "$(pwd)/models/qwen-qwen3-6-35b-a3b:/app/models/qwen-qwen3-6-35b-a3b:ro" \
+        -e MODEL_PACK_DIR=/app/models/qwen-qwen3-6-35b-a3b \
         --restart unless-stopped \
         zireael9797/bot:{{tag}}
 

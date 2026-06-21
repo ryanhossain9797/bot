@@ -1,14 +1,13 @@
-# Base image with runtime dependencies and model
+# Base image with runtime dependencies (model is NOT baked — see below)
 # Always build for linux/amd64 (x86_64)
 FROM debian:trixie-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy model file (large, rarely changes)
-COPY models/Qwen3.6-35B-A3B-Q8_0.gguf /app/models/
-ENV PRIMARY_MODEL_PATH=/app/models/Qwen3.6-35B-A3B-Q8_0.gguf
-
+# The model pack (weights + mmproj + template + manifest) is mounted at runtime via MODEL_PACK_DIR,
+# not baked into the image — so swapping a model or editing a template is just a file change + a
+# restart, no rebuild. See run_local in the Justfile.
 ENV RUST_LOG=info
 
 # Update package list and install runtime dependencies
@@ -31,7 +30,3 @@ RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker /tmp/docker.tgz \
     && docker --version
-
-# Copy multimodal projector (vision) — appended last so the model/apt layers stay cached
-COPY models/mmproj-Qwen3.6-35B-A3B-BF16.gguf /app/models/
-ENV MMPROJ_PATH=/app/models/mmproj-Qwen3.6-35B-A3B-BF16.gguf
