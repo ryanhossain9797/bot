@@ -87,25 +87,36 @@ fn prepare_tools(tools: &Json) -> Vec<String> {
     tools.as_array().map(|a| a.iter().map(json_spaced).collect()).unwrap_or_default()
 }
 
-// Normalize every tool-call argument value to a string the template splices directly: strings stay
-// raw, everything else becomes spaced-JSON.
+// Normalize each tool call's `arguments` into an object whose values are all strings, so the
+// template can `|items` over it and splice each value directly. `arguments` may arrive either as
+// the OpenAI wire form (a JSON string, as stored history does) or as an object; both are handled.
+// String values stay raw, everything else becomes spaced-JSON.
 fn normalize_tool_args(messages: &mut Json) {
     for msg in messages.as_array_mut().into_iter().flatten() {
         let Some(tool_calls) = msg.get_mut("tool_calls").and_then(|v| v.as_array_mut()) else {
             continue;
         };
         for tc in tool_calls {
-            let Some(args) = tc.pointer_mut("/function/arguments").and_then(|v| v.as_object_mut())
-            else {
+            let Some(field) = tc.pointer_mut("/function/arguments") else {
                 continue;
             };
-            for value in args.values_mut() {
-                let as_string = match value.as_str() {
-                    Some(s) => s.to_string(),
-                    None => json_spaced(value),
-                };
-                *value = Json::String(as_string);
-            }
+            // Coerce to a map: parse the wire string, or take the object as-is.
+            let map = match field {
+                Json::String(s) => match serde_json::from_str::<Json>(s) {
+                    Ok(Json::Object(m)) => m,
+                    _ => continue,
+                },
+                Json::Object(m) => std::mem::take(m),
+                _ => continue,
+            };
+            let normalized = map
+                .into_iter()
+                .map(|(k, v)| {
+                    let s = v.as_str().map(str::to_string).unwrap_or_else(|| json_spaced(&v));
+                    (k, Json::String(s))
+                })
+                .collect();
+            *field = Json::Object(normalized);
         }
     }
 }
