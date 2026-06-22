@@ -5,18 +5,19 @@
 //! (verified in probe), and degrades safely on truncated output: incomplete tool calls are dropped,
 //! never leaked into content. The reasoning `close_marker` is the model's, passed in by the role.
 
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
+
 use regex::Regex;
 use serde_json::Value as Json;
 
 use super::Parser;
 use crate::roles::{ParsedResponse, ParsedToolCall};
 
-static CALL_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
-static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<function=([^>\n]+)>").unwrap());
-static PARAM_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?s)<parameter=([^>\n]+)>\n(.*?)\n</parameter>").unwrap());
+static CALL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").unwrap());
+static NAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<function=([^>\n]+)>").unwrap());
+static PARAM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?s)<parameter=([^>\n]+)>\n(.*?)\n</parameter>").unwrap());
 
 /// The Qwen-family parser. Zero-sized; held as a static in the parser family.
 pub(super) struct QwenParser;

@@ -343,7 +343,6 @@ dependencies = [
  "minijinja",
  "minijinja-contrib",
  "num_cpus",
- "once_cell",
  "re_framework",
  "readability",
  "regex",
