@@ -41,6 +41,8 @@ pub struct Context {
 pub struct Format {
     pub enable_thinking: bool,
     pub add_generation_prompt: bool,
+    /// Name of the response parser to use, resolved against the parser family in `roles::parsers`.
+    pub parser: String,
 }
 
 #[derive(Debug, Deserialize)]

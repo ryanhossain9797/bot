@@ -1,5 +1,5 @@
 mod engine;
-mod parse;
+mod parsers;
 mod primary_role;
 mod render;
 
@@ -31,7 +31,9 @@ pub trait Role: Send + Sync {
         prompt: String,
         images: Vec<Arc<Vec<u8>>>,
     ) -> anyhow::Result<String>;
-    /// Parse raw generation into reasoning / content / tool calls.
+    /// Parse raw generation into reasoning / content / tool calls. Like rendering, this is the
+    /// implementor's job: the reasoning marker and tool-call grammar are the model's own, so a
+    /// different model family brings its own parser rather than reusing this one.
     fn parse_response(&self, raw: &str) -> ParsedResponse;
     /// How an over-long reasoning block is force-closed during generation.
     fn thinking(&self) -> ThinkingPolicy;
