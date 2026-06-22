@@ -18,15 +18,12 @@ pub enum Platform {
 }
 impl Display for Platform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Platform::Telegram => write!(f, "Telegram"),
-            Platform::Discord => write!(f, "Discord"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
 impl Platform {
-    fn to_string(&self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Platform::Telegram => "Telegram",
             Platform::Discord => "Discord",
@@ -53,7 +50,7 @@ pub struct ConversationId(pub Platform, pub String);
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}_{}", self.0.to_string(), self.1)
+        write!(f, "{}_{}", self.0.as_str(), self.1)
     }
 }
 
