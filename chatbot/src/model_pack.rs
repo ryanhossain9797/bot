@@ -51,17 +51,8 @@ pub struct Thinking {
     pub close_marker: String,
 }
 
-const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
-
 impl Pack {
-    /// Load the pack named by `MODEL_PACK_DIR` (default: the bundled Qwen3.6 pack).
-    pub fn load() -> anyhow::Result<Self> {
-        let dir = PathBuf::from(
-            std::env::var("MODEL_PACK_DIR").unwrap_or_else(|_| DEFAULT_PACK_DIR.to_string()),
-        );
-        Self::load_from(&dir)
-    }
-
+    /// Load a pack from a given directory. Which directory is the role's business, not the pack's.
     pub fn load_from(dir: &Path) -> anyhow::Result<Self> {
         let manifest_path = dir.join("manifest.toml");
         let manifest_text = std::fs::read_to_string(&manifest_path).map_err(|e| {

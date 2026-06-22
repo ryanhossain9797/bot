@@ -16,7 +16,6 @@ use services::discord::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::model_pack::Pack;
 use crate::roles::PrimaryRole;
 use crate::state_machines::conversation_state_machine::init_conversation_state_machine;
 
@@ -34,11 +33,9 @@ async fn init_env() -> anyhow::Result<Env> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
     send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
-    let pack = Pack::load()?;
-    println!("Loaded model pack from: {}", pack.dir.display());
     let backend = Arc::new(LlamaBackend::init()?);
     let primary =
-        Arc::new(tokio::task::spawn_blocking(move || PrimaryRole::load(backend, &pack)).await??);
+        Arc::new(tokio::task::spawn_blocking(move || PrimaryRole::load(backend)).await??);
 
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
