@@ -1,0 +1,21 @@
+model    = "Qwen3.6-35B-A3B-Q8_0.gguf"
+mmproj   = "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
+template = "chat_template.jinja"
+
+[sampling]
+top_k = 20
+top_p = 0.95
+
+[context]
+n_ctx = 32768
+n_batch = 4096
+batch_chunk = 2048
+max_generation_tokens = 8192
+
+[format]
+enable_thinking       = true
+add_generation_prompt = true
+parser                = "qwen"
+
+[thinking]
+close_marker = "</think>"

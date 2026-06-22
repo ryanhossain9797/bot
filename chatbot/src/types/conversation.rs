@@ -1,7 +1,7 @@
+use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
+use crate::types::media::MessageImage;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use crate::types::media::MessageImage;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::sync::Arc;
@@ -18,15 +18,12 @@ pub enum Platform {
 }
 impl Display for Platform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Platform::Telegram => write!(f, "Telegram"),
-            Platform::Discord => write!(f, "Discord"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
 impl Platform {
-    fn to_string(&self) -> &'static str {
+    fn as_str(&self) -> &'static str {
         match self {
             Platform::Telegram => "Telegram",
             Platform::Discord => "Discord",
@@ -53,7 +50,7 @@ pub struct ConversationId(pub Platform, pub String);
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}_{}", self.0.to_string(), self.1)
+        write!(f, "{}_{}", self.0.as_str(), self.1)
     }
 }
 
@@ -73,7 +70,10 @@ pub struct RecentConversation {
 }
 impl RecentConversation {
     pub fn empty() -> Self {
-        RecentConversation { thoughts: String::new(), history: VecDeque::new() }
+        RecentConversation {
+            thoughts: String::new(),
+            history: VecDeque::new(),
+        }
     }
 
     /// Build from a flat history, keeping only the last `RECENT_WINDOW` entries.
@@ -82,7 +82,10 @@ impl RecentConversation {
         while window.len() > RECENT_WINDOW {
             window.pop_front();
         }
-        RecentConversation { thoughts, history: window }
+        RecentConversation {
+            thoughts,
+            history: window,
+        }
     }
 
     pub fn history(&self) -> Vec<HistoryEntry> {
@@ -98,7 +101,7 @@ pub enum ConversationState {
     AwaitingLLMDecision {
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
-                tool_rounds: usize,
+        tool_rounds: usize,
     },
     SendingMessage {
         recent_conversation: RecentConversation,
@@ -107,8 +110,8 @@ pub enum ConversationState {
     RunningTools {
         recent_conversation: RecentConversation,
         tool_rounds: usize,
-                pending_tools: HashMap<String, ToolCall>,
-                completed_tools: Vec<(ToolCall, ToolResultData)>,
+        pending_tools: HashMap<String, ToolCall>,
+        completed_tools: Vec<(ToolCall, ToolResultData)>,
     },
 }
 impl Default for ConversationState {
@@ -142,16 +145,16 @@ pub enum PostSend {
 pub struct ConversationMessage {
     pub text: String,
     pub queued: bool,
-        pub user_id: String,
-        pub name: String,
-        pub images: Vec<MessageImage>,
+    pub user_id: String,
+    pub name: String,
+    pub images: Vec<MessageImage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConstructor {
-        pub id: ConversationId,
-        pub is_group: bool,
-        pub bot_identity: String,
+    pub id: ConversationId,
+    pub is_group: bool,
+    pub bot_identity: String,
 }
 
 impl re_framework::Identified for ConversationConstructor {
@@ -162,7 +165,7 @@ impl re_framework::Identified for ConversationConstructor {
 }
 
 impl ConversationMessage {
-        pub fn to_content(&self) -> String {
+    pub fn to_content(&self) -> String {
         if self.queued {
             format!("[Followup] {}", self.text)
         } else {
@@ -212,34 +215,35 @@ pub struct Conversation {
     pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
-        pub is_group: bool,
-        pub bot_identity: String,
+    pub is_group: bool,
+    pub bot_identity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
-                ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
+    ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
 impl LLMInput {
     pub fn redacted(&self) -> LLMInput {
         match self {
             LLMInput::ConversationMessage(m) => LLMInput::ConversationMessage(m.redacted()),
-            LLMInput::ToolResults(results, user) => {
-                LLMInput::ToolResults(results.clone(), user.as_ref().map(ConversationMessage::redacted))
-            }
+            LLMInput::ToolResults(results, user) => LLMInput::ToolResults(
+                results.clone(),
+                user.as_ref().map(ConversationMessage::redacted),
+            ),
         }
     }
 
-    pub fn messages_and_media(&self, marker: &str) -> (Vec<Value>, Vec<Arc<Vec<u8>>>) {
+    pub fn messages_and_media(&self, marker: &str) -> (Vec<ChatMessage>, Vec<Arc<Vec<u8>>>) {
         match self {
             LLMInput::ConversationMessage(msg) => {
                 let (content, bytes) = msg.content_and_media(marker);
-                (vec![json!({ "role": "user", "content": content })], bytes)
+                (vec![ChatMessage::user(content)], bytes)
             }
             LLMInput::ToolResults(results, user_msg) => {
-                let mut messages: Vec<Value> = Vec::new();
+                let mut messages: Vec<ChatMessage> = Vec::new();
                 let mut bytes: Vec<Arc<Vec<u8>>> = Vec::new();
                 let mut delivered: Vec<Arc<Vec<u8>>> = Vec::new();
 
@@ -270,18 +274,18 @@ impl LLMInput {
                             ),
                         }
                     }
-                    messages.push(json!({ "role": "tool", "tool_call_id": r.id, "content": parts.join("\n") }));
+                    messages.push(ChatMessage::tool(r.id.clone(), parts.join("\n")));
                 }
 
                 if !delivered.is_empty() {
                     let content = vec![marker.to_string(); delivered.len()].join("\n");
-                    messages.push(json!({ "role": "assistant", "content": content }));
+                    messages.push(ChatMessage::assistant(content));
                     bytes.extend(delivered);
                 }
 
                 if let Some(msg) = user_msg {
                     let (content, b) = msg.content_and_media(marker);
-                    messages.push(json!({ "role": "user", "content": content }));
+                    messages.push(ChatMessage::user(content));
                     bytes.extend(b);
                 }
 
@@ -327,46 +331,46 @@ pub enum Reply {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
-        pub thoughts: String,
-        pub reply: Reply,
-        pub tool_calls: Vec<ToolCall>,
+    pub thoughts: String,
+    pub reply: Reply,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl LLMResponse {
-        pub fn message(&self) -> Option<&str> {
+    pub fn message(&self) -> Option<&str> {
         match &self.reply {
             Reply::Said(text) => Some(text),
             Reply::Empty | Reply::Malformed => None,
         }
     }
 
-    pub fn to_openai_message(&self) -> Value {
+    pub fn to_chat_message(&self) -> ChatMessage {
         let content = match &self.reply {
-            Reply::Said(text) => text.as_str(),
-            Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]",
-            Reply::Empty => "",
-            Reply::Malformed => "[MALFORMED — assistant generated no usable output: no message and no tool call]",
+            Reply::Said(text) => text.clone(),
+            Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]".to_string(),
+            Reply::Empty => String::new(),
+            Reply::Malformed => {
+                "[MALFORMED — assistant generated no usable output: no message and no tool call]"
+                    .to_string()
+            }
         };
-        let mut msg = json!({
-            "role": "assistant",
-            "content": content,
-        });
-        if !self.tool_calls.is_empty() {
-            msg["tool_calls"] = Value::Array(
-                self.tool_calls
-                    .iter()
-                    .map(|tc| json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.tool_type.wire_name(),
-                            "arguments": tc.tool_type.wire_arguments()
-                        }
-                    }))
-                    .collect(),
-            );
+        if self.tool_calls.is_empty() {
+            ChatMessage::assistant(content)
+        } else {
+            let calls = self
+                .tool_calls
+                .iter()
+                .map(|tc| MessageToolCall {
+                    id: tc.id.clone(),
+                    kind: "function",
+                    function: MessageToolCallFunction {
+                        name: tc.tool_type.wire_name(),
+                        arguments: tc.tool_type.arguments_map(),
+                    },
+                })
+                .collect();
+            ChatMessage::assistant_with_tools(content, calls)
         }
-        msg
     }
 }
 
@@ -380,14 +384,14 @@ pub enum HistoryEntry {
 pub enum ConversationAction {
     ForceReset,
     NewMessage {
-                msg: String,
+        msg: String,
         user_id: String,
         name: String,
         images: Vec<MessageImage>,
     },
     LLMDecisionResult(Result<LLMResponse, String>),
     MessageSent(Result<(), String>),
-        ToolResult {
+    ToolResult {
         id: String,
         result: Result<ToolResultData, String>,
     },
@@ -406,7 +410,12 @@ pub struct ToolResultData {
 impl ToolResultData {
     /// Text-only result — no images for either side. The common case.
     pub fn text(actual: String, simplified: String) -> Self {
-        ToolResultData { actual, simplified, image_for_assistant: None, image_for_user: None }
+        ToolResultData {
+            actual,
+            simplified,
+            image_for_assistant: None,
+            image_for_user: None,
+        }
     }
 }
 

@@ -29,7 +29,11 @@ impl Image {
         }
         let resized = image::DynamicImage::ImageRgb8(
             decoded
-                .resize(MAX_IMAGE_EDGE, MAX_IMAGE_EDGE, image::imageops::FilterType::Lanczos3)
+                .resize(
+                    MAX_IMAGE_EDGE,
+                    MAX_IMAGE_EDGE,
+                    image::imageops::FilterType::Lanczos3,
+                )
                 .to_rgb8(),
         );
         let mut out = std::io::Cursor::new(Vec::new());
@@ -49,14 +53,14 @@ pub enum MessageImage {
     Dehydrated { byte_size: usize },
 }
 
-// Persisted state must never carry raw image bytes: always serialize as Dehydrated (size only).
 impl Serialize for MessageImage {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let byte_size = match self {
             MessageImage::Hydrated(image) => image.bytes.len(),
             MessageImage::Dehydrated { byte_size } => *byte_size,
         };
-        let mut variant = serializer.serialize_struct_variant("MessageImage", 1, "Dehydrated", 1)?;
+        let mut variant =
+            serializer.serialize_struct_variant("MessageImage", 1, "Dehydrated", 1)?;
         variant.serialize_field("byte_size", &byte_size)?;
         variant.end()
     }
@@ -68,9 +72,9 @@ impl MessageImage {
             MessageImage::Hydrated(image) => MessageImage::Dehydrated {
                 byte_size: image.bytes.len(),
             },
-            MessageImage::Dehydrated { byte_size } => {
-                MessageImage::Dehydrated { byte_size: *byte_size }
-            }
+            MessageImage::Dehydrated { byte_size } => MessageImage::Dehydrated {
+                byte_size: *byte_size,
+            },
         }
     }
 
@@ -84,9 +88,9 @@ impl MessageImage {
     pub fn downscaled(&self) -> MessageImage {
         match self {
             MessageImage::Hydrated(image) => MessageImage::Hydrated(image.downscaled()),
-            MessageImage::Dehydrated { byte_size } => {
-                MessageImage::Dehydrated { byte_size: *byte_size }
-            }
+            MessageImage::Dehydrated { byte_size } => MessageImage::Dehydrated {
+                byte_size: *byte_size,
+            },
         }
     }
 }

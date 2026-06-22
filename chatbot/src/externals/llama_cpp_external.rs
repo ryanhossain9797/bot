@@ -1,14 +1,14 @@
 use crate::{
+    chat_format::ChatMessage,
+    roles::{PrimaryRole, RenderInputs, Role},
     types::conversation::{
-        HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation, Reply, ToolCall,
-        ToolType, ConversationAction,
+        ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation,
+        Reply, ToolCall, ToolType,
     },
-    services::llama_cpp::LlamaCppService,
     Env,
 };
 use chrono::Utc;
 use llama_cpp_2::mtmd::mtmd_default_marker;
-use serde_json::{json, Value};
 
 use std::sync::Arc;
 
@@ -35,13 +35,13 @@ fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     }
 }
 
-fn session_context_block(
+fn session_footer(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
     tool_rounds: usize,
     max_tool_rounds: usize,
-) -> Value {
+) -> String {
     let setting = if is_group {
         "GROUP CHAT (multiple participants)"
     } else {
@@ -66,7 +66,8 @@ fn session_context_block(
         "If you already have something worth sharing — a partial answer, or what you're about to do — say it right after your thinking and before the tool call, instead of calling silently.".to_string(),
     );
     lines.push(
-        "The user cannot see tool results — you must send the information as a message.".to_string(),
+        "The user cannot see tool results — you must send the information as a message."
+            .to_string(),
     );
 
     if is_group {
@@ -75,7 +76,7 @@ fn session_context_block(
         );
     }
 
-    json!({ "role": "footer", "content": lines.join("\n") })
+    lines.join("\n")
 }
 
 fn build_conversation(
@@ -86,13 +87,13 @@ fn build_conversation(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
-) -> (Value, Vec<Arc<Vec<u8>>>) {
+) -> (Vec<ChatMessage>, String, Vec<Arc<Vec<u8>>>) {
     let history = maybe_recent_conversation
         .map(|rc| rc.history)
         .unwrap_or_default();
 
     let marker = mtmd_default_marker();
-    let mut messages: Vec<Value> = Vec::new();
+    let mut messages: Vec<ChatMessage> = Vec::new();
     let mut images: Vec<Arc<Vec<u8>>> = Vec::new();
 
     for entry in &history {
@@ -102,7 +103,7 @@ fn build_conversation(
                 messages.extend(msgs);
                 images.extend(bytes);
             }
-            HistoryEntry::Output(response) => messages.push(response.to_openai_message()),
+            HistoryEntry::Output(response) => messages.push(response.to_chat_message()),
         }
     }
 
@@ -110,43 +111,19 @@ fn build_conversation(
     messages.extend(live_msgs);
     images.extend(live_bytes);
 
-    messages.push(session_context_block(
+    let footer = session_footer(
         is_group,
         bot_identity,
         platform,
         tool_rounds,
         max_tool_rounds,
-    ));
+    );
 
-    (Value::Array(messages), images)
-}
-
-fn all_tool_calls(parsed: &Value) -> Vec<(String, String, String)> {
-    let Some(calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) else {
-        return Vec::new();
-    };
-
-    calls
-        .iter()
-        .filter_map(|call| {
-            let id = call
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("call_0")
-                .to_string();
-            let name = call.pointer("/function/name").and_then(|v| v.as_str())?.to_string();
-            let arguments = call
-                .pointer("/function/arguments")
-                .and_then(|v| v.as_str())
-                .unwrap_or("{}")
-                .to_string();
-            Some((id, name, arguments))
-        })
-        .collect()
+    (messages, footer, images)
 }
 
 async fn get_response_from_llm(
-    llama_cpp: &LlamaCppService,
+    role: Arc<PrimaryRole>,
     current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
@@ -156,7 +133,7 @@ async fn get_response_from_llm(
     bot_identity: &str,
     platform: &Platform,
 ) -> anyhow::Result<LLMResponse> {
-    let (conversation, images) = build_conversation(
+    let (messages, footer, images) = build_conversation(
         current_input,
         maybe_recent_conversation,
         tool_rounds,
@@ -169,40 +146,41 @@ async fn get_response_from_llm(
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
     println!(
         "{}",
-        serde_json::to_string_pretty(&conversation).unwrap_or_default()
+        serde_json::to_string_pretty(&messages).unwrap_or_default()
     );
+    println!("---- footer ----\n{footer}");
 
     if !images.is_empty() {
         println!("[image] feeding {} image(s) to the model", images.len());
     }
 
-    let parsed = llama_cpp
-        .get_primary_response(conversation, images, allow_tools)
-        .await?;
+    let tools = allow_tools.then(ToolType::tool_definitions);
+    let prompt = role.render_prompt(&RenderInputs {
+        messages: &messages,
+        tools: tools.as_deref(),
+        footer: Some(&footer),
+    })?;
 
-    let thoughts = parsed
-        .get("reasoning_content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let raw = Arc::clone(&role).generate(prompt, images).await?;
+    let parsed = role.parse_response(&raw);
 
-    let content = parsed
-        .get("content")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .unwrap_or("");
-
-    let calls = all_tool_calls(&parsed);
-    let mut tool_calls = Vec::with_capacity(calls.len());
-    for (id, name, arguments) in calls {
-        let tool_type = ToolType::bind(&name, &arguments)?;
-        tool_calls.push(ToolCall { id, tool_type });
-    }
-    tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
+    let thoughts = parsed.reasoning;
+    let content = parsed.content;
+    let tool_calls = parsed
+        .tool_calls
+        .iter()
+        .enumerate()
+        .map(|(i, call)| {
+            Ok(ToolCall {
+                id: format!("call_{i}"),
+                tool_type: ToolType::bind(&call.name, &call.arguments)?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let explicit_empty = content.eq_ignore_ascii_case("[EMPTY]");
     let reply = if !content.is_empty() && !explicit_empty {
-        Reply::Said(content.to_string())
+        Reply::Said(content)
     } else if explicit_empty || !tool_calls.is_empty() {
         Reply::Empty
     } else {
@@ -235,11 +213,15 @@ pub async fn get_llm_decision(
     let allow_tools = tool_rounds < max_tool_rounds;
     println!(
         "[tool budget] {tool_rounds}/{max_tool_rounds} tool calls this turn (tools {})",
-        if allow_tools { "on" } else { "off — synthesizing" }
+        if allow_tools {
+            "on"
+        } else {
+            "off — synthesizing"
+        }
     );
 
     let llama_cpp_result = get_response_from_llm(
-        env.llama_cpp.as_ref(),
+        Arc::clone(&env.primary),
         &current_input,
         maybe_recent_conversation,
         tool_rounds,

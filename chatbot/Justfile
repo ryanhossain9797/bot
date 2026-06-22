@@ -1,37 +1,24 @@
-# Build and push Docker image to Docker Hub
 build_push tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
     docker build -t zireael9797/bot:{{tag}} -f Dockerfile ..
     docker push zireael9797/bot:{{tag}}
 
-# Build Docker image locally
 build_local tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
     docker build -t zireael9797/bot:{{tag}} -f Dockerfile ..
 
-# Build base image locally
 build_base tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
     docker build -t zireael9797/bot-base:{{tag}} -f Dockerfile.base .
 
-# Run the locally built image with GPU support
-# Stops and removes existing container if present
 run_local tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
-    # Stop and remove existing container if it exists
     docker stop bot 2>/dev/null || true
     docker rm bot 2>/dev/null || true
-    # Run with AMD GPU support (ROCm)
-    # Host networking: the bot shares the host's network stack (no bridge/NAT), so it reaches
-    # host-published services like the SearxNG instance at http://localhost:8080 directly — see
-    # SEARXNG_URL. The bot has no inbound listener (Discord gateway is outbound), so no port clash.
-    # Mount the Docker socket so the bot can spawn per-conversation worker containers.
-    # The bot drives the daemon with fixed flags (the LLM only runs bash *inside* a worker,
-    # which has no socket/host access).
     docker run -d \
         --name bot \
         --network host \
@@ -40,10 +27,11 @@ run_local tag="latest":
         --group-add video \
         --group-add render \
         -v /var/run/docker.sock:/var/run/docker.sock \
+        -v "$(pwd)/models/qwen-qwen3-6-35b-a3b:/app/models/qwen-qwen3-6-35b-a3b:ro" \
+        -e MODEL_PACK_DIR=/app/models/qwen-qwen3-6-35b-a3b \
         --restart unless-stopped \
         zireael9797/bot:{{tag}}
 
-# Build and run the locally built image with GPU support
 deploy_local tag="latest":
     #!/usr/bin/env bash
     set -euxo pipefail
