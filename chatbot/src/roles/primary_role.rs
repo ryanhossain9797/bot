@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -44,6 +44,12 @@ const MAX_THINKING_TOKENS: usize = 2000;
 const PACK_DIR_ENV: &str = "MODEL_PACK_DIR";
 const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
 
+/// Resolve the model pack directory — the role's own choice: `MODEL_PACK_DIR` if set, else the
+/// bundled Qwen pack. Single source for both loading the model and answering `Role::model_path`.
+fn pack_dir() -> PathBuf {
+    std::env::var(PACK_DIR_ENV).unwrap_or_else(|_| DEFAULT_PACK_DIR.to_string()).into()
+}
+
 /// The primary conversational role (Terminal Alpha Beta). It's pure identity — a system prompt, a
 /// temperature, and a thinking nudge — layered over a loaded model. Everything format/model-specific
 /// (template, flags, sampling, reasoning marker, parser) lives in the `LocalModel`, since those are
@@ -53,11 +59,10 @@ pub struct PrimaryRole {
 }
 
 impl PrimaryRole {
-    /// Load the role: resolve its pack directory (the role's own choice — `MODEL_PACK_DIR` or the
-    /// bundled default), then load the pack and the model onto the shared backend.
+    /// Load the role: resolve its pack directory and load the pack and the model onto the shared
+    /// backend.
     pub fn load(backend: Arc<LlamaBackend>) -> anyhow::Result<Self> {
-        let dir = std::env::var(PACK_DIR_ENV).unwrap_or_else(|_| DEFAULT_PACK_DIR.to_string());
-        let pack = Pack::load_from(Path::new(&dir))?;
+        let pack = Pack::load_from(&pack_dir())?;
         Ok(PrimaryRole { model: local_model::load_model(backend, &pack)? })
     }
 }
@@ -69,6 +74,10 @@ impl Role for PrimaryRole {
 
     fn temperature(&self) -> f32 {
         TEMPERATURE
+    }
+
+    fn model_path(&self) -> PathBuf {
+        pack_dir()
     }
 
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String> {

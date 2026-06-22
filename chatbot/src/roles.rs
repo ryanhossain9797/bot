@@ -3,6 +3,7 @@ mod parsers;
 mod primary_role;
 mod render;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::chat_format::{ChatMessage, ToolDefinition};
@@ -22,6 +23,10 @@ pub use primary_role::PrimaryRole;
 pub trait Role: Send + Sync {
     fn system_prompt(&self) -> &str;
     fn temperature(&self) -> f32;
+    /// Filesystem path of this role's model pack. Assumes a local on-disk model — fine while every
+    /// role is local; a remote role wouldn't have one. Not consumed yet — part of the contract.
+    #[allow(dead_code)]
+    fn model_path(&self) -> PathBuf;
     /// Render the final prompt string from conversation inputs (JSON serialized in Rust, not via
     /// in-template `tojson`).
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String>;
