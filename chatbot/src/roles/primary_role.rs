@@ -47,7 +47,7 @@ const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
 /// Resolve the model pack directory — the role's own choice: `MODEL_PACK_DIR` if set, else the
 /// bundled Qwen pack. Single source for both loading the model and answering `Role::model_path`.
 fn pack_dir() -> PathBuf {
-    std::env::var(PACK_DIR_ENV).unwrap_or_else(|_| DEFAULT_PACK_DIR.to_string()).into()
+    std::env::var_os(PACK_DIR_ENV).map_or_else(|| DEFAULT_PACK_DIR.into(), PathBuf::from)
 }
 
 /// The primary conversational role (Terminal Alpha Beta). It's pure identity — a system prompt, a
