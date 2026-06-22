@@ -4,7 +4,7 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use tokio::task::spawn_blocking;
 
 use super::engine::{self, GenConfig, PrimaryModel};
-use super::{parse, render, FormatFlags, ParsedResponse, RenderInputs, Role, ThinkingPolicy};
+use super::{qwen_parse, render, FormatFlags, ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 use crate::model_pack::Pack;
 
 const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
@@ -94,7 +94,7 @@ impl Role for PrimaryRole {
     }
 
     fn parse_response(&self, raw: &str) -> ParsedResponse {
-        parse::parse(raw)
+        qwen_parse::parse(raw, &self.close_marker)
     }
 
     fn thinking(&self) -> ThinkingPolicy {

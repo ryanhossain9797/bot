@@ -1,6 +1,9 @@
-//! Response decoding — turn raw generation into reasoning / content / tool calls. Mirrors
-//! llama.cpp's parse_response_oaicompat on well-formed output (verified in probe), and degrades
-//! safely on truncated output: incomplete tool calls are dropped, never leaked into content.
+//! Parser for the Qwen-family wire format — turns raw generation into reasoning / content / tool
+//! calls. This is one model family's output grammar (the `<tool_call><function=…><parameter=…>`
+//! pseudo-XML and a reasoning block closed by the model's marker); a role on a different family
+//! brings its own parser. Mirrors llama.cpp's parse_response_oaicompat on well-formed output
+//! (verified in probe), and degrades safely on truncated output: incomplete tool calls are dropped,
+//! never leaked into content. The reasoning `close_marker` is the model's, passed in by the role.
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -14,10 +17,10 @@ static NAME_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"<function=([^>\n]+)>").u
 static PARAM_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?s)<parameter=([^>\n]+)>\n(.*?)\n</parameter>").unwrap());
 
-pub(super) fn parse(raw: &str) -> ParsedResponse {
-    // The prompt primes `<think>\n`, so the output starts inside the think block: reasoning runs
-    // up to the first `</think>`; if it never closes, the whole output is reasoning.
-    let (reasoning, body) = match raw.split_once("</think>") {
+pub(super) fn parse(raw: &str, close_marker: &str) -> ParsedResponse {
+    // The prompt primes the think block, so the output starts inside it: reasoning runs up to the
+    // first `close_marker`; if it never closes, the whole output is reasoning.
+    let (reasoning, body) = match raw.split_once(close_marker) {
         Some((r, b)) => (r.trim().to_string(), b),
         None => (raw.trim().to_string(), ""),
     };
