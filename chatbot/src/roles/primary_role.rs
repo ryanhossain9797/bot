@@ -3,7 +3,7 @@ use std::sync::Arc;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use tokio::task::spawn_blocking;
 
-use super::engine::{self, PrimaryModel};
+use super::local_model::{self, LocalModel};
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 use crate::model_pack::Pack;
 
@@ -40,17 +40,19 @@ const MAX_THINKING_TOKENS: usize = 2000;
 
 /// The primary conversational role (Terminal Alpha Beta). It's pure identity — a system prompt, a
 /// temperature, and a thinking nudge — layered over a loaded model. Everything format/model-specific
-/// (template, flags, sampling, reasoning marker, parser) lives in the `PrimaryModel`, since those are
+/// (template, flags, sampling, reasoning marker, parser) lives in the `LocalModel`, since those are
 /// the model's nature, defined by its folder.
 pub struct PrimaryRole {
-    model: PrimaryModel,
+    model: LocalModel,
 }
 
 impl PrimaryRole {
     /// Load the role from a pack: load the model (weights + all the format facts the folder defines)
     /// using the shared backend.
     pub fn load(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Result<Self> {
-        Ok(PrimaryRole { model: engine::load_model(backend, pack)? })
+        Ok(PrimaryRole {
+            model: local_model::load_model(backend, pack)?,
+        })
     }
 }
 
@@ -74,8 +76,10 @@ impl Role for PrimaryRole {
     ) -> anyhow::Result<String> {
         let thinking = self.thinking();
         let temperature = self.temperature();
-        spawn_blocking(move || engine::run(&self.model, &prompt, &images, temperature, &thinking))
-            .await?
+        spawn_blocking(move || {
+            local_model::run(&self.model, &prompt, &images, temperature, &thinking)
+        })
+        .await?
     }
 
     fn parse_response(&self, raw: &str) -> ParsedResponse {

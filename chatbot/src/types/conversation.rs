@@ -1,7 +1,7 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
 use crate::types::media::MessageImage;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::sync::Arc;
@@ -73,7 +73,10 @@ pub struct RecentConversation {
 }
 impl RecentConversation {
     pub fn empty() -> Self {
-        RecentConversation { thoughts: String::new(), history: VecDeque::new() }
+        RecentConversation {
+            thoughts: String::new(),
+            history: VecDeque::new(),
+        }
     }
 
     /// Build from a flat history, keeping only the last `RECENT_WINDOW` entries.
@@ -82,7 +85,10 @@ impl RecentConversation {
         while window.len() > RECENT_WINDOW {
             window.pop_front();
         }
-        RecentConversation { thoughts, history: window }
+        RecentConversation {
+            thoughts,
+            history: window,
+        }
     }
 
     pub fn history(&self) -> Vec<HistoryEntry> {
@@ -98,7 +104,7 @@ pub enum ConversationState {
     AwaitingLLMDecision {
         history: Vec<HistoryEntry>,
         current_input: LLMInput,
-                tool_rounds: usize,
+        tool_rounds: usize,
     },
     SendingMessage {
         recent_conversation: RecentConversation,
@@ -107,8 +113,8 @@ pub enum ConversationState {
     RunningTools {
         recent_conversation: RecentConversation,
         tool_rounds: usize,
-                pending_tools: HashMap<String, ToolCall>,
-                completed_tools: Vec<(ToolCall, ToolResultData)>,
+        pending_tools: HashMap<String, ToolCall>,
+        completed_tools: Vec<(ToolCall, ToolResultData)>,
     },
 }
 impl Default for ConversationState {
@@ -142,16 +148,16 @@ pub enum PostSend {
 pub struct ConversationMessage {
     pub text: String,
     pub queued: bool,
-        pub user_id: String,
-        pub name: String,
-        pub images: Vec<MessageImage>,
+    pub user_id: String,
+    pub name: String,
+    pub images: Vec<MessageImage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConstructor {
-        pub id: ConversationId,
-        pub is_group: bool,
-        pub bot_identity: String,
+    pub id: ConversationId,
+    pub is_group: bool,
+    pub bot_identity: String,
 }
 
 impl re_framework::Identified for ConversationConstructor {
@@ -162,7 +168,7 @@ impl re_framework::Identified for ConversationConstructor {
 }
 
 impl ConversationMessage {
-        pub fn to_content(&self) -> String {
+    pub fn to_content(&self) -> String {
         if self.queued {
             format!("[Followup] {}", self.text)
         } else {
@@ -212,23 +218,24 @@ pub struct Conversation {
     pub pending: Vec<ConversationMessage>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
-        pub is_group: bool,
-        pub bot_identity: String,
+    pub is_group: bool,
+    pub bot_identity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
-                ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
+    ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
 impl LLMInput {
     pub fn redacted(&self) -> LLMInput {
         match self {
             LLMInput::ConversationMessage(m) => LLMInput::ConversationMessage(m.redacted()),
-            LLMInput::ToolResults(results, user) => {
-                LLMInput::ToolResults(results.clone(), user.as_ref().map(ConversationMessage::redacted))
-            }
+            LLMInput::ToolResults(results, user) => LLMInput::ToolResults(
+                results.clone(),
+                user.as_ref().map(ConversationMessage::redacted),
+            ),
         }
     }
 
@@ -327,13 +334,13 @@ pub enum Reply {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LLMResponse {
-        pub thoughts: String,
-        pub reply: Reply,
-        pub tool_calls: Vec<ToolCall>,
+    pub thoughts: String,
+    pub reply: Reply,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl LLMResponse {
-        pub fn message(&self) -> Option<&str> {
+    pub fn message(&self) -> Option<&str> {
         match &self.reply {
             Reply::Said(text) => Some(text),
             Reply::Empty | Reply::Malformed => None,
@@ -368,7 +375,6 @@ impl LLMResponse {
             ChatMessage::assistant_with_tools(content, calls)
         }
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -381,14 +387,14 @@ pub enum HistoryEntry {
 pub enum ConversationAction {
     ForceReset,
     NewMessage {
-                msg: String,
+        msg: String,
         user_id: String,
         name: String,
         images: Vec<MessageImage>,
     },
     LLMDecisionResult(Result<LLMResponse, String>),
     MessageSent(Result<(), String>),
-        ToolResult {
+    ToolResult {
         id: String,
         result: Result<ToolResultData, String>,
     },
@@ -407,7 +413,12 @@ pub struct ToolResultData {
 impl ToolResultData {
     /// Text-only result — no images for either side. The common case.
     pub fn text(actual: String, simplified: String) -> Self {
-        ToolResultData { actual, simplified, image_for_assistant: None, image_for_user: None }
+        ToolResultData {
+            actual,
+            simplified,
+            image_for_assistant: None,
+            image_for_user: None,
+        }
     }
 }
 

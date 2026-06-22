@@ -66,7 +66,8 @@ fn session_footer(
         "If you already have something worth sharing — a partial answer, or what you're about to do — say it right after your thinking and before the tool call, instead of calling silently.".to_string(),
     );
     lines.push(
-        "The user cannot see tool results — you must send the information as a message.".to_string(),
+        "The user cannot see tool results — you must send the information as a message."
+            .to_string(),
     );
 
     if is_group {
@@ -110,7 +111,13 @@ fn build_conversation(
     messages.extend(live_msgs);
     images.extend(live_bytes);
 
-    let footer = session_footer(is_group, bot_identity, platform, tool_rounds, max_tool_rounds);
+    let footer = session_footer(
+        is_group,
+        bot_identity,
+        platform,
+        tool_rounds,
+        max_tool_rounds,
+    );
 
     (messages, footer, images)
 }
@@ -137,7 +144,10 @@ async fn get_response_from_llm(
     );
 
     println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
-    println!("{}", serde_json::to_string_pretty(&messages).unwrap_or_default());
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&messages).unwrap_or_default()
+    );
     println!("---- footer ----\n{footer}");
 
     if !images.is_empty() {
@@ -156,11 +166,17 @@ async fn get_response_from_llm(
 
     let thoughts = parsed.reasoning;
     let content = parsed.content;
-    let mut tool_calls = Vec::with_capacity(parsed.tool_calls.len());
-    for (i, call) in parsed.tool_calls.iter().enumerate() {
-        let tool_type = ToolType::bind(&call.name, &call.arguments)?;
-        tool_calls.push(ToolCall { id: format!("call_{i}"), tool_type });
-    }
+    let tool_calls = parsed
+        .tool_calls
+        .iter()
+        .enumerate()
+        .map(|(i, call)| {
+            Ok(ToolCall {
+                id: format!("call_{i}"),
+                tool_type: ToolType::bind(&call.name, &call.arguments)?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
 
     let explicit_empty = content.eq_ignore_ascii_case("[EMPTY]");
     let reply = if !content.is_empty() && !explicit_empty {
@@ -197,7 +213,11 @@ pub async fn get_llm_decision(
     let allow_tools = tool_rounds < max_tool_rounds;
     println!(
         "[tool budget] {tool_rounds}/{max_tool_rounds} tool calls this turn (tools {})",
-        if allow_tools { "on" } else { "off — synthesizing" }
+        if allow_tools {
+            "on"
+        } else {
+            "off — synthesizing"
+        }
     );
 
     let llama_cpp_result = get_response_from_llm(

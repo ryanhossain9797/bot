@@ -36,8 +36,16 @@ impl ChatMessage {
     pub fn assistant(content: impl Into<String>) -> Self {
         Self::bare(ChatRole::Assistant, content)
     }
-    pub fn assistant_with_tools(content: impl Into<String>, tool_calls: Vec<MessageToolCall>) -> Self {
-        Self { role: ChatRole::Assistant, content: content.into(), tool_calls, tool_call_id: None }
+    pub fn assistant_with_tools(
+        content: impl Into<String>,
+        tool_calls: Vec<MessageToolCall>,
+    ) -> Self {
+        Self {
+            role: ChatRole::Assistant,
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+        }
     }
     pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
@@ -48,7 +56,12 @@ impl ChatMessage {
         }
     }
     fn bare(role: ChatRole, content: impl Into<String>) -> Self {
-        Self { role, content: content.into(), tool_calls: Vec::new(), tool_call_id: None }
+        Self {
+            role,
+            content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+        }
     }
 }
 

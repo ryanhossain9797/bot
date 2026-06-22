@@ -72,10 +72,17 @@ impl Pack {
 
         let template_path = dir.join(&manifest.template);
         let template = std::fs::read_to_string(&template_path).map_err(|e| {
-            anyhow::anyhow!("model pack: cannot read template {}: {e}", template_path.display())
+            anyhow::anyhow!(
+                "model pack: cannot read template {}: {e}",
+                template_path.display()
+            )
         })?;
 
-        Ok(Pack { dir: dir.to_path_buf(), manifest, template })
+        Ok(Pack {
+            dir: dir.to_path_buf(),
+            manifest,
+            template,
+        })
     }
 
     pub fn model_path(&self) -> PathBuf {

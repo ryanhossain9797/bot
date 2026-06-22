@@ -1,4 +1,4 @@
-//! The loaded model and the inference mechanics around it. `PrimaryModel` is everything a model
+//! The loaded model and the inference mechanics around it. `LocalModel` is everything a model
 //! folder defines, loaded/resolved: weights + mmproj + backend handle, the sampling/context config,
 //! and the wire-format facts (template, flags, reasoning marker, and the parser it names). It owns
 //! `render` and `parse` because those *are* the model's wire format; the free functions below are the
@@ -6,7 +6,7 @@
 //! holds format facts, since those belong to the model, not the role.
 //!
 //! The `LlamaBackend` is a process singleton, created once in `init_env` and `Arc`-cloned into each
-//! `PrimaryModel` — so the model is self-contained for inference and the `Role` contract never has to
+//! `LocalModel` — so the model is self-contained for inference and the `Role` contract never has to
 //! mention it (a remote model would carry no backend at all).
 
 use llama_cpp_2::{
@@ -34,7 +34,7 @@ const DRY_BREAKS_LONG_STRINGS: bool = true;
 /// shared backend), the sampling/context config, and the wire-format facts (template, render flags,
 /// reasoning marker, and the parser the manifest names). Self-contained — it can render, run, and
 /// parse on its own.
-pub(super) struct PrimaryModel {
+pub(super) struct LocalModel {
     mtmd: MtmdContext,
     model: LlamaModel,
     backend: Arc<LlamaBackend>,
@@ -45,9 +45,13 @@ pub(super) struct PrimaryModel {
     parser: &'static dyn Parser,
 }
 
-impl PrimaryModel {
+impl LocalModel {
     /// Render the final prompt in this model's wire format from a system prompt + conversation.
-    pub(super) fn render(&self, system_prompt: &str, inputs: &RenderInputs) -> anyhow::Result<String> {
+    pub(super) fn render(
+        &self,
+        system_prompt: &str,
+        inputs: &RenderInputs,
+    ) -> anyhow::Result<String> {
         super::render::render(&self.template, system_prompt, inputs, self.flags)
     }
 
@@ -86,18 +90,21 @@ impl GenConfig {
 }
 
 /// Load a pack's weights and multimodal projector into memory, taking an `Arc` to the shared backend
-/// to store alongside them. The loaded `PrimaryModel` then needs nothing external to run.
-pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Result<PrimaryModel> {
+/// to store alongside them. The loaded `LocalModel` then needs nothing external to run.
+pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Result<LocalModel> {
     let model_path = pack.model_path();
-    println!("Loading primary model from: {}", model_path.display());
+    println!("Loading model from: {}", model_path.display());
     let model = LlamaModel::load_from_file(&backend, &model_path, &LlamaModelParams::default())?;
-    println!("Loaded primary model from: {}", model_path.display());
+    println!("Loaded model from: {}", model_path.display());
 
     let mmproj_path = pack.mmproj_path();
-    println!("Loading multimodal projector from: {}", mmproj_path.display());
-    let mmproj_str = mmproj_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("mmproj path is not valid UTF-8: {}", mmproj_path.display()))?;
+    println!(
+        "Loading multimodal projector from: {}",
+        mmproj_path.display()
+    );
+    let mmproj_str = mmproj_path.to_str().ok_or_else(|| {
+        anyhow::anyhow!("mmproj path is not valid UTF-8: {}", mmproj_path.display())
+    })?;
     let mtmd = MtmdContext::init_from_file(mmproj_str, &model, &MtmdContextParams::default())?;
     println!(
         "Loaded multimodal projector from: {} (vision={}, audio={})",
@@ -106,7 +113,7 @@ pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Res
         mtmd.support_audio()
     );
 
-    Ok(PrimaryModel {
+    Ok(LocalModel {
         mtmd,
         model,
         backend,
@@ -124,17 +131,17 @@ pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Res
 /// Run inference on an already-rendered prompt and return the raw generated text. Picks the text or
 /// multimodal path by whether any images were supplied. Blocking; callers run it on a blocking task.
 pub(super) fn run(
-    primary: &PrimaryModel,
+    model: &LocalModel,
     prompt: &str,
     images: &[Arc<Vec<u8>>],
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
-    let cfg = &primary.cfg;
+    let cfg = &model.cfg;
     if images.is_empty() {
-        run_generation_text(primary, cfg, prompt, temperature, thinking)
+        run_generation_text(model, cfg, prompt, temperature, thinking)
     } else {
-        run_generation_mtmd(primary, cfg, prompt, images, temperature, thinking)
+        run_generation_mtmd(model, cfg, prompt, images, temperature, thinking)
     }
 }
 
@@ -158,18 +165,22 @@ fn log_prompt(prompt: &str) {
 }
 
 fn run_generation_text(
-    primary: &PrimaryModel,
+    model: &LocalModel,
     cfg: &GenConfig,
     prompt: &str,
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
-    let model = &primary.model;
-    let mut ctx = model.new_context(&primary.backend, context_params(cfg))?;
+    let llama = &model.model;
+    let mut ctx = llama.new_context(&model.backend, context_params(cfg))?;
 
-    let mut tokens = model.str_to_token(
+    let mut tokens = llama.str_to_token(
         prompt,
-        if ADD_BOS_REEVAL_WHEN_CACHING_HITS { AddBos::Always } else { AddBos::Never },
+        if ADD_BOS_REEVAL_WHEN_CACHING_HITS {
+            AddBos::Always
+        } else {
+            AddBos::Never
+        },
     )?;
     let max_input = cfg.n_ctx as usize - cfg.max_generation_tokens;
     if tokens.len() > max_input {
@@ -198,19 +209,26 @@ fn run_generation_text(
     }
 
     log_prompt(prompt);
-    generate(model, &mut ctx, tokens.len() as i32, temperature, cfg, thinking)
+    generate(
+        llama,
+        &mut ctx,
+        tokens.len() as i32,
+        temperature,
+        cfg,
+        thinking,
+    )
 }
 
 fn run_generation_mtmd(
-    primary: &PrimaryModel,
+    model: &LocalModel,
     cfg: &GenConfig,
     prompt: &str,
     images: &[Arc<Vec<u8>>],
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
-    let model = &primary.model;
-    let mtmd = &primary.mtmd;
+    let llama = &model.model;
+    let mtmd = &model.mtmd;
 
     let bitmaps = images
         .iter()
@@ -218,7 +236,7 @@ fn run_generation_mtmd(
         .collect::<Result<Vec<_>, _>>()?;
     let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
 
-    let mut ctx = model.new_context(&primary.backend, context_params(cfg))?;
+    let mut ctx = llama.new_context(&model.backend, context_params(cfg))?;
 
     let chunks = mtmd.tokenize(
         MtmdInputText {
@@ -232,7 +250,7 @@ fn run_generation_mtmd(
     let n_past = chunks.eval_chunks(mtmd, &ctx, 0, 0, cfg.batch_chunk as i32, true)?;
 
     log_prompt(prompt);
-    generate(model, &mut ctx, n_past, temperature, cfg, thinking)
+    generate(llama, &mut ctx, n_past, temperature, cfg, thinking)
 }
 
 fn generate(
@@ -245,7 +263,14 @@ fn generate(
 ) -> anyhow::Result<String> {
     let mut samplers: Vec<LlamaSampler> = Vec::new();
     if !DRY_BREAKS_LONG_STRINGS {
-        samplers.push(LlamaSampler::dry(model, 0.8, 1.75, 2, -1, ["\n", ":", "\"", "*"]));
+        samplers.push(LlamaSampler::dry(
+            model,
+            0.8,
+            1.75,
+            2,
+            -1,
+            ["\n", ":", "\"", "*"],
+        ));
     }
     samplers.push(LlamaSampler::temp(temperature));
     samplers.push(LlamaSampler::top_k(cfg.top_k));
@@ -296,7 +321,11 @@ fn generate(
         }
         emit_token!(token);
 
-        if !thinking_closed && out_bytes.windows(close_marker.len()).any(|w| w == close_marker) {
+        if !thinking_closed
+            && out_bytes
+                .windows(close_marker.len())
+                .any(|w| w == close_marker)
+        {
             thinking_closed = true;
         }
     }

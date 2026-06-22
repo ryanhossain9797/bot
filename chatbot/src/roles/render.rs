@@ -1,6 +1,6 @@
 //! Prompt assembly — turn a role's template + conversation inputs into the final prompt string.
-//! Option-b: all JSON is serialized here in Rust (no in-template `tojson`), then handed to
-//! minijinja as plain values.
+//! All JSON is serialized here in Rust (not via in-template `tojson`), then handed to minijinja as
+//! plain values.
 
 use std::io;
 
@@ -12,11 +12,27 @@ use crate::chat_format::{ChatMessage, ToolDefinition};
 
 struct Spaced;
 impl serde_json::ser::Formatter for Spaced {
-    fn begin_array_value<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
-        if first { Ok(()) } else { w.write_all(b", ") }
+    fn begin_array_value<W: ?Sized + io::Write>(
+        &mut self,
+        w: &mut W,
+        first: bool,
+    ) -> io::Result<()> {
+        if first {
+            Ok(())
+        } else {
+            w.write_all(b", ")
+        }
     }
-    fn begin_object_key<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
-        if first { Ok(()) } else { w.write_all(b", ") }
+    fn begin_object_key<W: ?Sized + io::Write>(
+        &mut self,
+        w: &mut W,
+        first: bool,
+    ) -> io::Result<()> {
+        if first {
+            Ok(())
+        } else {
+            w.write_all(b", ")
+        }
     }
     fn begin_object_value<W: ?Sized + io::Write>(&mut self, w: &mut W) -> io::Result<()> {
         w.write_all(b": ")
@@ -26,7 +42,9 @@ impl serde_json::ser::Formatter for Spaced {
 fn json_spaced<T: Serialize>(value: &T) -> String {
     let mut buf = Vec::new();
     value
-        .serialize(&mut serde_json::Serializer::with_formatter(&mut buf, Spaced))
+        .serialize(&mut serde_json::Serializer::with_formatter(
+            &mut buf, Spaced,
+        ))
         .expect("serializing to a Vec is infallible");
     String::from_utf8(buf).expect("serde_json emits valid utf-8")
 }
@@ -41,9 +59,9 @@ pub(super) fn render(
     inputs: &RenderInputs,
     flags: FormatFlags,
 ) -> anyhow::Result<String> {
-    let mut messages = Vec::with_capacity(inputs.messages.len() + 1);
-    messages.push(ChatMessage::system(system_prompt));
-    messages.extend(inputs.messages.iter().cloned());
+    let messages: Vec<ChatMessage> = std::iter::once(ChatMessage::system(system_prompt))
+        .chain(inputs.messages.iter().cloned())
+        .collect();
 
     let tools = inputs.tools.map(prepare_tools);
 

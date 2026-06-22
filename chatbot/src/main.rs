@@ -20,7 +20,6 @@ use crate::model_pack::Pack;
 use crate::roles::PrimaryRole;
 use crate::state_machines::conversation_state_machine::init_conversation_state_machine;
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
@@ -58,7 +57,9 @@ async fn main() -> anyhow::Result<!> {
     tokio::spawn(async {
         match externals::bash_container_external::ensure_worker_image().await {
             Ok(()) => println!("[startup] bash sandbox image ready"),
-            Err(e) => eprintln!("[startup] bash sandbox image prebuild failed: {e} (will retry on first use)"),
+            Err(e) => eprintln!(
+                "[startup] bash sandbox image prebuild failed: {e} (will retry on first use)"
+            ),
         }
     });
 

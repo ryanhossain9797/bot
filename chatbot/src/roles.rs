@@ -1,4 +1,4 @@
-mod engine;
+mod local_model;
 mod parsers;
 mod primary_role;
 mod render;
@@ -13,7 +13,7 @@ pub use primary_role::PrimaryRole;
 /// (system prompt, footer placement, sampling temperature), the loaded model itself, and the logic
 /// to turn conversation data into a prompt, run inference, and decode raw output back into structured
 /// pieces. Everything model-specific lives in files under the pack — the role loads them once. The
-/// render/parse/inference machinery lives in the `render`, `parse`, and `engine` submodules.
+/// render/parse/inference machinery lives in the `render`, `parsers`, and `local_model` submodules.
 ///
 /// The contract is deliberately location-agnostic: `generate` takes only a prompt and produces text,
 /// with no mention of a backend or any inference engine. A local role holds its model (and the
@@ -22,7 +22,8 @@ pub use primary_role::PrimaryRole;
 pub trait Role: Send + Sync {
     fn system_prompt(&self) -> &str;
     fn temperature(&self) -> f32;
-    /// Render the final prompt string from conversation inputs (option-b: JSON rendered in Rust).
+    /// Render the final prompt string from conversation inputs (JSON serialized in Rust, not via
+    /// in-template `tojson`).
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String>;
     /// Run inference on a rendered prompt and return the raw generated text. Takes `Arc<Self>` so it
     /// can move into a blocking inference task; everything else it needs, it already holds.

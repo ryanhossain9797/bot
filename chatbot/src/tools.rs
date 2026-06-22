@@ -42,7 +42,7 @@ impl ToolKind {
         }
     }
 
-        fn definition(&self) -> ToolDefinition {
+    fn definition(&self) -> ToolDefinition {
         let (description, parameters): (&'static str, Value) = match self {
             ToolKind::WebSearch => (
                 "Search the web — ONE focused topic per query; search one fact at a time, never pile attributes into a single query. Snippets only, usually not enough for specifics (dates, numbers, names, quotes) — open the best result with visit_url and read it before answering. For several facts, fire several single-topic searches in the same turn (parallel is fine).",
@@ -101,7 +101,11 @@ impl ToolKind {
         };
         ToolDefinition {
             kind: "function",
-            function: ToolDefFunction { name: self.wire_name(), description, parameters },
+            function: ToolDefFunction {
+                name: self.wire_name(),
+                description,
+                parameters,
+            },
         }
     }
 }
@@ -118,19 +122,25 @@ impl ToolType {
     /// Argument values as an order-preserving map of stringified values, ready to splice into a
     /// rendered tool call. (All current tools take single string args.)
     pub fn arguments_map(&self) -> Map<String, Value> {
-        let mut m = Map::new();
         match self {
-            ToolType::WebSearch { query } => { m.insert("query".to_string(), json!(query)); }
-            ToolType::VisitUrl { url } => { m.insert("url".to_string(), json!(url)); }
-            ToolType::RunBashCommand { command } => { m.insert("command".to_string(), json!(command)); }
-            ToolType::ResetBashContainer => {}
-            ToolType::ViewImage { path } => { m.insert("path".to_string(), json!(path)); }
-            ToolType::SendImageToUser { path } => { m.insert("path".to_string(), json!(path)); }
+            ToolType::WebSearch { query } => {
+                [("query".to_string(), json!(query))].into_iter().collect()
+            }
+            ToolType::VisitUrl { url } => [("url".to_string(), json!(url))].into_iter().collect(),
+            ToolType::RunBashCommand { command } => [("command".to_string(), json!(command))]
+                .into_iter()
+                .collect(),
+            ToolType::ResetBashContainer => Map::new(),
+            ToolType::ViewImage { path } => {
+                [("path".to_string(), json!(path))].into_iter().collect()
+            }
+            ToolType::SendImageToUser { path } => {
+                [("path".to_string(), json!(path))].into_iter().collect()
+            }
         }
-        m
     }
 
-            pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolType> {
+    pub fn bind(name: &str, arguments: &str) -> anyhow::Result<ToolType> {
         let kind = ToolKind::iter()
             .find(|k| k.wire_name() == name)
             .ok_or_else(|| anyhow::anyhow!("model called an unknown tool: {name}"))?;
