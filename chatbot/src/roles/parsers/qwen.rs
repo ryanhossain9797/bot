@@ -23,8 +23,6 @@ pub(super) struct QwenParser;
 
 impl Parser for QwenParser {
     fn parse(&self, raw: &str, close_marker: &str) -> ParsedResponse {
-        // The prompt primes the think block, so the output starts inside it: reasoning runs up to
-        // the first `close_marker`; if it never closes, the whole output is reasoning.
         let (reasoning, body) = match raw.split_once(close_marker) {
             Some((r, b)) => (r.trim().to_string(), b),
             None => (raw.trim().to_string(), ""),
@@ -44,8 +42,6 @@ impl Parser for QwenParser {
             tool_calls.push(ParsedToolCall { name, arguments });
         }
 
-        // Content is the body minus complete tool-call blocks; a dangling (truncated)
-        // `<tool_call>` is dropped, never shown to the user as raw text.
         let mut content = CALL_RE.replace_all(body, "").into_owned();
         if let Some(idx) = content.find("<tool_call>") {
             content.truncate(idx);

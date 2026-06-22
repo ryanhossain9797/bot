@@ -37,8 +37,6 @@ async fn init_env() -> anyhow::Result<Env> {
     send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
     let pack = Pack::load()?;
     println!("Loaded model pack from: {}", pack.dir.display());
-    // The backend is the one process singleton; it's cloned into each local model and otherwise
-    // lives nowhere — the roles keep it alive.
     let backend = Arc::new(LlamaBackend::init()?);
     let primary =
         Arc::new(tokio::task::spawn_blocking(move || PrimaryRole::load(backend, &pack)).await??);

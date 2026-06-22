@@ -49,7 +49,6 @@ pub enum MessageImage {
     Dehydrated { byte_size: usize },
 }
 
-// Persisted state must never carry raw image bytes: always serialize as Dehydrated (size only).
 impl Serialize for MessageImage {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let byte_size = match self {

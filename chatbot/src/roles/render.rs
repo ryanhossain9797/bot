@@ -10,9 +10,6 @@ use serde::Serialize;
 use super::{FormatFlags, RenderInputs};
 use crate::chat_format::{ChatMessage, ToolDefinition};
 
-// minja (llama.cpp) serializes JSON like Python's json.dumps: ", " / ": " separators, insertion
-// order, no HTML escaping. This formatter (+ the preserve_order feature) reproduces it, keeping the
-// tools block in the model's training distribution.
 struct Spaced;
 impl serde_json::ser::Formatter for Spaced {
     fn begin_array_value<W: ?Sized + io::Write>(&mut self, w: &mut W, first: bool) -> io::Result<()> {
