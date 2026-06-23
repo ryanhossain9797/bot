@@ -1,19 +1,47 @@
 # Sandbox image the bot spawns (one per conversation) to run model-authored bash.
 # No host access — the bot's harness runs it with --cap-drop ALL, resource caps, and no mounts.
 # Built locally and kept on the host (workers spawn with network on but can't pull at spawn time).
+#
+# Preloaded with the stacks the model reaches for every session (see #148-era log mining):
+# a Python data stack, the .NET 8 SDK, and the native libs headless Chromium / IronPdf need —
+# so it doesn't re-download a 200 MB+ SDK and re-pip the same packages on every conversation.
 FROM debian:trixie-slim
 
+# Make the throwaway system Python pip-installable without the PEP 668 dance, and keep matplotlib
+# headless by default so the model doesn't have to set the Agg backend by hand.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
+    MPLBACKEND=Agg \
+    DOTNET_ROOT=/usr/share/dotnet \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    PATH=/usr/share/dotnet:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash \
-    coreutils \
-    ca-certificates \
-    curl \
-    git \
-    jq \
-    python3 \
-    python3-pip \
-    python3-venv \
+    # shell + basics
+    bash coreutils ca-certificates curl wget git jq file unzip zip procps \
+    # python
+    python3 python3-pip python3-venv \
+    # image tooling + fonts (matplotlib / Pillow / headless Chromium text)
+    imagemagick fonts-dejavu fonts-liberation \
+    # node
+    nodejs npm \
+    # native deps for headless Chromium / IronPdf, plus .NET globalization (ICU)
+    libgbm1 libnss3 libatk-bridge2.0-0 libxcomposite1 libcups2 libicu-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Common Python data stack the model installs on nearly every run.
+RUN pip install --no-cache-dir numpy pandas matplotlib pillow requests
+
+# .NET 8 SDK to /usr/share/dotnet via the official installer (latest 8.0 patch).
+RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/share/dotnet \
+    && rm /tmp/dotnet-install.sh \
+    # Symlink onto the default PATH so dotnet resolves even in a login shell that resets PATH.
+    && ln -s /usr/share/dotnet/dotnet /usr/local/bin/dotnet \
+    # Warm the first-run experience and the base runtime/ref packs so the first real build is fast.
+    && dotnet new console -o /tmp/warmup \
+    && dotnet build /tmp/warmup -c Release >/dev/null \
+    && rm -rf /tmp/warmup
 
 WORKDIR /work
 CMD ["sleep", "infinity"]
