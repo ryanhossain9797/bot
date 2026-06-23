@@ -310,7 +310,7 @@ async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResu
         ToolType::ResetBashContainer => reset_bash(conversation_id).await,
         ToolType::ViewImage { path } => {
             let image = pull_image(conversation_id, &path).await?;
-            let note = format!("Image '{path}' loaded — shown below. Only you can see it; it is hidden from the user.");
+            let note = format!("Image '{path}' loaded — shown below. This is for your eyes only: the user has NOT seen this image.");
             Ok(ToolResultData {
                 actual: note.clone(),
                 simplified: note,
@@ -320,7 +320,7 @@ async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResu
         }
         ToolType::SendImageToUser { path } => {
             let image = pull_image(conversation_id, &path).await?;
-            let note = format!("Image '{path}' sent to the user — they can see it in the chat, and you can see it too.");
+            let note = format!("Image '{path}' sent to the user — Both you and the user can see it.");
             Ok(ToolResultData {
                 actual: note.clone(),
                 simplified: note,

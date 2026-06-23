@@ -79,7 +79,7 @@ impl ToolKind {
                 json!({ "type": "object", "properties": {}, "required": [] }),
             ),
             ToolKind::ViewImage => (
-                "Look at an image file from your bash sandbox so you can see its contents. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). Only you see it — it is hidden from the user. Use it to inspect plots, screenshots, or downloaded images before deciding what to do next.",
+                "Privately inspect an image yourself — the user does NOT see it. To show or send an image to the user, use send_image_to_user instead. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). Use it to inspect plots, screenshots, or downloaded images before deciding what to do next.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -89,7 +89,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::SendImageToUser => (
-                "Send an image file from your bash sandbox to the user in this chat. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). It goes to the user — they see it in the chat — and you see it too (it counts as a message you sent). Use it to deliver plots, generated images, or processed pictures.",
+                "Show an image to the user — send an image file from your bash sandbox into this chat so they can see it. This is how you display/share/show an image to the user; use it whenever they ask to see one. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). It goes to the user — they see it in the chat — and you see it too (it counts as a message you sent). Use it to deliver plots, generated images, or processed pictures.",
                 json!({
                     "type": "object",
                     "properties": {
