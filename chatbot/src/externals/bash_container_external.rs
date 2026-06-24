@@ -1,6 +1,8 @@
 use crate::types::conversation::ToolResultData;
 use crate::types::media::{Image, MessageImage};
+use std::process::Stdio;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 const WORKER_IMAGE: &str = "bot-worker:latest";
@@ -84,7 +86,7 @@ async fn spawn_worker(name: &str) -> Result<(), String> {
     ))
 }
 
-fn clip(s: &str) -> String {
+pub(crate) fn clip(s: &str) -> String {
     const MAX: usize = 20_000;
     if s.chars().count() > MAX {
         let head: String = s.chars().take(MAX).collect();
@@ -127,6 +129,57 @@ pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImag
         mime: format.to_mime_type().to_string(),
     };
     Ok(MessageImage::Hydrated(image).downscaled())
+}
+
+/// Read a text file from the sandbox, returning its raw contents (lossy UTF-8). The tool layer
+/// adds line numbers, slicing, and the content hash.
+pub async fn read_file(conversation_id: &str, path: &str) -> Result<String, String> {
+    let name = worker_name(conversation_id);
+    ensure_worker(&name).await?;
+
+    let out = docker(&["exec", &name, "cat", "--", path]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not read '{path}': {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Overwrite a file in the sandbox with `content` (creates or truncates). Used by edit_file once
+/// it has applied the replacement in memory.
+pub async fn write_file(conversation_id: &str, path: &str, content: &str) -> Result<(), String> {
+    let name = worker_name(conversation_id);
+    ensure_worker(&name).await?;
+
+    let mut child = Command::new("docker")
+        .args(["exec", "-i", &name, "tee", "--", path])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to invoke docker: {e}"))?;
+
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(content.as_bytes())
+        .await
+        .map_err(|e| format!("failed to stream '{path}' to sandbox: {e}"))?;
+
+    let out = child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("failed to write '{path}': {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not write '{path}': {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 pub async fn reset_bash(conversation_id: &str) -> Result<ToolResultData, String> {

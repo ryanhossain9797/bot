@@ -1,6 +1,8 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
-    externals::bash_container_external::{pull_image, reset_bash, run_bash},
+    externals::bash_container_external::{
+        clip, pull_image, read_file, reset_bash, run_bash, write_file,
+    },
     types::conversation::{
         ToolCall, ToolResultData, ToolType, ConversationAction,
         MAX_SEARCH_DESCRIPTION_LENGTH,
@@ -8,6 +10,9 @@ use crate::{
 };
 use rs_trafilatura::extract;
 use serde::Deserialize;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 #[derive(Deserialize)]
 struct SearxngResponse {
@@ -302,7 +307,42 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData::text(actual, simplified))
 }
 
-async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResultData, String> {
+/// A stable content fingerprint for optimistic concurrency: `read_file` stamps it into
+/// `metadata["file_hash"]`, and a later `edit_file` checks the live file against the version that
+/// was last read. Non-cryptographic (std SipHash) — change-detection only, not integrity.
+fn content_hash(content: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Render `count` lines starting at 1-based `from` with absolute line-number prefixes
+/// (`<n>\t<line>`), mirroring the Read convention so `edit_file`'s exact-string matching can strip
+/// the prefix. Numbers reflect true file position even when a slice is requested.
+fn number_lines(content: &str, from: usize, count: usize) -> String {
+    content
+        .lines()
+        .enumerate()
+        .skip(from.saturating_sub(1))
+        .take(count)
+        .map(|(i, line)| format!("{}\t{}", i + 1, line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A git-style diff of an exact-string replacement: removed text as `-` lines, new text as `+`
+/// lines. `old_string` already carries the context the model chose, so no extra context is added.
+fn render_diff(old: &str, new: &str) -> String {
+    let removed = old.lines().map(|l| format!("- {l}"));
+    let added = new.lines().map(|l| format!("+ {l}"));
+    removed.chain(added).collect::<Vec<_>>().join("\n")
+}
+
+async fn run_tool(
+    conversation_id: &str,
+    tool_type: ToolType,
+    expected_file_hash: Option<String>,
+) -> Result<ToolResultData, String> {
     match tool_type {
         ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
@@ -316,6 +356,7 @@ async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResu
                 simplified: note,
                 image_for_assistant: Some(image),
                 image_for_user: None,
+                metadata: HashMap::new(),
             })
         }
         ToolType::SendImageToUser { path } => {
@@ -326,14 +367,70 @@ async fn run_tool(conversation_id: &str, tool_type: ToolType) -> Result<ToolResu
                 simplified: note,
                 image_for_assistant: None,
                 image_for_user: Some(image),
+                metadata: HashMap::new(),
+            })
+        }
+        ToolType::ReadFile { path, offset, limit } => {
+            let content = read_file(conversation_id, &path).await?;
+            let hash = content_hash(&content);
+            let from = offset.unwrap_or(1).max(1);
+            let count = limit.unwrap_or(usize::MAX);
+            let numbered = number_lines(&content, from, count);
+            let body = if numbered.is_empty() {
+                format!("(file '{path}' is empty, or the requested line range has no lines)")
+            } else {
+                clip(&numbered)
+            };
+            Ok(ToolResultData {
+                actual: body.clone(),
+                simplified: body,
+                image_for_assistant: None,
+                image_for_user: None,
+                metadata: HashMap::from([("file_hash".to_string(), hash)]),
+            })
+        }
+        ToolType::EditFile { path, old_string, new_string } => {
+            let content = read_file(conversation_id, &path).await?;
+            let live_hash = content_hash(&content);
+            match expected_file_hash {
+                None => return Err(format!(
+                    "'{path}' hasn't been read yet — call read_file on it before editing."
+                )),
+                Some(h) if h != live_hash => return Err(format!(
+                    "'{path}' has changed since you last read it — call read_file on it again before editing."
+                )),
+                Some(_) => {}
+            }
+            match content.matches(&old_string).count() {
+                0 => return Err(format!(
+                    "old_string was not found in '{path}'. Copy it exactly from read_file output (without the line-number prefixes)."
+                )),
+                1 => {}
+                n => return Err(format!(
+                    "old_string appears {n} times in '{path}' — include more surrounding context so it matches exactly once."
+                )),
+            }
+            let updated = content.replacen(&old_string, &new_string, 1);
+            write_file(conversation_id, &path, &updated).await?;
+            let body = format!("Edited '{path}':\n{}", render_diff(&old_string, &new_string));
+            Ok(ToolResultData {
+                actual: body.clone(),
+                simplified: body,
+                image_for_assistant: None,
+                image_for_user: None,
+                metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
             })
         }
     }
 }
 
-pub async fn execute_tool(conversation_id: String, tool_call: ToolCall) -> ConversationAction {
+pub async fn execute_tool(
+    conversation_id: String,
+    tool_call: ToolCall,
+    expected_file_hash: Option<String>,
+) -> ConversationAction {
     let tool_name = tool_call.tool_type.wire_name().to_string();
-    let result = run_tool(&conversation_id, tool_call.tool_type).await;
+    let result = run_tool(&conversation_id, tool_call.tool_type, expected_file_hash).await;
     if let Err(err) = &result {
         eprintln!("[tool {tool_name} id {}] failed: {err}", tool_call.id);
     }

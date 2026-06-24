@@ -274,7 +274,7 @@ impl LLMInput {
                             ),
                         }
                     }
-                    messages.push(ChatMessage::tool(r.id.clone(), parts.join("\n")));
+                    messages.push(ChatMessage::tool(r.call.id.clone(), parts.join("\n")));
                 }
 
                 if !delivered.is_empty() {
@@ -306,6 +306,16 @@ pub enum ToolType {
     ResetBashContainer,
     ViewImage { path: String },
     SendImageToUser { path: String },
+    ReadFile {
+        path: String,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    },
+    EditFile {
+        path: String,
+        old_string: String,
+        new_string: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -316,7 +326,9 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    pub id: String,
+    /// The originating call, carried into history so a result can be matched back to the tool and
+    /// its arguments (e.g. the `path` an `EditFile`/`ReadFile` acted on) without parsing prose.
+    pub call: ToolCall,
     pub data: ToolResultData,
 }
 
@@ -380,6 +392,26 @@ pub enum HistoryEntry {
     Output(LLMResponse),
 }
 
+/// The most recently observed content hash for `path`, scanning history newest-first for a
+/// `read_file`/`edit_file` result on that path. This is the optimistic-concurrency token: an edit
+/// is valid only if the live file still matches it. `None` means the path hasn't been read within
+/// the recent window — the model must read it first.
+pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
+    history.iter().rev().find_map(|entry| match entry {
+        HistoryEntry::Input(LLMInput::ToolResults(results, _)) => {
+            results.iter().rev().find_map(|r| match &r.call.tool_type {
+                ToolType::ReadFile { path: p, .. } | ToolType::EditFile { path: p, .. }
+                    if p == path =>
+                {
+                    r.data.metadata.get("file_hash").map(String::as_str)
+                }
+                _ => None,
+            })
+        }
+        _ => None,
+    })
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
     ForceReset,
@@ -405,16 +437,21 @@ pub struct ToolResultData {
     pub image_for_assistant: Option<MessageImage>,
     /// Image delivered straight to the chat, bypassing the model.
     pub image_for_user: Option<MessageImage>,
+    /// Structured side-channel for data the model doesn't read but the system uses. Kept in
+    /// history, never rendered into the prompt. E.g. `read_file`/`edit_file` set `"file_hash"`
+    /// so a later edit can be checked against the version that was last observed.
+    pub metadata: HashMap<String, String>,
 }
 
 impl ToolResultData {
-    /// Text-only result — no images for either side. The common case.
+    /// Text-only result — no images for either side, no metadata. The common case.
     pub fn text(actual: String, simplified: String) -> Self {
         ToolResultData {
             actual,
             simplified,
             image_for_assistant: None,
             image_for_user: None,
+            metadata: HashMap::new(),
         }
     }
 }
