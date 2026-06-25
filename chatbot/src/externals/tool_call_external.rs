@@ -330,12 +330,43 @@ fn number_lines(content: &str, from: usize, count: usize) -> String {
         .join("\n")
 }
 
-/// A git-style diff of an exact-string replacement: removed text as `-` lines, new text as `+`
-/// lines. `old_string` already carries the context the model chose, so no extra context is added.
-fn render_diff(old: &str, new: &str) -> String {
-    let removed = old.lines().map(|l| format!("- {l}"));
-    let added = new.lines().map(|l| format!("+ {l}"));
-    removed.chain(added).collect::<Vec<_>>().join("\n")
+/// A git-style diff of an exact-string replacement, with a few unchanged context lines around the
+/// edit. The matched region is expanded to whole lines (shown as `-`), the replacement lines as
+/// `+`, and up to `CONTEXT_LINES` surrounding file lines as plain `  ` context.
+fn render_diff(content: &str, old: &str, new: &str) -> String {
+    const CONTEXT_LINES: usize = 3;
+
+    let Some(start) = content.find(old) else {
+        // Match was verified unique upstream; fall back to the bare block form just in case.
+        return old
+            .lines()
+            .map(|l| format!("- {l}"))
+            .chain(new.lines().map(|l| format!("+ {l}")))
+            .collect::<Vec<_>>()
+            .join("\n");
+    };
+    let end = start + old.len();
+
+    // Expand the match out to whole lines so partial-line edits still render cleanly.
+    let line_start = content[..start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = content[end..].find('\n').map_or(content.len(), |off| end + off);
+
+    let old_block = &content[line_start..line_end];
+    let new_block = format!("{}{new}{}", &content[line_start..start], &content[end..line_end]);
+
+    let before: Vec<&str> = content[..line_start].lines().collect();
+    let before_ctx = &before[before.len().saturating_sub(CONTEXT_LINES)..];
+    let after = content[line_end..].strip_prefix('\n').unwrap_or("");
+    let after_ctx = after.lines().take(CONTEXT_LINES);
+
+    before_ctx
+        .iter()
+        .map(|l| format!("  {l}"))
+        .chain(old_block.lines().map(|l| format!("- {l}")))
+        .chain(new_block.lines().map(|l| format!("+ {l}")))
+        .chain(after_ctx.map(|l| format!("  {l}")))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 async fn run_tool(
@@ -412,7 +443,7 @@ async fn run_tool(
             }
             let updated = content.replacen(&old_string, &new_string, 1);
             write_file(conversation_id, &path, &updated).await?;
-            let body = format!("Edited '{path}':\n{}", render_diff(&old_string, &new_string));
+            let body = format!("Edited '{path}':\n{}", render_diff(&content, &old_string, &new_string));
             Ok(ToolResultData {
                 actual: body.clone(),
                 simplified: body,
