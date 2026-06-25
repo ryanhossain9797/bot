@@ -25,6 +25,22 @@ struct PathArgs {
     path: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ReadFileArgs {
+    path: String,
+    #[serde(default)]
+    offset: Option<usize>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditFileArgs {
+    path: String,
+    old_string: String,
+    new_string: String,
+}
+
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
     serde_json::from_str(arguments)
         .map_err(|e| anyhow::anyhow!("{name} arguments failed to bind: {e} — raw: {arguments}"))
@@ -39,6 +55,8 @@ impl ToolKind {
             ToolKind::ResetBashContainer => "reset_bash_container",
             ToolKind::ViewImage => "view_image",
             ToolKind::SendImageToUser => "send_image_to_user",
+            ToolKind::ReadFile => "read_file",
+            ToolKind::EditFile => "edit_file",
         }
     }
 
@@ -98,6 +116,30 @@ impl ToolKind {
                     "required": ["path"]
                 }),
             ),
+            ToolKind::ReadFile => (
+                "Read a text file from your bash sandbox — the SAME private Linux environment as run_bash_command. Returns the file's contents with line numbers. Reads the whole file by default; for a large file, pass offset and/or limit to read a slice.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path to the file inside your bash sandbox, e.g. \"/home/user/app/main.py\" or \"notes.txt\" (relative to the sandbox working directory)." },
+                        "offset": { "type": "integer", "description": "1-based line number to start reading from. Defaults to the first line." },
+                        "limit": { "type": "integer", "description": "Maximum number of lines to read, starting at offset. Defaults to the rest of the file." }
+                    },
+                    "required": ["path"]
+                }),
+            ),
+            ToolKind::EditFile => (
+                "Edit a text file in your bash sandbox by replacing an exact string. `old_string` must appear EXACTLY ONCE in the current file — include enough surrounding context to make it unique — and is replaced with `new_string`. Returns a diff of the change.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Path to the file inside your bash sandbox (the same one you read_file'd)." },
+                        "old_string": { "type": "string", "description": "The exact text to replace, copied from read_file output WITHOUT the line-number prefixes. Must match the file exactly (whitespace included) and be unique." },
+                        "new_string": { "type": "string", "description": "The text to put in its place. Use an empty string to delete the matched text." }
+                    },
+                    "required": ["path", "old_string", "new_string"]
+                }),
+            ),
         };
         ToolDefinition {
             kind: "function",
@@ -119,8 +161,8 @@ impl ToolType {
         ToolKind::from(self).wire_name()
     }
 
-    /// Argument values as an order-preserving map of stringified values, ready to splice into a
-    /// rendered tool call. (All current tools take single string args.)
+    /// Argument values as an order-preserving map, ready to splice into a rendered tool call.
+    /// Most tools take a single string arg; read_file also carries optional integer offset/limit.
     pub fn arguments_map(&self) -> Map<String, Value> {
         match self {
             ToolType::WebSearch { query } => {
@@ -137,6 +179,29 @@ impl ToolType {
             ToolType::SendImageToUser { path } => {
                 [("path".to_string(), json!(path))].into_iter().collect()
             }
+            ToolType::ReadFile {
+                path,
+                offset,
+                limit,
+            } => [
+                Some(("path".to_string(), json!(path))),
+                offset.as_ref().map(|n| ("offset".to_string(), json!(n))),
+                limit.as_ref().map(|n| ("limit".to_string(), json!(n))),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            ToolType::EditFile {
+                path,
+                old_string,
+                new_string,
+            } => [
+                ("path".to_string(), json!(path)),
+                ("old_string".to_string(), json!(old_string)),
+                ("new_string".to_string(), json!(new_string)),
+            ]
+            .into_iter()
+            .collect(),
         }
     }
 
@@ -162,6 +227,22 @@ impl ToolType {
             ToolKind::SendImageToUser => Ok(ToolType::SendImageToUser {
                 path: parse_args::<PathArgs>(name, arguments)?.path,
             }),
+            ToolKind::ReadFile => {
+                let args = parse_args::<ReadFileArgs>(name, arguments)?;
+                Ok(ToolType::ReadFile {
+                    path: args.path,
+                    offset: args.offset,
+                    limit: args.limit,
+                })
+            }
+            ToolKind::EditFile => {
+                let args = parse_args::<EditFileArgs>(name, arguments)?;
+                Ok(ToolType::EditFile {
+                    path: args.path,
+                    old_string: args.old_string,
+                    new_string: args.new_string,
+                })
+            }
         }
     }
 }

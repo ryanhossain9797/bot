@@ -3,7 +3,9 @@ use crate::externals::{
     message_external::{send_message, Attachment, OutboundMessage},
     tool_call_external::execute_tool,
 };
-use crate::types::conversation::{ToolResult, ToolResultData, MAX_TOOL_ROUNDS};
+use crate::types::conversation::{
+    latest_file_hash, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
+};
 use crate::{
     types::conversation::{
         Conversation, ConversationAction, ConversationConstructor, ConversationId,
@@ -144,9 +146,20 @@ fn apply_post_send(
             tool_rounds,
             tool_calls,
         } => {
+            let history = recent_conversation.history();
             let mut pending_tools = HashMap::new();
             for tool_call in tool_calls {
-                effects.enqueue_external(execute_tool(conversation_id.to_string(), tool_call.clone()));
+                let expected_file_hash = match &tool_call.tool_type {
+                    ToolType::EditFile { path, .. } => {
+                        latest_file_hash(&history, path).map(str::to_string)
+                    }
+                    _ => None,
+                };
+                effects.enqueue_external(execute_tool(
+                    conversation_id.to_string(),
+                    tool_call.clone(),
+                    expected_file_hash,
+                ));
                 pending_tools.insert(tool_call.id.clone(), tool_call);
             }
 
@@ -349,10 +362,7 @@ fn conversation_transition(
 
                 let results = completed_tools
                     .into_iter()
-                    .map(|(tool_call, data)| ToolResult {
-                        id: tool_call.id,
-                        data,
-                    })
+                    .map(|(call, data)| ToolResult { call, data })
                     .collect();
 
                 let mut pending = conversation.pending;
