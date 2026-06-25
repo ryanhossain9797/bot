@@ -117,7 +117,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::ReadFile => (
-                "Read a text file from your bash sandbox — the SAME private Linux environment as run_bash_command. Returns the file's contents with line numbers. Reads the whole file by default; for a large file, pass offset and/or limit to read a slice. You must read a file with this tool before you can change it with edit_file.",
+                "Read a text file from your bash sandbox — the SAME private Linux environment as run_bash_command. Returns the file's contents with line numbers. Reads the whole file by default; for a large file, pass offset and/or limit to read a slice.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -129,7 +129,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::EditFile => (
-                "Edit a text file in your bash sandbox by replacing an exact string. `old_string` must appear EXACTLY ONCE in the current file — include enough surrounding context to make it unique — and is replaced with `new_string`. You MUST read_file the file first, and it must not have changed since you read it (e.g. via run_bash_command); otherwise the edit is rejected and you must read_file it again. Returns a diff of the change.",
+                "Edit a text file in your bash sandbox by replacing an exact string. `old_string` must appear EXACTLY ONCE in the current file — include enough surrounding context to make it unique — and is replaced with `new_string`. Returns a diff of the change.",
                 json!({
                     "type": "object",
                     "properties": {
