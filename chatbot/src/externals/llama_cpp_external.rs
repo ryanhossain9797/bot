@@ -99,7 +99,7 @@ fn build_conversation(
     for entry in &history {
         match entry {
             HistoryEntry::Input(input) => {
-                let (msgs, bytes) = input.messages_and_media(marker);
+                let (msgs, bytes) = input.messages_and_media(marker, false);
                 messages.extend(msgs);
                 images.extend(bytes);
             }
@@ -107,7 +107,7 @@ fn build_conversation(
         }
     }
 
-    let (live_msgs, live_bytes) = new_input.messages_and_media(marker);
+    let (live_msgs, live_bytes) = new_input.messages_and_media(marker, true);
     messages.extend(live_msgs);
     images.extend(live_bytes);
 

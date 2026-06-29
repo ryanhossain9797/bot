@@ -7,7 +7,7 @@ top_k = 20
 top_p = 0.95
 
 [context]
-n_ctx = 32768
+n_ctx = 196608
 n_batch = 4096
 batch_chunk = 2048
 max_generation_tokens = 8192

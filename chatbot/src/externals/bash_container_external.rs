@@ -86,10 +86,15 @@ async fn spawn_worker(name: &str) -> Result<(), String> {
     ))
 }
 
-pub(crate) fn clip(s: &str) -> String {
-    const MAX: usize = 20_000;
-    if s.chars().count() > MAX {
-        let head: String = s.chars().take(MAX).collect();
+/// Truncation cap for a tool result's full `actual` form (rendered for the live turn).
+pub(crate) const ACTUAL_MAX: usize = 20_000;
+/// Truncation cap for the compact `simplified` form. Older tool results in history fall back
+/// to `simplified`; only the live turn keeps `actual`.
+pub(crate) const SIMPLIFIED_MAX: usize = 2_000;
+
+pub(crate) fn clip_to(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let head: String = s.chars().take(max).collect();
         format!("{head}\n…[output truncated]")
     } else {
         s.to_string()
@@ -101,12 +106,13 @@ pub async fn run_bash(conversation_id: &str, command: &str) -> Result<ToolResult
     ensure_worker(&name).await?;
 
     let out = docker(&["exec", &name, "bash", "-c", command]).await?;
-    let stdout = clip(&String::from_utf8_lossy(&out.stdout));
-    let stderr = clip(&String::from_utf8_lossy(&out.stderr));
+    let stdout = clip_to(&String::from_utf8_lossy(&out.stdout), ACTUAL_MAX);
+    let stderr = clip_to(&String::from_utf8_lossy(&out.stderr), ACTUAL_MAX);
     let code = out.status.code().unwrap_or(-1);
 
     let body = format!("exit code: {code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}");
-    Ok(ToolResultData::text(body.clone(), body))
+    let simplified = clip_to(&body, SIMPLIFIED_MAX);
+    Ok(ToolResultData::text(body, simplified))
 }
 
 pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImage, String> {
