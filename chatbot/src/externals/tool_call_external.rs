@@ -1,7 +1,7 @@
 use crate::{
     configuration::client_tokens::{BRAVE_SEARCH_TOKEN, SEARXNG_URL},
     externals::bash_container_external::{
-        clip, pull_image, read_file, reset_bash, run_bash, write_file,
+        clip_to, pull_image, read_file, reset_bash, run_bash, write_file, ACTUAL_MAX, SIMPLIFIED_MAX,
     },
     types::conversation::{
         ToolCall, ToolResultData, ToolType, ConversationAction,
@@ -410,11 +410,11 @@ async fn run_tool(
             let body = if numbered.is_empty() {
                 format!("(file '{path}' is empty, or the requested line range has no lines)")
             } else {
-                clip(&numbered)
+                clip_to(&numbered, ACTUAL_MAX)
             };
             Ok(ToolResultData {
-                actual: body.clone(),
-                simplified: body,
+                simplified: clip_to(&body, SIMPLIFIED_MAX),
+                actual: body,
                 image_for_assistant: None,
                 image_for_user: None,
                 metadata: HashMap::from([("file_hash".to_string(), hash)]),
@@ -445,8 +445,8 @@ async fn run_tool(
             write_file(conversation_id, &path, &updated).await?;
             let body = format!("Edited '{path}':\n{}", render_diff(&content, &old_string, &new_string));
             Ok(ToolResultData {
-                actual: body.clone(),
-                simplified: body,
+                simplified: clip_to(&body, SIMPLIFIED_MAX),
+                actual: body,
                 image_for_assistant: None,
                 image_for_user: None,
                 metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),

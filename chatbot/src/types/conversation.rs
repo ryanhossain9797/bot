@@ -236,7 +236,11 @@ impl LLMInput {
         }
     }
 
-    pub fn messages_and_media(&self, marker: &str) -> (Vec<ChatMessage>, Vec<Arc<Vec<u8>>>) {
+    pub fn messages_and_media(
+        &self,
+        marker: &str,
+        full: bool,
+    ) -> (Vec<ChatMessage>, Vec<Arc<Vec<u8>>>) {
         match self {
             LLMInput::ConversationMessage(msg) => {
                 let (content, bytes) = msg.content_and_media(marker);
@@ -249,8 +253,9 @@ impl LLMInput {
 
                 for r in results {
                     let mut parts: Vec<String> = Vec::new();
-                    if !r.data.actual.is_empty() {
-                        parts.push(r.data.actual.clone());
+                    let text = if full { &r.data.actual } else { &r.data.simplified };
+                    if !text.is_empty() {
+                        parts.push(text.clone());
                     }
                     if let Some(image) = &r.data.image_for_user {
                         match image.hydrated_bytes() {
