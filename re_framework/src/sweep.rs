@@ -44,15 +44,19 @@ where
                 let last = (rows.len() as i64) < BATCH;
                 all.extend(rows);
                 if last {
-                    break;
+                    return all;
                 }
             }
             Err(e) => {
                 println!("[sweep] {what} query failed (next pass retries): {e:#}");
-                break;
+                return all;
             }
         }
     }
+    println!(
+        "[sweep] {what} candidates clipped at {}; remainder picked up on later passes",
+        BATCH * MAX_PAGES
+    );
     all
 }
 

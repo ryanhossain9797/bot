@@ -62,14 +62,21 @@ pub(crate) fn wakers() -> &'static DashMap<String, Waker> {
 }
 
 pub fn register<SM: StateMachine>(env: SM::Env) {
+    assert!(
+        !handles().contains_key(&std::any::TypeId::of::<SM>()),
+        "state machine {} registered twice",
+        SM::name()
+    );
+    assert!(
+        !deliverers().contains_key(SM::name()) && !wakers().contains_key(SM::name()),
+        "two state machine types registered with the name {}",
+        SM::name()
+    );
     let leaked: &'static StateMachineHandle<SM> = Box::leak(Box::new(StateMachineHandle {
         entities: Arc::new(DashMap::new()),
         env: Arc::new(env),
     }));
-    let already = handles()
-        .insert(std::any::TypeId::of::<SM>(), leaked as &(dyn std::any::Any + Send + Sync))
-        .is_some();
-    assert!(!already, "state machine {} registered twice", SM::name());
+    handles().insert(std::any::TypeId::of::<SM>(), leaked as &(dyn std::any::Any + Send + Sync));
     wakers().insert(
         SM::name().to_string(),
         Box::new(|id_json| {
@@ -81,7 +88,7 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
             })
         }),
     );
-    let name_clash = deliverers().insert(
+    deliverers().insert(
         SM::name().to_string(),
         Box::new(|kind, id_json, payload_json, token| {
             Box::pin(async move {
@@ -104,8 +111,7 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
                 }
             })
         }),
-    ).is_some();
-    assert!(!name_clash, "two state machine types registered with the name {}", SM::name());
+    );
 }
 
 pub fn handle<SM: StateMachine>() -> &'static StateMachineHandle<SM> {
@@ -125,10 +131,10 @@ pub fn handle<SM: StateMachine>() -> &'static StateMachineHandle<SM> {
 
 struct SoleMailboxHandle<SM: StateMachine> {
     sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
-    generation: u64,
+    epoch: u64,
 }
 
-fn next_generation() -> u64 {
+fn next_epoch() -> u64 {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
@@ -151,14 +157,14 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         match self.entities.entry(id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
-                let generation = next_generation();
+                let epoch = next_epoch();
                 let (tx, rx) = mpsc::unbounded_channel();
                 tokio::spawn(run_entity::<SM>(
                     persisted,
                     rx,
-                    EntityContext::new(&id, generation, Arc::clone(&self.env), Arc::clone(&self.entities)),
+                    EntityContext::new(&id, epoch, Arc::clone(&self.env), Arc::clone(&self.entities)),
                 ));
-                slot.insert(SoleMailboxHandle { sender: tx, generation });
+                slot.insert(SoleMailboxHandle { sender: tx, epoch });
             }
         }
     }
@@ -375,7 +381,7 @@ struct EntityContext<SM: StateMachine> {
     id: SM::Id,
     id_string: String,
     id_json: String,
-    generation: u64,
+    epoch: u64,
     env: Arc<SM::Env>,
     entities: Arc<DashMap<String, SoleMailboxHandle<SM>>>,
 }
@@ -383,7 +389,7 @@ struct EntityContext<SM: StateMachine> {
 impl<SM: StateMachine> EntityContext<SM> {
     fn new(
         id: &SM::Id,
-        generation: u64,
+        epoch: u64,
         env: Arc<SM::Env>,
         entities: Arc<DashMap<String, SoleMailboxHandle<SM>>>,
     ) -> Self {
@@ -391,7 +397,7 @@ impl<SM: StateMachine> EntityContext<SM> {
             id: id.clone(),
             id_string: id.get_id_string(),
             id_json: serde_json::to_string(id).expect("EntityId serializes"),
-            generation,
+            epoch,
             env,
             entities,
         }
@@ -509,7 +515,7 @@ async fn run_entity<SM: StateMachine>(
                             "CAS CONFLICT (expected v{version}, store has {actual:?}) — dropping actor; state rebuilds from store"
                         ));
                         ctx.entities
-                            .remove_if(&ctx.id_string, |_, current| current.generation == ctx.generation);
+                            .remove_if(&ctx.id_string, |_, current| current.epoch == ctx.epoch);
                         break;
                     }
                     Err(e) => {

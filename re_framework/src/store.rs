@@ -457,11 +457,15 @@ async fn save_in_tx(
     if let Some(token) = &write.dedup {
         let changed = conn
             .execute(
-                "UPDATE call_dedup SET caller_generation = ?, last_seq = ?
+                "UPDATE call_dedup SET
+                     last_seq = CASE WHEN caller_generation = ? THEN MAX(last_seq, ?) ELSE ? END,
+                     caller_generation = ?
                  WHERE machine = ? AND id = ? AND caller_machine = ? AND caller_id = ?",
                 (
                     token.sender_generation,
                     token.seq,
+                    token.seq,
+                    token.sender_generation,
                     write.machine,
                     write.id_string.as_str(),
                     token.sender_machine,
@@ -659,6 +663,29 @@ mod tests {
             .is_duplicate("TestMachine", "e1", &CallToken { sender_generation: 6, seq: 0, ..token.clone() })
             .await
             .expect("dup"));
+
+        let regress = CallToken { seq: 6, ..token.clone() };
+        assert!(matches!(
+            store.save(&write(1, 2, Vec::new(), Some(regress)), "\"e1\"").await.expect("save"),
+            SaveOutcome::Ok
+        ));
+        assert!(store.is_duplicate("TestMachine", "e1", &token).await.expect("dup"));
+        assert!(!store
+            .is_duplicate("TestMachine", "e1", &CallToken { seq: 8, ..token.clone() })
+            .await
+            .expect("dup"));
+
+        let next_gen = CallToken { sender_generation: 6, seq: 0, ..token.clone() };
+        assert!(matches!(
+            store.save(&write(2, 2, Vec::new(), Some(next_gen.clone())), "\"e1\"").await.expect("save"),
+            SaveOutcome::Ok
+        ));
+        assert!(store.is_duplicate("TestMachine", "e1", &next_gen).await.expect("dup"));
+        assert!(!store
+            .is_duplicate("TestMachine", "e1", &CallToken { sender_generation: 6, seq: 1, ..token.clone() })
+            .await
+            .expect("dup"));
+        assert!(store.is_duplicate("TestMachine", "e1", &token).await.expect("dup"));
 
         store.ack_outbox("TestMachine", "e1", GEN + 1, 0).await.expect("stale ack");
         store.fail_outbox("TestMachine", "e1", GEN + 1, 1, "boom").await.expect("stale fail");
