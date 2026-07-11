@@ -1,135 +1,176 @@
-# Bot Hive - AI Chatbot with Local LLM
+# Bot Hive — AI Chatbot with a Local LLM
 
-A Rust-based Discord chatbot powered by a local Large Language Model, featuring an agent-based architecture and type-safe state machine framework.
+A Rust Discord chatbot powered by a **local** Large Language Model, built on a homegrown,
+persistent, actor-style state-machine framework.
 
 ## Overview
 
-This is a multi-component project that provides a sophisticated AI chatbot experience:
-
-- **Discord Integration**: Responds to direct messages and mentions
-- **Local LLM**: Uses Qwen3.6-35B-A3B running locally via llama.cpp
-- **Tool Calling**: Supports multi-turn tool execution (weather, web search, etc.)
-- **Memory**: A rolling window of the most recent conversation entries, persisted per conversation
-- **Type-Safe Architecture**: Built on a custom Rust state machine framework
+- **Discord Integration**: Responds to direct messages and to @mentions in group channels
+- **Local LLM**: Runs Qwen3.6-35B-A3B in-process via `llama.cpp` (Vulkan/ROCm), no external API
+- **Multimodal**: Accepts image attachments and can inspect or send images back
+- **Tool Calling**: Multi-round tool execution (web search, page fetch, a private bash sandbox,
+  file read/edit)
+- **Memory**: A 30-entry rolling window of recent conversation, persisted per conversation
+- **Event-sourced actors**: Each conversation is a state machine whose state is persisted to disk
+  on every transition (persist-then-effect), so it survives restarts and self-recovers
 
 ## Project Structure
 
 ```
 bot/
-├── chatbot/                 # Main Discord chatbot application
+├── chatbot/                      # Main Discord chatbot application
 │   ├── src/
-│   │   ├── agents/         # Primary agent (single model, structured output)
-│   │   ├── externals/       # External operations (LLM, tools, memory)
-│   │   ├── models/         # Data models
-│   │   ├── services/       # External service integrations
-│   │   ├── state_machines/ # User and bot state machines
-│   │   ├── agents.rs       # Agent abstraction + inference
-│   │   ├── main.rs         # Entry point
-│   │   └── configuration.rs
-│   ├── grammars/           # GBNF grammars for structured output
-│   ├── models/             # GGUF model files
-│   ├── model_reference/    # Per-family prompt/tool-calling notes (e.g. qwen.md)
-│   ├── resources/          # Session caches and resources
-│   ├── Dockerfile          # Multi-stage build
-│   ├── Dockerfile.base     # Base image with Rust + llama.cpp
-│   ├── Cargo.toml          # Workspace member
-│   └── Justfile            # Build automation
+│   │   ├── roles/                # The render → infer → parse pipeline behind a Role trait
+│   │   │   ├── primary_role.rs   #   PrimaryRole — the "Terminal Alpha Beta" persona
+│   │   │   ├── local_model.rs    #   Loaded GGUF model + the llama.cpp decode loop
+│   │   │   ├── render.rs         #   Prompt assembly (minijinja over the pack's chat template)
+│   │   │   └── parsers/          #   Per-family output parsers (e.g. qwen.rs), picked by name
+│   │   ├── externals/            # Async side effects: LLM inference, tools, message sending
+│   │   ├── services/             # Platform integrations (discord.rs)
+│   │   ├── state_machines/       # ConversationMachine — the conversation lifecycle
+│   │   ├── types/                # Domain types (conversation, media)
+│   │   ├── model_pack.rs         # Loads a "model pack" folder (weights + template + manifest)
+│   │   ├── chat_format.rs        # OpenAI-ish wire shapes the chat template renders from
+│   │   ├── tools.rs              # Tool definitions + argument binding
+│   │   ├── configuration.rs      # Tokens / feature flags (gitignored; see .template)
+│   │   └── main.rs               # Entry point
+│   ├── models/                   # Model packs (GGUF weights + mmproj + template + manifest.toml)
+│   ├── Dockerfile / Dockerfile.base
+│   └── Justfile                  # Build & deploy automation
 │
-├── framework/              # Reusable state machine library
-└── probe/                  # Minimal local CLI to visualize raw model behavior (dev tool)
+├── re_framework/                 # The state-machine framework (actors + persistence)
+├── probe/                        # Dev tool: visualize raw model behavior
+└── extractor/                    # Dev tool: dump a GGUF's chat template + metadata
 ```
 
 ## Components
 
 ### Chatbot (`chatbot/`)
 
-The main application that orchestrates:
+- **DiscordService** ([services/discord.rs](chatbot/src/services/discord.rs)): handles gateway
+  events via `serenity`, normalizes mentions to `(id) Name` form, downloads image attachments, and
+  routes each message into the conversation state machine.
+- **ConversationMachine** ([state_machines/](chatbot/src/state_machines/conversation_state_machine.rs)):
+  the single state machine, keyed by `(Platform, channel_id)`. Drives the whole turn.
+- **PrimaryRole** ([roles/](chatbot/src/roles.rs)): owns the model and the full render →
+  infer → parse pipeline. A single model decides and emits its tool calls directly — there is no
+  separate translation/executor agent.
 
-- **DiscordService**: Handles WebSocket events and HTTP via `serenity`
-- **LlamaCppService**: Manages local LLM inference with session caching
-- **Primary Agent**: Single model that decides and emits the structured tool call directly
-  (the former separate "executor" translation agent has been removed)
+#### Model packs
+
+Everything model-specific lives in a **model pack**: a self-contained folder holding the GGUF
+weights, the multimodal projector, our chat template, and a `manifest.toml` of knobs (sampling,
+context size, reasoning marker, which parser to use). Swap the folder via the `MODEL_PACK_DIR`
+environment variable and restart to change models — nothing model-specific is compiled in. See
+[chatbot/models/qwen-qwen3-6-35b-a3b/](chatbot/models/qwen-qwen3-6-35b-a3b/).
 
 #### Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `message-user` | Send a response to the user |
-| `get-weather` | Look up weather for a city |
-| `web-search` | Search the web for information |
-| `visit-url` | Fetch and extract content from a URL |
+| `web_search` | Search the web (SearxNG backend) — snippets only |
+| `visit_url` | Fetch a page and extract its readable text |
+| `run_bash_command` | Run a command in a private, per-conversation Linux (Docker) sandbox |
+| `reset_bash_container` | Wipe the sandbox and start fresh |
+| `read_file` | Read a text file from the sandbox (line-numbered, sliceable) |
+| `edit_file` | Exact-string replace in a sandbox file, with optimistic-concurrency checks |
+| `view_image` | Privately inspect a sandbox image (the user does **not** see it) |
+| `send_image_to_user` | Send a sandbox image into the chat (the user sees it) |
 
-### Framework (`framework/`)
+The user-facing reply itself is **not** a tool — the model emits it as its message content
+directly; tool calls run alongside or after it.
 
-A reusable Rust library providing:
+### Framework (`re_framework/`)
 
-- **Type-safe State Machines**: Compile-time safety for state transitions
-- **Scheduled Operations**: Time-based wakeups
-- **Entity Handles**: Actor-style message passing
+A minimal typed actor system. You implement the `StateMachine` trait with associated types
+(`State`, `Id`, `Action`, `Construction`, `Env`) and four functions (`construct`, `transition`,
+`schedule`, `handle`).
+
+- **`StateMachineHandle`**: a registry (`DashMap<id → mailbox>`); `maybe_construct` / `act` /
+  `delete`. Each live entity is a `tokio` task with an mpsc mailbox; entities lazily rehydrate from
+  disk on first access.
+- **`Effects`**: transitions don't perform side effects directly — they *enqueue* them.
+  `enqueue_external(future)` runs an async op and feeds its result back as an action;
+  `enqueue_action` pokes another machine. Effects fire only *after* state is persisted.
+- **Persistence**: every transition atomically writes state to `framework_db/<Machine>/<id>.json`
+  before any effect runs. A failed write aborts the transition.
+- **`Scheduled`**: an entity can declare a timed wakeup (used here for a force-reset watchdog).
 
 ## Architecture
 
-### Agent Flow
+### Conversation flow
 
 ```
-User Message → DiscordService → ConversationStateMachine → PrimaryAgent
-                                                    ↓
-                              ┌─────────────────────┴─────────────────────┐
-                              ↓                                           ↓
-                      message-user                                  Tool Call
-                              ↓                                           ↓
-                      DiscordService                              (execute tool)
-                              ↓                                           ↓
-                              └─────────────────────┬─────────────────────┘
-                                                    ↓
-                                            back to PrimaryAgent
-                                                    ↓
-                                              Final Response → DiscordService
+Discord message
+     │
+     ▼
+ConversationMachine ── NewMessage ──▶ (queue into `pending`)
+     │
+     ▼
+AwaitingLLMDecision ──▶ get_llm_decision (render prompt, run inference, parse)
+     │
+     ▼
+LLMDecisionResult
+     ├── reply text ─▶ SendingMessage ─▶ Discord
+     └── tool calls ─▶ RunningTools ─▶ (execute concurrently)
+                             │
+                             ▼
+                   feed results back ─▶ AwaitingLLMDecision  (up to MAX_TOOL_ROUNDS = 10)
+                             │
+                             ▼
+                           Idle
 ```
 
-### State Machine Framework
+The state machine persists after each step and schedules a 10-minute `ForceReset` watchdog for any
+non-idle state, so a stuck conversation self-recovers.
 
-The framework provides:
-- `StateMachineHandle`: Send actions to a state machine by ID
-- `Transition`: Define state transitions with side effects
-- `Schedule`: Time-based wakeups for delayed actions
-- `Activity`: Actions, scheduled wakeups, or deletion
+### Roles: render → infer → parse
+
+The `Role` trait is deliberately location-agnostic — `generate` takes a prompt and returns text,
+with no mention of a backend. `PrimaryRole` holds identity (system prompt, temperature, thinking
+policy); the `LocalModel` under it holds the model's own facts (template, sampling, reasoning
+marker, parser) loaded from the pack. A future remote role could satisfy the same contract with an
+HTTP call.
 
 ## Building
 
 ### Prerequisites
 
-- Docker with buildx
-- Discord bot token
-
-### Quick Build
-
-```bash 
-cd chatbot
-just build_base
-just deploy_local
-```
+- Docker (with a GPU runtime; the Justfile targets an AMD/ROCm host)
+- A Discord bot token
+- A SearxNG instance for `web_search` (JSON format enabled)
+- A model pack under `chatbot/models/` (GGUF weights + mmproj + template + `manifest.toml`)
 
 ### Configuration
 
 1. Copy `chatbot/src/configuration.rs.template` to `chatbot/src/configuration.rs`
-2. Add your Discord token
+2. Fill in your `DISCORD_TOKEN`, `SEARXNG_URL`, and feature flags
 3. Rebuild the image
+
+### Build & deploy (from `chatbot/`)
+
+```bash
+just build_base      # base image: Rust toolchain + llama.cpp
+just deploy_local    # build the app image and (re)start the `bot` container
+```
+
+`run_local` mounts the model pack read-only and sets `MODEL_PACK_DIR` accordingly. The bot runs
+with host networking and mounts the Docker socket so it can spin up per-conversation bash sandboxes.
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PRIMARY_MODEL_PATH` | Path to GGUF model | `models/Qwen3.6-35B-A3B-Q8_0.gguf` |
+| `MODEL_PACK_DIR` | Path to the model pack folder | `./models/qwen-qwen3-6-35b-a3b` |
 | `RUST_LOG` | Log level | `info` |
 
 ## Dependencies
 
-### Runtime
-
-- **llama-cpp-2**: Local LLM inference (Vulkan support)
-- **serenity**: Discord API client
-- **tokio**: Async runtime
+- **llama-cpp-2**: local LLM inference with multimodal (`mtmd`) support
+- **serenity**: Discord client
+- **tokio**: async runtime
+- **minijinja**: chat-template rendering
+- **dashmap**: the framework's entity registry
 
 ## License
 
