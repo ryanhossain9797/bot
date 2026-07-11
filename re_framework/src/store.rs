@@ -206,7 +206,12 @@ impl Store {
         finish_tx(&conn, result).await
     }
 
-    /// Has this exact call already been applied? (Receiver-side check before transitioning.)
+    /// Has this call already been applied? (Receiver-side check before transitioning.)
+    /// Monotonic: any seq at or below the slot is a duplicate. Sound because a dispatcher
+    /// never advances past a row without a definitive Applied/Duplicate/Rejected verdict,
+    /// so every seq below the slot was already resolved — and it makes redelivery of an
+    /// older row (ack that gave up, orphaned dispatcher racing its successor) a no-op
+    /// instead of a double-apply, which strict equality could not guarantee.
     pub async fn is_duplicate(
         &self,
         machine: &'static str,
@@ -223,7 +228,7 @@ impl Store {
             .await
             .context("dedup lookup")?;
         match rows.next().await.context("dedup lookup row")? {
-            Some(row) => Ok(row.get::<i64>(0).context("last_seq column")? == token.seq),
+            Some(row) => Ok(row.get::<i64>(0).context("last_seq column")? >= token.seq),
             None => Ok(false),
         }
     }
@@ -261,17 +266,21 @@ impl Store {
 
     /// Sweep: entities whose sender outbox has un-failed rows older than the cutoff.
     /// Returns (machine, sender_id_json) pairs — the sweep wakes them; it never executes.
+    /// Stable ordering + offset let the sweep page past a stuck head instead of starving
+    /// everything behind it.
     pub async fn stalled_outbox_senders(
         &self,
         cutoff_ms: i64,
         limit: i64,
+        offset: i64,
     ) -> anyhow::Result<Vec<(String, String)>> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
                 "SELECT DISTINCT sender_machine, sender_id_json FROM outbox
-                 WHERE failure IS NULL AND created_at < ? LIMIT ?",
-                (cutoff_ms, limit),
+                 WHERE failure IS NULL AND created_at < ?
+                 ORDER BY sender_machine, sender_id_json LIMIT ? OFFSET ?",
+                (cutoff_ms, limit, offset),
             )
             .await
             .context("stalled outbox senders")?;
@@ -283,13 +292,14 @@ impl Store {
     }
 
     /// Sweep: entities whose persisted timer deadline passed the cutoff.
-    pub async fn due_timers(&self, cutoff_ms: i64, limit: i64) -> anyhow::Result<Vec<(String, String)>> {
+    pub async fn due_timers(&self, cutoff_ms: i64, limit: i64, offset: i64) -> anyhow::Result<Vec<(String, String)>> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
                 "SELECT machine, id_json FROM entities
-                 WHERE next_tick_on IS NOT NULL AND next_tick_on < ? LIMIT ?",
-                (cutoff_ms, limit),
+                 WHERE next_tick_on IS NOT NULL AND next_tick_on < ?
+                 ORDER BY machine, id LIMIT ? OFFSET ?",
+                (cutoff_ms, limit, offset),
             )
             .await
             .context("due timers")?;
@@ -352,6 +362,14 @@ impl Store {
             )
             .await
             .context("delete dedup")?;
+            // also the trail it left as a CALLER in other entities' slots — a recreated
+            // sender restarts at seq 0, and a stale last_seq would swallow its first sends
+            conn.execute(
+                "DELETE FROM call_dedup WHERE caller_machine = ? AND caller_id = ?",
+                (machine, id_string),
+            )
+            .await
+            .context("delete caller-side dedup")?;
             Ok(SaveOutcome::Ok)
         }
         .await;
@@ -611,10 +629,15 @@ mod tests {
         );
         let far_future = chrono::Utc::now().timestamp_millis() + 3_600_000;
         assert_eq!(
-            store.stalled_outbox_senders(far_future, 10).await.expect("stalled"),
+            store.stalled_outbox_senders(far_future, 10, 0).await.expect("stalled"),
             vec![("TestMachine".to_string(), "\"e1\"".to_string())]
         );
         assert!(store.is_duplicate("TestMachine", "e1", &token).await.expect("dup"));
+        // monotonic: anything at or below the slot is a duplicate; above it is fresh
+        assert!(store
+            .is_duplicate("TestMachine", "e1", &CallToken { seq: 6, ..token.clone() })
+            .await
+            .expect("dup"));
         assert!(!store
             .is_duplicate("TestMachine", "e1", &CallToken { seq: 8, ..token.clone() })
             .await
@@ -624,7 +647,11 @@ mod tests {
         store.ack_outbox("TestMachine", "e1", 0).await.expect("ack");
         store.fail_outbox("TestMachine", "e1", 1, "boom").await.expect("fail");
         assert!(store.pending_outbox("TestMachine", "e1").await.expect("pending").is_empty());
-        assert!(store.stalled_outbox_senders(far_future, 10).await.expect("stalled").is_empty());
+        assert!(store.stalled_outbox_senders(far_future, 10, 0).await.expect("stalled").is_empty());
+
+        // deleting the CALLER clears the dedup trail it left on other entities
+        store.delete("Caller", "c9").await.expect("delete caller");
+        assert!(!store.is_duplicate("TestMachine", "e1", &token).await.expect("dup"));
     }
 
     #[tokio::test]
@@ -635,7 +662,7 @@ mod tests {
             .await
             .expect("insert");
 
-        let due = |cutoff| store.due_timers(cutoff, 10);
+        let due = |cutoff| store.due_timers(cutoff, 10, 0);
         assert_eq!(due(2_000).await.expect("due"), vec![("TestMachine".to_string(), "\"e1\"".to_string())]);
         assert!(due(500).await.expect("due").is_empty(), "not yet due");
 

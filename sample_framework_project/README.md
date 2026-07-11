@@ -22,6 +22,12 @@ work: tool add 2 3        → [work] (turn 1) add returned: 5
 exit                      → quit
 ```
 
+This package is also the framework's failure-scenario harness: `tests/framework_scenarios.rs`
+encodes the findings of the #188 adversarial review (construct double-dispatch, stale-seq
+redelivery, rows wedged behind live actors, poison-on-unregistered-machine, delete/recreate
+dedup corruption, name collisions) as regression tests, injecting crash leftovers straight
+into the SQLite file. Run with `cargo test -p sample_framework_project`.
+
 State lives in `./framework_db/sample.db` (Turso; standard SQLite file — inspectable with
 `python3 -c "import sqlite3; ..."`). Tables: `entities` (state + version + outbox seq),
 `outbox` (durable entity→entity actions), `call_dedup` (receiver-side idempotency).
@@ -33,7 +39,7 @@ What to try:
 - **Crash recovery of internal actions** — every user message sends a durable action to the
   singleton `StatsMachine` through the transactional outbox. Kill the process between a
   conversation's commit and the stats delivery (or inject a row into `outbox` while stopped):
-  on the next start, `[recovery] woke N entities` redispatches it and stats catches up.
+  on the next start, `[sweep] woke N entities` redispatches it and stats catches up.
   Redeliver the same row twice and dedup absorbs it — no double-count.
 - **CAS as the transaction guarantee** — edit an entity's `version` in the DB while the app
   runs and send it a message: the write conflicts, the actor logs `CAS CONFLICT` and drops,

@@ -3522,7 +3522,9 @@ dependencies = [
  "chrono",
  "re_framework",
  "serde",
+ "serde_json",
  "tokio",
+ "turso",
 ]
 
 [[package]]

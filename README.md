@@ -84,7 +84,7 @@ directly; tool calls run alongside or after it.
 
 A minimal typed actor system. You implement the `StateMachine` trait with associated types
 (`State`, `Id`, `Action`, `Construction`, `Env`) and four functions (`construct`, `transition`,
-`schedule`, `handle`).
+`schedule`, `name`).
 
 - **`StateMachineHandle`**: per-machine actor registry (`DashMap<id → mailbox>`); `maybe_construct`
   / `act` / `act_maybe_construct` / `delete`. Machines register once at startup
