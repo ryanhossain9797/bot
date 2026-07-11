@@ -48,8 +48,12 @@ async fn main() -> anyhow::Result<()> {
                     .map(|(conv, text)| (conv.trim(), text.trim()))
                     .unwrap_or(("main", line));
                 let id = ConversationId(conv.to_string());
-                ConversationMachine::handle().maybe_construct(ConversationInit { id: id.clone() }).await;
-                ConversationMachine::handle().act(id, ConversationAction::UserMessage(text.to_string())).await;
+                ConversationMachine::handle()
+                    .act_maybe_construct(
+                        ConversationInit { id },
+                        ConversationAction::UserMessage(text.to_string()),
+                    )
+                    .await;
             }
         }
     }

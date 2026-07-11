@@ -61,6 +61,10 @@ impl StateMachine for ConversationMachine {
             .get()
             .expect("ConversationMachine not initialized")
     }
+
+    fn name() -> &'static str {
+        "ConversationMachine"
+    }
 }
 
 pub fn init_conversation_state_machine(env: Env) {

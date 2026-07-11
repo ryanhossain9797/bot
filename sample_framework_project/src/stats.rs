@@ -103,4 +103,8 @@ impl StateMachine for StatsMachine {
     fn handle() -> &'static StateMachineHandle<StatsMachine> {
         STATS.get().expect("StatsMachine not initialized")
     }
+
+    fn name() -> &'static str {
+        "StatsMachine"
+    }
 }

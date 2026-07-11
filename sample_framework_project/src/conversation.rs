@@ -119,6 +119,10 @@ impl StateMachine for ConversationMachine {
             .get()
             .expect("ConversationMachine not initialized")
     }
+
+    fn name() -> &'static str {
+        "ConversationMachine"
+    }
 }
 
 fn conversation_transition(

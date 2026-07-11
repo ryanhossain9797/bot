@@ -1,6 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use crate::store::{store, CallToken, LoadedEntity, OutboxRow, SaveOutcome, TransitionWrite};
+use crate::store::{store, CallToken, OutboxRow, SaveOutcome, TransitionWrite};
 use chrono::Utc;
 use dashmap::DashMap;
 use std::future::Future;
@@ -32,6 +32,22 @@ enum DeliveryOutcome {
 
 /// Dropped ack (receiver died mid-processing) or infra failure — retry the delivery.
 struct TransientDelivery(String);
+
+/// A parsed entity row image: the unit that flows from store to actor and back.
+struct Persisted<SM: StateMachine> {
+    state: SM::State,
+    version: i64,
+    next_seq: i64,
+}
+
+enum LoadStatus {
+    /// Actor is now live (was already, or just spawned from its row).
+    Live,
+    /// No row in the store.
+    Absent,
+    /// Row exists but its state doesn't deserialize (logged where detected).
+    Corrupt,
+}
 
 type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
 type Deliverer = Box<dyn Fn(String, String, CallToken) -> DeliverFuture + Send + Sync>;
@@ -85,18 +101,16 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// Spawn an actor for already-parsed state unless one is already live. All I/O happened
+    /// Spawn an actor for a parsed row image unless one is already live. All I/O happened
     /// before this; the entry guard is held only for the sync check-and-insert (the narrowed lock).
-    fn spawn_if_vacant(&self, id: SM::Id, state: SM::State, version: i64, next_seq: i64, extra_rows: Vec<OutboxRow>) {
+    fn spawn_if_vacant(&self, id: SM::Id, persisted: Persisted<SM>, extra_rows: Vec<OutboxRow>) {
         use dashmap::mapref::entry::Entry as DEntry;
         match self.entities.entry(id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let (tx, rx) = mpsc::unbounded_channel();
                 tokio::spawn(run_entity::<SM>(
-                    state,
-                    version,
-                    next_seq,
+                    persisted,
                     rx,
                     EntityContext::new(&id, Arc::clone(&self.env), Arc::clone(&self.entities)),
                     extra_rows,
@@ -106,27 +120,49 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
+    /// The one load→parse→spawn path. After `Ok(Live)` the actor is guaranteed live
+    /// (already was, or just spawned from its row); `Corrupt` is logged here so the
+    /// interim reset policy stays single-sourced.
+    async fn ensure_live(&self, id: &SM::Id, key: &str) -> anyhow::Result<LoadStatus> {
+        if self.entities.contains_key(key) {
+            return Ok(LoadStatus::Live);
+        }
+        match store().load(SM::name(), key).await? {
+            None => Ok(LoadStatus::Absent),
+            Some(loaded) => match serde_json::from_str::<SM::State>(&loaded.state_json) {
+                Ok(state) => {
+                    let persisted = Persisted {
+                        state,
+                        version: loaded.version,
+                        next_seq: loaded.next_outbox_seq,
+                    };
+                    self.spawn_if_vacant(id.clone(), persisted, Vec::new());
+                    Ok(LoadStatus::Live)
+                }
+                Err(e) => {
+                    log_transition::<SM>(&format!("stored state failed to deserialize: {e}"));
+                    Ok(LoadStatus::Corrupt)
+                }
+            },
+        }
+    }
+
     pub async fn maybe_construct(&self, construction: SM::Construction) {
         let id = construction.get_id().clone();
         let key = id.get_id_string();
-        if self.entities.contains_key(&key) {
-            return;
-        }
-        match store().load::<SM>(&id).await {
+        match self.ensure_live(&id, &key).await {
             Err(e) => log_transition::<SM>(&format!("construct aborted — load failed: {e:#}")),
-            Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
-                Some(state) => self.spawn_if_vacant(id, state, loaded.version, loaded.next_outbox_seq, Vec::new()),
-                None => {
-                    // interim policy (#186): corrupt state resets to a fresh construct;
-                    // proper corruption handling arrives with state versioning
-                    log_transition::<SM>("resetting entity — stored state unparseable");
-                    match store().delete(SM::name(), &key).await {
-                        Ok(()) => self.construct_fresh(id, key, construction).await,
-                        Err(e) => log_transition::<SM>(&format!("reset failed — construct aborted: {e:#}")),
-                    }
+            Ok(LoadStatus::Live) => {}
+            Ok(LoadStatus::Absent) => self.construct_fresh(id, key, construction).await,
+            Ok(LoadStatus::Corrupt) => {
+                // interim policy (#186): corrupt state resets to a fresh construct;
+                // proper corruption handling arrives with state versioning
+                log_transition::<SM>("resetting entity — stored state unparseable");
+                match store().delete(SM::name(), &key).await {
+                    Ok(()) => self.construct_fresh(id, key, construction).await,
+                    Err(e) => log_transition::<SM>(&format!("reset failed — construct aborted: {e:#}")),
                 }
-            },
-            Ok(None) => self.construct_fresh(id, key, construction).await,
+            }
         }
     }
 
@@ -143,19 +179,22 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             .await
         {
             Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
-            Ok(SaveOutcome::Conflict { .. }) => match store().load::<SM>(&id).await {
-                Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
-                    Some(existing) => {
-                        self.spawn_if_vacant(id, existing, loaded.version, loaded.next_outbox_seq, Vec::new())
-                    }
-                    None => log_transition::<SM>("construct raced another corrupt row; dropping construction"),
-                },
-                _ => log_transition::<SM>("construct raced a delete; dropping construction"),
+            Ok(SaveOutcome::Conflict { .. }) => match self.ensure_live(&id, &key).await {
+                Ok(LoadStatus::Live) => {}
+                Ok(LoadStatus::Absent) => log_transition::<SM>("construct raced a delete; dropping construction"),
+                Ok(LoadStatus::Corrupt) => {
+                    log_transition::<SM>("construct raced another corrupt row; dropping construction")
+                }
+                Err(e) => log_transition::<SM>(&format!("construct aborted — reload failed: {e:#}")),
             },
             Ok(SaveOutcome::Ok) => {
                 let initial_rows = rows_from_drafts(0, &effects.actions);
-                let next_seq = effects.actions.len() as i64;
-                self.spawn_if_vacant(id, state, 0, next_seq, initial_rows);
+                let persisted = Persisted {
+                    state,
+                    version: 0,
+                    next_seq: effects.actions.len() as i64,
+                };
+                self.spawn_if_vacant(id, persisted, initial_rows);
                 for external in effects.externals {
                     tokio::spawn(external);
                 }
@@ -171,30 +210,35 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 Ok(()) => return,
                 Err(back) => back,
             };
-            match store().load::<SM>(&id).await {
+            match self.ensure_live(&id, &key).await {
                 Err(e) => {
                     log_transition::<SM>(&format!("act dropped — load failed: {e:#}"));
                     return;
                 }
-                Ok(None) => {
+                Ok(LoadStatus::Live) => {}
+                Ok(LoadStatus::Absent) => {
                     let Envelope::Act(action) = &envelope else { unreachable!("act sends Act") };
                     eprintln!(
                         "[warn] action {action:?} for unconstructed entity {key}; dropping (maybe_construct must precede act)"
                     );
                     return;
                 }
-                Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
-                    Some(state) => {
-                        self.spawn_if_vacant(id.clone(), state, loaded.version, loaded.next_outbox_seq, Vec::new())
-                    }
-                    None => {
-                        log_transition::<SM>("act dropped — stored state unparseable (resets on next maybe_construct)");
-                        return;
-                    }
-                },
+                Ok(LoadStatus::Corrupt) => {
+                    log_transition::<SM>("act dropped — stored state unparseable (resets on next maybe_construct)");
+                    return;
+                }
             }
         }
         log_transition::<SM>("act dropped — actor kept vanishing (raced deletes?)");
+    }
+
+    /// Construct-if-absent, then act: the everyday frontend entry point (subject's
+    /// ActMaybeConstruct). `act` alone still exists for actions to entities that must
+    /// already exist (e.g. externals feeding results back).
+    pub async fn act_maybe_construct(&self, construction: SM::Construction, action: SM::Action) {
+        let id = construction.get_id().clone();
+        self.maybe_construct(construction).await;
+        self.act(id, action).await;
     }
 
     /// Deliver a durable outbox row's action and wait for the receiver's verdict.
@@ -216,19 +260,17 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 }
                 Err(back) => back,
             };
-            match store().load::<SM>(&id).await {
+            match self.ensure_live(&id, &key).await {
                 Err(e) => return Err(TransientDelivery(format!("load failed: {e:#}"))),
-                Ok(None) => return Ok(DeliveryOutcome::Rejected(format!("unconstructed entity {key}"))),
-                Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
-                    Some(state) => {
-                        self.spawn_if_vacant(id.clone(), state, loaded.version, loaded.next_outbox_seq, Vec::new())
-                    }
-                    None => {
-                        return Ok(DeliveryOutcome::Rejected(format!(
-                            "entity {key} state unparseable (resets on next maybe_construct)"
-                        )))
-                    }
-                },
+                Ok(LoadStatus::Live) => {}
+                Ok(LoadStatus::Absent) => {
+                    return Ok(DeliveryOutcome::Rejected(format!("unconstructed entity {key}")))
+                }
+                Ok(LoadStatus::Corrupt) => {
+                    return Ok(DeliveryOutcome::Rejected(format!(
+                        "entity {key} state unparseable (resets on next maybe_construct)"
+                    )))
+                }
             }
         }
         if !sent {
@@ -246,17 +288,13 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         let count = senders.len();
         for id_json in senders {
             match serde_json::from_str::<SM::Id>(&id_json) {
-                Ok(id) => match store().load::<SM>(&id).await {
-                    Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
-                        Some(state) => {
-                            self.spawn_if_vacant(id, state, loaded.version, loaded.next_outbox_seq, Vec::new())
-                        }
-                        None => log_transition::<SM>(&format!(
-                            "recover skipped {id_json} — state unparseable; rows remain parked"
-                        )),
-                    },
-                    Ok(None) => log_transition::<SM>(&format!(
+                Ok(id) => match self.ensure_live(&id, &id.get_id_string()).await {
+                    Ok(LoadStatus::Live) => {}
+                    Ok(LoadStatus::Absent) => log_transition::<SM>(&format!(
                         "pending outbox rows for deleted entity {id_json}; rows remain parked"
+                    )),
+                    Ok(LoadStatus::Corrupt) => log_transition::<SM>(&format!(
+                        "recover skipped {id_json} — state unparseable; rows remain parked"
                     )),
                     Err(e) => log_transition::<SM>(&format!("recover load failed for {id_json}: {e:#}")),
                 },
@@ -270,16 +308,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         self.entities.remove(&id.get_id_string());
         if let Err(e) = store().delete(SM::name(), &id.get_id_string()).await {
             log_transition::<SM>(&format!("delete — {e:#}"));
-        }
-    }
-}
-
-fn parse_state<SM: StateMachine>(loaded: &LoadedEntity) -> Option<SM::State> {
-    match serde_json::from_str(&loaded.state_json) {
-        Ok(state) => Some(state),
-        Err(e) => {
-            log_transition::<SM>(&format!("stored state failed to deserialize: {e}"));
-            None
         }
     }
 }
@@ -305,13 +333,16 @@ impl<SM: StateMachine> EntityContext<SM> {
 }
 
 async fn run_entity<SM: StateMachine>(
-    mut state: SM::State,
-    mut version: i64,
-    mut next_seq: i64,
+    persisted: Persisted<SM>,
     mut rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
     ctx: EntityContext<SM>,
     extra_rows: Vec<OutboxRow>,
 ) {
+    let Persisted {
+        mut state,
+        mut version,
+        mut next_seq,
+    } = persisted;
     let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<Vec<OutboxRow>>();
     tokio::spawn(run_dispatcher(SM::name(), ctx.id_string.clone(), dispatch_rx));
 
@@ -335,6 +366,9 @@ async fn run_entity<SM: StateMachine>(
                     .to_std()
                     .unwrap_or(std::time::Duration::ZERO);
 
+                // Firing the pre-computed action is safe only because this loop is the sole
+                // writer of `state` — nothing can change it between deriving and firing. Any
+                // future out-of-loop tick delivery (e.g. a sweep) must recompute from state.
                 tokio::time::timeout(delay, rx.recv())
                     .await
                     .unwrap_or_else(|_e| Some(Envelope::Act(scheduled.action)))

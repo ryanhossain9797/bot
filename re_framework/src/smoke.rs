@@ -4,6 +4,18 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration as StdDuration;
 
+async fn ensure_test_store() {
+    static INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    INIT.get_or_init(|| async {
+        let path = std::env::temp_dir().join(format!("re_fw_smoke_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        crate::store::init_turso_store(path.to_str().expect("utf8 temp path"))
+            .await
+            .expect("init smoke test store");
+    })
+    .await;
+}
+
 impl EntityId for String {
     fn get_id_string(&self) -> String {
         self.clone()
@@ -103,10 +115,14 @@ impl StateMachine for CounterMachine {
     fn handle() -> &'static StateMachineHandle<CounterMachine> {
         COUNTER.get().expect("CounterMachine not initialized")
     }
+    fn name() -> &'static str {
+        "CounterMachine"
+    }
 }
 
 #[tokio::test]
 async fn smoke() {
+    ensure_test_store().await;
     let obs = Arc::new(Mutex::new(Obs::default()));
     COUNTER
         .set(StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: Arc::clone(&obs) }))
@@ -189,6 +205,9 @@ impl StateMachine for PongerMachine {
     fn handle() -> &'static StateMachineHandle<PongerMachine> {
         PONGER.get().expect("PongerMachine not initialized")
     }
+    fn name() -> &'static str {
+        "PongerMachine"
+    }
 }
 
 struct PingerMachine;
@@ -238,10 +257,14 @@ impl StateMachine for PingerMachine {
     fn handle() -> &'static StateMachineHandle<PingerMachine> {
         PINGER.get().expect("PingerMachine not initialized")
     }
+    fn name() -> &'static str {
+        "PingerMachine"
+    }
 }
 
 #[tokio::test]
 async fn outbound() {
+    ensure_test_store().await;
     let received = Arc::new(Mutex::new(Vec::<i64>::new()));
     PONGER
         .set(StateMachineHandle::<PongerMachine>::new(RtEnv { received: Arc::clone(&received) }))

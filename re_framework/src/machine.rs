@@ -36,10 +36,7 @@ pub trait StateMachine: Sized + 'static {
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
     fn handle() -> &'static StateMachineHandle<Self>;
 
-    fn name() -> &'static str {
-        std::any::type_name::<Self>()
-            .rsplit("::")
-            .next()
-            .unwrap_or("?")
-    }
+    /// Persisted identity: keys `entities`/`outbox`/`call_dedup` rows and routes outbox
+    /// dispatch. Must be explicit and stable — renaming the Rust type must not change it.
+    fn name() -> &'static str;
 }

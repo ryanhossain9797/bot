@@ -48,6 +48,7 @@ async fn init_env() -> anyhow::Result<Env> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
+    re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
     init_conversation_state_machine(env);
 

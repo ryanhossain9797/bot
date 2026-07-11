@@ -90,10 +90,13 @@ A minimal typed actor system. You implement the `StateMachine` trait with associ
   `delete`. Each live entity is a `tokio` task with an mpsc mailbox; entities lazily rehydrate from
   disk on first access.
 - **`Effects`**: transitions don't perform side effects directly — they *enqueue* them.
-  `enqueue_external(future)` runs an async op and feeds its result back as an action;
-  `enqueue_action` pokes another machine. Effects fire only *after* state is persisted.
-- **Persistence**: every transition atomically writes state to `framework_db/<Machine>/<id>.json`
-  before any effect runs. A failed write aborts the transition.
+  `enqueue_action` sends a durable action to another machine (serialized into a transactional
+  outbox, redelivered across crashes, deduped at the receiver); `enqueue_external(future)` runs
+  an async op at-most-once and feeds its result back as an action. Effects fire only *after*
+  the transition commits.
+- **Persistence** (#186): a Turso (SQLite) database is the source of truth — one transaction per
+  transition commits {state CAS on `version` + outbox rows + dedup marker}. A CAS conflict drops
+  the in-memory actor, which rebuilds from the store on its next message.
 - **`Scheduled`**: an entity can declare a timed wakeup (used here for a force-reset watchdog).
 
 ## Architecture
