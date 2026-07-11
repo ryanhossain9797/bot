@@ -60,7 +60,6 @@ impl re_framework::EntityId for ConversationId {
     }
 }
 
-/// Rolling window of the most recent conversation entries — this is the bot's whole memory.
 pub const RECENT_WINDOW: usize = 30;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -76,7 +75,6 @@ impl RecentConversation {
         }
     }
 
-    /// Build from a flat history, keeping only the last `RECENT_WINDOW` entries.
     pub fn new(thoughts: String, history: Vec<HistoryEntry>) -> Self {
         let mut window: VecDeque<HistoryEntry> = history.into();
         while window.len() > RECENT_WINDOW {
@@ -122,18 +120,13 @@ impl Default for ConversationState {
     }
 }
 
-/// What `SendingMessage` does once its in-flight send is confirmed. Each variant
-/// carries exactly what its continuation needs — nothing more.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PostSend {
-    /// Nothing follows — go Idle.
     Nothing,
-    /// The message was delivered; now run these tools.
     CallTools {
         tool_rounds: usize,
         tool_calls: Vec<ToolCall>,
     },
-    /// The user-facing part was delivered; now relay the results to the LLM.
     SendToolResponse {
         tool_rounds: usize,
         results: Vec<ToolResult>,
@@ -331,14 +324,10 @@ pub struct ToolCall {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
-    /// The originating call, carried into history so a result can be matched back to the tool and
-    /// its arguments (e.g. the `path` an `EditFile`/`ReadFile` acted on) without parsing prose.
     pub call: ToolCall,
     pub data: ToolResultData,
 }
 
-/// What the model produced for the message slot. `Empty` is a deliberate non-reply
-/// (the [EMPTY] token, or a silent tool call); `Malformed` is a failed/blank generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Reply {
     Said(String),
@@ -397,10 +386,6 @@ pub enum HistoryEntry {
     Output(LLMResponse),
 }
 
-/// The most recently observed content hash for `path`, scanning history newest-first for a
-/// `read_file`/`edit_file` result on that path. This is the optimistic-concurrency token: an edit
-/// is valid only if the live file still matches it. `None` means the path hasn't been read within
-/// the recent window — the model must read it first.
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
     history.iter().rev().find_map(|entry| match entry {
         HistoryEntry::Input(LLMInput::ToolResults(results, _)) => {
@@ -438,18 +423,12 @@ pub enum ConversationAction {
 pub struct ToolResultData {
     pub actual: String,
     pub simplified: String,
-    /// Image fed back into the model alongside `actual` (multimodal tool result).
     pub image_for_assistant: Option<MessageImage>,
-    /// Image delivered straight to the chat, bypassing the model.
     pub image_for_user: Option<MessageImage>,
-    /// Structured side-channel for data the model doesn't read but the system uses. Kept in
-    /// history, never rendered into the prompt. E.g. `read_file`/`edit_file` set `"file_hash"`
-    /// so a later edit can be checked against the version that was last observed.
     pub metadata: HashMap<String, String>,
 }
 
 impl ToolResultData {
-    /// Text-only result — no images for either side, no metadata. The common case.
     pub fn text(actual: String, simplified: String) -> Self {
         ToolResultData {
             actual,

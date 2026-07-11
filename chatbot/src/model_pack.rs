@@ -2,13 +2,9 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-/// A model pack: a self-contained folder holding everything model-specific — the GGUF weights, the
-/// multimodal projector, our authored chat template, and a manifest of the knobs. Swap the folder
-/// (via `MODEL_PACK_DIR`) and restart to change models; nothing model-specific is compiled in.
 pub struct Pack {
     pub dir: PathBuf,
     pub manifest: Manifest,
-    /// Contents of the manifest's `template` file, read once at load.
     pub template: String,
 }
 
@@ -41,18 +37,15 @@ pub struct Context {
 pub struct Format {
     pub enable_thinking: bool,
     pub add_generation_prompt: bool,
-    /// Name of the response parser to use, resolved against the parser family in `roles::parsers`.
     pub parser: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Thinking {
-    /// The model's reasoning close marker, e.g. `</think>` (varies model to model).
     pub close_marker: String,
 }
 
 impl Pack {
-    /// Load a pack from a given directory. Which directory is the role's business, not the pack's.
     pub fn load_from(dir: &Path) -> anyhow::Result<Self> {
         let manifest_path = dir.join("manifest.toml");
         let manifest_text = std::fs::read_to_string(&manifest_path).map_err(|e| {

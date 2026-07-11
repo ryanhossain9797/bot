@@ -1,6 +1,3 @@
-//! Deterministic harness for re_framework (#186): a minimal chatbot replica with a
-//! fake brain and fake tool instead of an LLM. Runs natively — no containers, no GPU.
-//! State persists to ./framework_db (relative to the working directory).
 
 mod conversation;
 mod externals;
@@ -51,7 +48,6 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // grace so in-flight effect chains (decide → tool → reply) settle before the runtime drops
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     Ok(())
 }

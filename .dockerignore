@@ -1,31 +1,22 @@
-# Git
-# .git - kept for commit message extraction
 .gitignore
 
-# Rust build artifacts
 target/
 **/*.rs.bk
 
-# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS files
 .DS_Store
 Thumbs.db
 
-# Documentation (keep models README if needed)
 *.md
 !models/README.md
 
-# Large model file (already in base image, exclude from main build)
 models/
 
-# Debug files
 flycheck0/
 
-# Session files (runtime artifacts, should be generated fresh)
 *.session

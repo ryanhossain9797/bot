@@ -6,10 +6,6 @@ use std::pin::Pin;
 
 type Outbound = Pin<Box<dyn Future<Output = ()> + Send>>;
 
-/// Collected during a transition; executed by the runtime only after the transition commits.
-/// Two kinds with opposite guarantees (#186): internal entity→entity actions are first-class
-/// serialized data, persisted to the outbox atomically with the state change (effectively-once);
-/// external effects stay opaque futures, fired once post-commit, never retried (at-most-once).
 pub struct Effects<SM: StateMachine> {
     id: SM::Id,
     pub(crate) actions: Vec<OutboxDraft>,
@@ -34,7 +30,6 @@ impl<SM: StateMachine> Effects<SM> {
         });
     }
 
-    /// Durably construct another entity (no-op if it already exists).
     pub fn enqueue_construct<T: StateMachine>(&mut self, construction: T::Construction) {
         self.actions.push(OutboxDraft {
             kind: RowKind::Construct,
@@ -44,8 +39,6 @@ impl<SM: StateMachine> Effects<SM> {
         });
     }
 
-    /// Subject's ActMaybeConstruct: construct-if-absent, then deliver the action. Two rows;
-    /// per-sender dispatch is strictly serial, so the construct always lands first.
     pub fn enqueue_act_maybe_construct<T: StateMachine>(
         &mut self,
         construction: T::Construction,

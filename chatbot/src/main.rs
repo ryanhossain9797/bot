@@ -22,9 +22,6 @@ use crate::state_machines::conversation_state_machine::ConversationMachine;
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
-    /// The primary conversational role, owning its loaded model (and a handle to the shared
-    /// backend). Future roles (e.g. a memory compactor on its own model) become additional fields
-    /// here; local ones share the one backend via its `Arc`.
     primary: Arc<PrimaryRole>,
     announce_tool_use: bool,
 }

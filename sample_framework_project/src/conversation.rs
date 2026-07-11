@@ -1,6 +1,3 @@
-//! Minimal replica of the chatbot's ConversationMachine: same four-phase shape
-//! (Idle / AwaitingDecision / RunningTool / SendingReply), same decision loop
-//! (tool results go back through the brain), deterministic externals instead of an LLM.
 
 use crate::externals::{decide, execute_tool, send_reply, BrainInput};
 use crate::stats::{StatsAction, StatsId, StatsInit, StatsMachine};
@@ -10,8 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const IDLE_RESET_SECS: i64 = 60;
-/// Busy-phase dead-man's timer (the chatbot's ForceReset pattern): externals are at-most-once,
-/// so a lost decide/tool/send leaves the conversation stalled — this timer is the rescue.
 const RESCUE_SECS: i64 = 30;
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -203,7 +198,6 @@ fn conversation_transition(
             phase_since: Utc::now(),
         }),
 
-        // busy-phase rescue: a lost external stranded us; announce and return to service
         (
             Phase::AwaitingDecision | Phase::RunningTool { .. } | Phase::SendingReply,
             ConversationAction::ForceReset,

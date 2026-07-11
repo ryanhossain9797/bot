@@ -1,9 +1,3 @@
-//! Parser for the Qwen-family wire format — turns raw generation into reasoning / content / tool
-//! calls. This is one model family's output grammar (the `<tool_call><function=…><parameter=…>`
-//! pseudo-XML and a reasoning block closed by the model's marker); a role on a different family
-//! brings its own parser. Mirrors llama.cpp's parse_response_oaicompat on well-formed output
-//! (verified in probe), and degrades safely on truncated output: incomplete tool calls are dropped,
-//! never leaked into content. The reasoning `close_marker` is the model's, passed in by the role.
 
 use std::sync::LazyLock;
 
@@ -23,7 +17,6 @@ static PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
         .expect("PARAM_RE is a valid regex")
 });
 
-/// The Qwen-family parser. Zero-sized; held as a static in the parser family.
 pub(super) struct QwenParser;
 
 impl Parser for QwenParser {

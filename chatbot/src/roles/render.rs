@@ -1,6 +1,3 @@
-//! Prompt assembly — turn a role's template + conversation inputs into the final prompt string.
-//! All JSON is serialized here in Rust (not via in-template `tojson`), then handed to minijinja as
-//! plain values.
 
 use std::io;
 

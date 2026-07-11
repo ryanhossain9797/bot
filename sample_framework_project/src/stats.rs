@@ -1,6 +1,3 @@
-//! Second state-machine type: a singleton that counts handled messages.
-//! Exists to exercise entity→entity messaging (conversations enqueue actions to it)
-//! and the framework's design-for-N-machine-types goal.
 
 use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine};
 use serde::{Deserialize, Serialize};

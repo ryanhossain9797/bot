@@ -34,7 +34,5 @@ pub trait StateMachine: Sized + 'static {
     ) -> anyhow::Result<Self::State>;
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
 
-    /// Persisted identity: keys `entities`/`outbox`/`call_dedup` rows and routes outbox
-    /// dispatch. Must be explicit and stable — renaming the Rust type must not change it.
     fn name() -> &'static str;
 }

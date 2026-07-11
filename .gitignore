@@ -5,5 +5,4 @@ configuration.rs
 *.gguf
 *.session
 .fastembed_cache/
-# Runtime state machine persistence (POC)
 framework_db/

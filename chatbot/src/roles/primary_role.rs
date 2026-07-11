@@ -33,34 +33,22 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
 
 const TEMPERATURE: f32 = 1.0;
 
-/// The force-close nudge (the role's voice). The model's close marker is appended at runtime, so
-/// this stays marker-agnostic.
 const THINKING_NUDGE: &str =
     "Wait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.";
 const MAX_THINKING_TOKENS: usize = 2000;
 
-/// Where this role's model pack lives — the role's own choice. Read from `MODEL_PACK_DIR` if set (so
-/// a deploy can mount a different pack), else the bundled Qwen pack.
 const PACK_DIR_ENV: &str = "MODEL_PACK_DIR";
 const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
 
-/// Resolve the model pack directory — the role's own choice: `MODEL_PACK_DIR` if set, else the
-/// bundled Qwen pack. Single source for both loading the model and answering `Role::model_path`.
 fn pack_dir() -> PathBuf {
     std::env::var_os(PACK_DIR_ENV).map_or_else(|| DEFAULT_PACK_DIR.into(), PathBuf::from)
 }
 
-/// The primary conversational role (Terminal Alpha Beta). It's pure identity — a system prompt, a
-/// temperature, and a thinking nudge — layered over a loaded model. Everything format/model-specific
-/// (template, flags, sampling, reasoning marker, parser) lives in the `LocalModel`, since those are
-/// the model's nature, defined by its folder.
 pub struct PrimaryRole {
     model: LocalModel,
 }
 
 impl PrimaryRole {
-    /// Load the role: resolve its pack directory and load the pack and the model onto the shared
-    /// backend.
     pub fn load(backend: Arc<LlamaBackend>) -> anyhow::Result<Self> {
         let pack = Pack::load_from(&pack_dir())?;
         Ok(PrimaryRole { model: local_model::load_model(backend, &pack)? })

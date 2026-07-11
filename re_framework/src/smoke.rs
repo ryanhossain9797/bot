@@ -223,7 +223,6 @@ impl StateMachine for PingerMachine {
     type Construction = PingerInit;
     type Env = RtEnv;
     fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
-        // construct-if-absent + act, durably — subject's ActMaybeConstruct as two serial rows
         effects.enqueue_act_maybe_construct::<PongerMachine>(
             PongerInit { id: "pong1".to_string() },
             PongerAction::Pong(0),
@@ -261,11 +260,9 @@ async fn outbound() {
     let ponger = handle::<PongerMachine>();
     let pinger = handle::<PingerMachine>();
 
-    // a previous run's persisted state would make maybe_construct load instead of construct
     ponger.delete("pong1".to_string()).await;
     pinger.delete("ping1".to_string()).await;
 
-    // pong1 is NOT pre-constructed: pinger's construct effect creates it via the outbox
     pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
 
     pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;

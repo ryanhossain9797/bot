@@ -307,18 +307,12 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData::text(actual, simplified))
 }
 
-/// A stable content fingerprint for optimistic concurrency: `read_file` stamps it into
-/// `metadata["file_hash"]`, and a later `edit_file` checks the live file against the version that
-/// was last read. Non-cryptographic (std SipHash) — change-detection only, not integrity.
 fn content_hash(content: &str) -> String {
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
-/// Render `count` lines starting at 1-based `from` with absolute line-number prefixes
-/// (`<n>\t<line>`), mirroring the Read convention so `edit_file`'s exact-string matching can strip
-/// the prefix. Numbers reflect true file position even when a slice is requested.
 fn number_lines(content: &str, from: usize, count: usize) -> String {
     content
         .lines()
@@ -330,14 +324,10 @@ fn number_lines(content: &str, from: usize, count: usize) -> String {
         .join("\n")
 }
 
-/// A git-style diff of an exact-string replacement, with a few unchanged context lines around the
-/// edit. The matched region is expanded to whole lines (shown as `-`), the replacement lines as
-/// `+`, and up to `CONTEXT_LINES` surrounding file lines as plain `  ` context.
 fn render_diff(content: &str, old: &str, new: &str) -> String {
     const CONTEXT_LINES: usize = 3;
 
     let Some(start) = content.find(old) else {
-        // Match was verified unique upstream; fall back to the bare block form just in case.
         return old
             .lines()
             .map(|l| format!("- {l}"))
@@ -347,7 +337,6 @@ fn render_diff(content: &str, old: &str, new: &str) -> String {
     };
     let end = start + old.len();
 
-    // Expand the match out to whole lines so partial-line edits still render cleanly.
     let line_start = content[..start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = content[end..].find('\n').map_or(content.len(), |off| end + off);
 

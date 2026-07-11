@@ -1,11 +1,3 @@
-//! The stalled sweep (#186): a dedicated runtime component — deliberately NOT a state machine —
-//! that force-wakes entities whose durable state says work is owed and no live task is serving
-//! it: un-acked outbox rows past a grace age, and persisted timer deadlines past a grace age.
-//! It only wakes; the woken actor does all the work — a dead one spawns and runs its
-//! activation path (drain-on-activate, `schedule()` recompute), a live one is told to
-//! re-drain its outbox — so a spurious wake is a no-op. Boot recovery is simply the
-//! first pass run with zero grace: at startup no actor is live, so every pending row and due
-//! timer is by definition stalled.
 
 use crate::handle::wakers;
 use crate::store::store;
@@ -13,19 +5,14 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 const BATCH: i64 = 50;
-/// Candidate paging bound per pass (BATCH × MAX_PAGES rows scanned, BATCH wakes issued).
 const MAX_PAGES: i64 = 20;
 const OUTBOX_GRACE_MS: i64 = 60_000;
 const TIMER_GRACE_MS: i64 = 120_000;
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_INTERVAL: Duration = Duration::from_secs(240);
-/// Don't re-wake the same entity within this window (back-pressure against a stuck actor).
 const REWAKE_SUPPRESS: Duration = Duration::from_secs(60);
-/// Spread wakes out instead of stampeding after downtime.
 const WAKE_STAGGER: Duration = Duration::from_millis(25);
 
-/// Start the background sweeper. Call once at startup, after every `register::<SM>` call
-/// (rows for unregistered machines are skipped with a log until their machine registers).
 pub fn start_sweeper() {
     tokio::spawn(sweeper_loop());
 }
@@ -33,7 +20,6 @@ pub fn start_sweeper() {
 async fn sweeper_loop() {
     let mut recently_woken: HashMap<(String, String), Instant> = HashMap::new();
     let mut interval = MIN_INTERVAL;
-    // boot pass: zero grace — nothing is live yet, so anything pending is stalled
     let mut grace = (0, 0);
     loop {
         let woke = sweep_once(grace, &mut recently_woken).await;
@@ -46,8 +32,6 @@ async fn sweeper_loop() {
     }
 }
 
-/// Page through a candidate query so suppressed or stuck entries at the head can't
-/// permanently mask everything behind them (bounded by MAX_PAGES per pass).
 async fn paged<F, Fut>(what: &str, query: F) -> Vec<(String, String)>
 where
     F: Fn(i64) -> Fut,
