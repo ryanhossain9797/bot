@@ -78,7 +78,8 @@ impl EventHandler for Handler {
             id: conversation_id.clone(),
             is_group,
             bot_identity,
-        });
+        })
+        .await;
 
         let action = ConversationAction::NewMessage {
             msg,
@@ -87,7 +88,7 @@ impl EventHandler for Handler {
             images,
         };
 
-        handle.act(conversation_id, action);
+        handle.act(conversation_id, action).await;
     }
 }
 

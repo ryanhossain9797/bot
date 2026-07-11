@@ -17,14 +17,23 @@ sample_framework_project — deterministic re_framework harness (no LLM, no cont
   <text>               send to the default conversation `main`
   tool add <a> <b>     (as the text) makes the fake brain call the fake `add` tool
   exit                 quit
-State persists to ./framework_db — kill and restart to watch conversations resume.
+State persists to ./framework_db/sample.db (Turso) — kill and restart to watch conversations
+resume; kill between a conversation's commit and stats delivery to watch the outbox recover it.
 Idle conversations reset after 60s (persisted timer — survives a restart too).";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    re_framework::init_turso_store("framework_db/sample.db").await?;
     conversation::init_conversation_machine();
     stats::init_stats_machine();
-    StatsMachine::handle().maybe_construct(StatsInit { id: StatsId });
+    StatsMachine::handle().maybe_construct(StatsInit { id: StatsId }).await;
+
+    let recovered = ConversationMachine::handle().recover_pending().await?
+        + StatsMachine::handle().recover_pending().await?;
+    match recovered {
+        0 => {}
+        n => println!("[recovery] woke {n} entities with un-acked outbox rows"),
+    }
 
     println!("{BANNER}");
 
@@ -39,8 +48,8 @@ async fn main() -> anyhow::Result<()> {
                     .map(|(conv, text)| (conv.trim(), text.trim()))
                     .unwrap_or(("main", line));
                 let id = ConversationId(conv.to_string());
-                ConversationMachine::handle().maybe_construct(ConversationInit { id: id.clone() });
-                ConversationMachine::handle().act(id, ConversationAction::UserMessage(text.to_string()));
+                ConversationMachine::handle().maybe_construct(ConversationInit { id: id.clone() }).await;
+                ConversationMachine::handle().act(id, ConversationAction::UserMessage(text.to_string())).await;
             }
         }
     }

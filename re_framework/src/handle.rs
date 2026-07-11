@@ -1,25 +1,52 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use crate::persistence::{delete_state, load_state, persist_state};
+use crate::store::{store, CallToken, LoadedEntity, OutboxRow, SaveOutcome, TransitionWrite};
 use chrono::Utc;
 use dashmap::DashMap;
-use std::sync::Arc;
-use tokio::sync::mpsc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{mpsc, oneshot};
 
-/// Mailbox message; single-variant for now, kept as an enum for planned control messages.
+/// Mailbox message. `Act` is fire-and-forget (external callers); `Tracked` carries a durable
+/// outbox row's identity and an ack channel — the sender's dispatcher deletes the row only
+/// after the receiver commits.
 enum Envelope<A> {
     Act(A),
+    Tracked {
+        action: A,
+        token: CallToken,
+        ack: oneshot::Sender<DeliveryOutcome>,
+    },
+}
+
+enum DeliveryOutcome {
+    /// Transition committed (dedup row written with it).
+    Applied,
+    /// Receiver had already applied this exact call — safe to ack.
+    Duplicate,
+    /// Domain rejection (invalid transition, unconstructed target, unparseable row) —
+    /// permanent; the row gets poisoned, never retried.
+    Rejected(String),
+}
+
+/// Dropped ack (receiver died mid-processing) or infra failure — retry the delivery.
+struct TransientDelivery(String);
+
+type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
+type Deliverer = Box<dyn Fn(String, String, CallToken) -> DeliverFuture + Send + Sync>;
+
+/// Global machine-name → typed-delivery registry. Outbox rows are (strings of) data; this is
+/// how a row finds its way back to a concrete `StateMachine` impl after a restart.
+static DELIVERERS: OnceLock<DashMap<String, Deliverer>> = OnceLock::new();
+
+fn deliverers() -> &'static DashMap<String, Deliverer> {
+    DELIVERERS.get_or_init(DashMap::new)
 }
 
 /// Sole sender to a live actor's mailbox; not `Clone` — dropping it (via registry removal) stops the actor (RAII).
 struct SoleMailboxHandle<SM: StateMachine> {
     sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
-}
-
-impl<SM: StateMachine> SoleMailboxHandle<SM> {
-    fn deliver(&self, action: SM::Action) {
-        let _ = self.sender.send(Envelope::Act(action));
-    }
 }
 
 pub struct StateMachineHandle<SM: StateMachine> {
@@ -29,81 +56,253 @@ pub struct StateMachineHandle<SM: StateMachine> {
 
 impl<SM: StateMachine> StateMachineHandle<SM> {
     pub fn new(env: SM::Env) -> Self {
+        deliverers().insert(
+            SM::name().to_string(),
+            Box::new(|id_json, action_json, token| {
+                Box::pin(async move {
+                    let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
+                        return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
+                    };
+                    let Ok(action) = serde_json::from_str::<SM::Action>(&action_json) else {
+                        return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
+                    };
+                    SM::handle().deliver_tracked(id, action, token).await
+                })
+            }),
+        );
         StateMachineHandle {
             entities: Arc::new(DashMap::new()),
             env: Arc::new(env),
         }
     }
 
-    fn entry(&self, id: &SM::Id) -> dashmap::mapref::entry::Entry<'_, String, SoleMailboxHandle<SM>> {
-        use dashmap::mapref::entry::Entry as DEntry;
-        let key = id.get_id_string();
-        match self.entities.entry(key.clone()) {
-            DEntry::Vacant(slot) => match load_state::<SM>(id) {
-                Some(state) => {
-                    let (tx, rx) = mpsc::unbounded_channel();
-                    tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id.clone()));
-                    slot.insert(SoleMailboxHandle { sender: tx });
-                    self.entities.entry(key)
-                }
-                None => DEntry::Vacant(slot),
-            },
-            occupied => occupied,
+    /// Send an envelope if the actor is live; hand it back if not. Never blocks, never awaits —
+    /// safe to call while a map shard guard is held (send on an unbounded channel is sync).
+    fn try_send(&self, key: &str, envelope: Envelope<SM::Action>) -> Result<(), Envelope<SM::Action>> {
+        match self.entities.get(key) {
+            Some(handle) => handle.sender.send(envelope).map_err(|e| e.0),
+            None => Err(envelope),
         }
     }
 
-    pub fn maybe_construct(&self, construction: SM::Construction) {
+    /// Spawn an actor for a loaded row unless one is already live. All I/O happened before this;
+    /// the entry guard is held only for the sync check-and-insert (the narrowed lock).
+    fn spawn_if_vacant(&self, id: SM::Id, loaded: LoadedEntity) {
         use dashmap::mapref::entry::Entry as DEntry;
-        let id = construction.get_id().clone();
-        match self.entry(&id) {
+        let state = match serde_json::from_str::<SM::State>(&loaded.state_json) {
+            Ok(state) => state,
+            Err(e) => {
+                log_transition::<SM>(&format!("stored state failed to deserialize — refusing to spawn: {e}"));
+                return;
+            }
+        };
+        match self.entities.entry(id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let (tx, rx) = mpsc::unbounded_channel();
+                tokio::spawn(run_entity::<SM>(
+                    state,
+                    loaded.version,
+                    loaded.next_outbox_seq,
+                    rx,
+                    EntityContext::new(&id, Arc::clone(&self.env), Arc::clone(&self.entities)),
+                    Vec::new(),
+                ));
+                slot.insert(SoleMailboxHandle { sender: tx });
+            }
+        }
+    }
+
+    pub async fn maybe_construct(&self, construction: SM::Construction) {
+        let id = construction.get_id().clone();
+        let key = id.get_id_string();
+        if self.entities.contains_key(&key) {
+            return;
+        }
+        match store().load::<SM>(&id).await {
+            Err(e) => log_transition::<SM>(&format!("construct aborted — load failed: {e:#}")),
+            Ok(Some(loaded)) => self.spawn_if_vacant(id, loaded),
+            Ok(None) => {
                 let mut effects = Effects::new(id.clone());
                 let state = SM::construct(construction, &mut effects);
-                match post_transition::<SM>(&id, &state, effects) {
-                    Ok(()) => {
-                        tokio::spawn(run_entity::<SM>(state, rx, Arc::clone(&self.env), id));
-                        slot.insert(SoleMailboxHandle { sender: tx });
-                    }
-                    Err(e) => {
-                        log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}"))
+                let Ok(state_json) = serde_json::to_string(&state) else {
+                    log_transition::<SM>("construct aborted — state failed to serialize");
+                    return;
+                };
+                let id_json = serde_json::to_string(&id).expect("EntityId serializes");
+                match store()
+                    .insert(SM::name(), &key, &id_json, &state_json, &effects.actions)
+                    .await
+                {
+                    Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
+                    Ok(SaveOutcome::Conflict { .. }) => match store().load::<SM>(&id).await {
+                        Ok(Some(loaded)) => self.spawn_if_vacant(id, loaded),
+                        _ => log_transition::<SM>("construct raced a delete; dropping construction"),
+                    },
+                    Ok(SaveOutcome::Ok) => {
+                        let initial_rows = rows_from_drafts(0, &effects.actions);
+                        let loaded = LoadedEntity {
+                            state_json,
+                            version: 0,
+                            next_outbox_seq: effects.actions.len() as i64,
+                        };
+                        use dashmap::mapref::entry::Entry as DEntry;
+                        match self.entities.entry(key) {
+                            DEntry::Occupied(_) => {}
+                            DEntry::Vacant(slot) => {
+                                let (tx, rx) = mpsc::unbounded_channel();
+                                tokio::spawn(run_entity::<SM>(
+                                    state,
+                                    loaded.version,
+                                    loaded.next_outbox_seq,
+                                    rx,
+                                    EntityContext::new(&id, Arc::clone(&self.env), Arc::clone(&self.entities)),
+                                    initial_rows,
+                                ));
+                                slot.insert(SoleMailboxHandle { sender: tx });
+                            }
+                        }
+                        for external in effects.externals {
+                            tokio::spawn(external);
+                        }
                     }
                 }
             }
         }
     }
 
-    pub fn act(&self, id: SM::Id, action: SM::Action) {
-        use dashmap::mapref::entry::Entry as DEntry;
-        match self.entry(&id) {
-            DEntry::Occupied(slot) => slot.get().deliver(action),
-            DEntry::Vacant(_) => eprintln!(
-                "[warn] action {action:?} for unconstructed entity {}; dropping (maybe_construct must precede act)",
-                id.get_id_string()
-            ),
+    pub async fn act(&self, id: SM::Id, action: SM::Action) {
+        let key = id.get_id_string();
+        let mut envelope = Envelope::Act(action);
+        for _ in 0..2 {
+            envelope = match self.try_send(&key, envelope) {
+                Ok(()) => return,
+                Err(back) => back,
+            };
+            match store().load::<SM>(&id).await {
+                Err(e) => {
+                    log_transition::<SM>(&format!("act dropped — load failed: {e:#}"));
+                    return;
+                }
+                Ok(None) => {
+                    let Envelope::Act(action) = &envelope else { unreachable!("act sends Act") };
+                    eprintln!(
+                        "[warn] action {action:?} for unconstructed entity {key}; dropping (maybe_construct must precede act)"
+                    );
+                    return;
+                }
+                Ok(Some(loaded)) => self.spawn_if_vacant(id.clone(), loaded),
+            }
         }
+        log_transition::<SM>("act dropped — actor kept vanishing (raced deletes?)");
     }
 
-    pub fn delete(&self, id: SM::Id) {
-        use dashmap::mapref::entry::Entry as DEntry;
-        if let DEntry::Occupied(slot) = self.entities.entry(id.get_id_string()) {
-            if let Err(e) = delete_state::<SM>(&id) {
-                log_transition::<SM>(&format!("delete — {e:#}"));
+    /// Deliver a durable outbox row's action and wait for the receiver's verdict.
+    async fn deliver_tracked(
+        &self,
+        id: SM::Id,
+        action: SM::Action,
+        token: CallToken,
+    ) -> Result<DeliveryOutcome, TransientDelivery> {
+        let key = id.get_id_string();
+        let (ack_tx, ack_rx) = oneshot::channel();
+        let mut envelope = Envelope::Tracked { action, token, ack: ack_tx };
+        let mut sent = false;
+        for _ in 0..2 {
+            envelope = match self.try_send(&key, envelope) {
+                Ok(()) => {
+                    sent = true;
+                    break;
+                }
+                Err(back) => back,
+            };
+            match store().load::<SM>(&id).await {
+                Err(e) => return Err(TransientDelivery(format!("load failed: {e:#}"))),
+                Ok(None) => return Ok(DeliveryOutcome::Rejected(format!("unconstructed entity {key}"))),
+                Ok(Some(loaded)) => self.spawn_if_vacant(id.clone(), loaded),
             }
-            slot.remove();
+        }
+        if !sent {
+            return Err(TransientDelivery("actor kept vanishing".to_string()));
+        }
+        ack_rx
+            .await
+            .map_err(|_| TransientDelivery("receiver dropped without ack".to_string()))
+    }
+
+    /// Boot recovery: wake every entity of this machine type that still has un-acked outbox
+    /// rows — spawning them triggers drain-on-activate, which redispatches. Returns how many.
+    pub async fn recover_pending(&self) -> anyhow::Result<usize> {
+        let senders = store().pending_senders(SM::name()).await?;
+        let count = senders.len();
+        for id_json in senders {
+            match serde_json::from_str::<SM::Id>(&id_json) {
+                Ok(id) => match store().load::<SM>(&id).await {
+                    Ok(Some(loaded)) => self.spawn_if_vacant(id, loaded),
+                    Ok(None) => log_transition::<SM>(&format!(
+                        "pending outbox rows for deleted entity {id_json}; rows remain parked"
+                    )),
+                    Err(e) => log_transition::<SM>(&format!("recover load failed for {id_json}: {e:#}")),
+                },
+                Err(e) => log_transition::<SM>(&format!("recover skipped unparseable sender id {id_json}: {e}")),
+            }
+        }
+        Ok(count)
+    }
+
+    pub async fn delete(&self, id: SM::Id) {
+        self.entities.remove(&id.get_id_string());
+        if let Err(e) = store().delete(SM::name(), &id.get_id_string()).await {
+            log_transition::<SM>(&format!("delete — {e:#}"));
+        }
+    }
+}
+
+struct EntityContext<SM: StateMachine> {
+    id: SM::Id,
+    id_string: String,
+    id_json: String,
+    env: Arc<SM::Env>,
+    entities: Arc<DashMap<String, SoleMailboxHandle<SM>>>,
+}
+
+impl<SM: StateMachine> EntityContext<SM> {
+    fn new(id: &SM::Id, env: Arc<SM::Env>, entities: Arc<DashMap<String, SoleMailboxHandle<SM>>>) -> Self {
+        EntityContext {
+            id: id.clone(),
+            id_string: id.get_id_string(),
+            id_json: serde_json::to_string(id).expect("EntityId serializes"),
+            env,
+            entities,
         }
     }
 }
 
 async fn run_entity<SM: StateMachine>(
     mut state: SM::State,
+    mut version: i64,
+    mut next_seq: i64,
     mut rx: mpsc::UnboundedReceiver<Envelope<SM::Action>>,
-    env: Arc<SM::Env>,
-    id: SM::Id,
+    ctx: EntityContext<SM>,
+    extra_rows: Vec<OutboxRow>,
 ) {
+    let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<Vec<OutboxRow>>();
+    tokio::spawn(run_dispatcher(SM::name(), ctx.id_string.clone(), dispatch_rx));
+
+    // drain-on-activate: redispatch every un-acked durable row before serving new work
+    match store().pending_outbox(SM::name(), &ctx.id_string).await {
+        Ok(pending) if !pending.is_empty() => {
+            let _ = dispatch_tx.send(pending);
+        }
+        Ok(_) => {}
+        Err(e) => log_transition::<SM>(&format!("drain-on-activate failed (sweep/next activation will retry): {e:#}")),
+    }
+    if !extra_rows.is_empty() {
+        let _ = dispatch_tx.send(extra_rows);
+    }
+
     loop {
-        let action = match SM::schedule(&state) {
+        let envelope = match SM::schedule(&state) {
             None => rx.recv().await,
             Some(scheduled) => {
                 let delay = (scheduled.at - Utc::now())
@@ -116,37 +315,166 @@ async fn run_entity<SM: StateMachine>(
             }
         };
 
-        let Some(Envelope::Act(action)) = action else {
+        let Some(envelope) = envelope else {
             log_transition::<SM>("Delete");
             break;
         };
+        let (action, mut tracked) = match envelope {
+            Envelope::Act(action) => (action, None),
+            Envelope::Tracked { action, token, ack } => (action, Some((token, ack))),
+        };
+
+        if let Some((token, ack)) = tracked.take() {
+            match store().is_duplicate(SM::name(), &ctx.id_string, &token).await {
+                Ok(true) => {
+                    let _ = ack.send(DeliveryOutcome::Duplicate);
+                    continue;
+                }
+                Ok(false) => tracked = Some((token, ack)),
+                Err(e) => {
+                    // no ack — the sender's dispatcher retries the delivery
+                    log_transition::<SM>(&format!("dedup check failed, deferring delivery: {e:#}"));
+                    continue;
+                }
+            }
+        }
 
         log_transition::<SM>(&format!("Action: {action:?}"));
-        let mut effects = Effects::new(id.clone());
-        match SM::transition(&state, &id, &env, &action, &mut effects) {
-            Ok(next) => match post_transition::<SM>(&id, &next, effects) {
-                Ok(()) => state = next,
-                Err(e) => log_transition::<SM>(&format!("aborted — persistence failed: {e:#}")),
-            },
-            Err(err) => log_transition::<SM>(&format!("dropped — no state change: {err}")),
+        let mut effects = Effects::new(ctx.id.clone());
+        match SM::transition(&state, &ctx.id, &ctx.env, &action, &mut effects) {
+            Ok(next) => {
+                let Ok(state_json) = serde_json::to_string(&next) else {
+                    log_transition::<SM>("aborted — state failed to serialize");
+                    continue;
+                };
+                let write = TransitionWrite {
+                    machine: SM::name(),
+                    id_string: ctx.id_string.clone(),
+                    state_json,
+                    expected_version: version,
+                    first_seq: next_seq,
+                    next_outbox_seq: next_seq + effects.actions.len() as i64,
+                    outbox: effects.actions,
+                    dedup: tracked.as_ref().map(|(token, _)| token.clone()),
+                };
+                match store().save(&write, &ctx.id_json).await {
+                    Ok(SaveOutcome::Ok) => {
+                        state = next;
+                        version += 1;
+                        next_seq = write.next_outbox_seq;
+                        if !write.outbox.is_empty() {
+                            let _ = dispatch_tx.send(rows_from_drafts(write.first_seq, &write.outbox));
+                        }
+                        for external in effects.externals {
+                            tokio::spawn(external);
+                        }
+                        if let Some((_, ack)) = tracked {
+                            let _ = ack.send(DeliveryOutcome::Applied);
+                        }
+                    }
+                    Ok(SaveOutcome::Conflict { actual }) => {
+                        // reload-and-drop (#186): a CAS miss means this instance is illegitimate —
+                        // kill it; the next message rebuilds from the store. Dropping the ack makes
+                        // the sender's dispatcher retry against the rebuilt actor.
+                        log_transition::<SM>(&format!(
+                            "CAS CONFLICT (expected v{version}, store has {actual:?}) — dropping actor; state rebuilds from store"
+                        ));
+                        ctx.entities.remove(&ctx.id_string);
+                        break;
+                    }
+                    Err(e) => {
+                        // no ack on I/O failure — sender retries; state unchanged
+                        log_transition::<SM>(&format!("aborted — persistence failed: {e:#}"));
+                    }
+                }
+            }
+            Err(err) => {
+                log_transition::<SM>(&format!("dropped — no state change: {err}"));
+                if let Some((_, ack)) = tracked {
+                    let _ = ack.send(DeliveryOutcome::Rejected(err.to_string()));
+                }
+            }
         }
     }
 }
 
-fn post_transition<SM: StateMachine>(
-    id: &SM::Id,
-    state: &SM::State,
-    effects: Effects<SM>,
-) -> anyhow::Result<()> {
-    persist_state::<SM>(id, state)?;
-    spawn_effects(effects);
-    Ok(())
+fn rows_from_drafts(first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec<OutboxRow> {
+    drafts
+        .iter()
+        .enumerate()
+        .map(|(offset, draft)| OutboxRow {
+            seq: first_seq + offset as i64,
+            target_machine: draft.target_machine.to_string(),
+            target_id_json: draft.target_id_json.clone(),
+            action_json: draft.action_json.clone(),
+        })
+        .collect()
 }
 
-fn spawn_effects<SM: StateMachine>(effects: Effects<SM>) {
-    for outbound in effects.outbound {
-        tokio::spawn(outbound);
+/// Per-entity outbound dispatcher: strictly serial (the invariant that makes last-call-only
+/// receiver dedup sound), delete-on-ack, poison-on-rejection, retry-forever on transient.
+async fn run_dispatcher(
+    machine: &'static str,
+    sender_id: String,
+    mut rx: mpsc::UnboundedReceiver<Vec<OutboxRow>>,
+) {
+    while let Some(batch) = rx.recv().await {
+        for row in batch {
+            dispatch_row(machine, &sender_id, row).await;
+        }
     }
+}
+
+async fn dispatch_row(machine: &'static str, sender_id: &str, row: OutboxRow) {
+    let mut attempt = 0u32;
+    loop {
+        let token = CallToken {
+            sender_machine: machine,
+            sender_id: sender_id.to_string(),
+            seq: row.seq,
+        };
+        let outcome = match deliverers().get(&row.target_machine) {
+            None => Ok(DeliveryOutcome::Rejected(format!("no machine named {}", row.target_machine))),
+            Some(deliver) => deliver(row.target_id_json.clone(), row.action_json.clone(), token).await,
+        };
+        match outcome {
+            // ack-vs-execute separation: after a definitive verdict, only the storage ack is
+            // retried — the delivery is never re-run in this session
+            Ok(DeliveryOutcome::Applied | DeliveryOutcome::Duplicate) => {
+                ack_with_retry(machine, sender_id, row.seq).await;
+                return;
+            }
+            Ok(DeliveryOutcome::Rejected(reason)) => {
+                println!("[outbox] {machine}/{sender_id} seq {} rejected by {}: {reason}", row.seq, row.target_machine);
+                if let Err(e) = store().fail_outbox(machine, sender_id, row.seq, &reason).await {
+                    println!("[outbox] failed to poison row seq {}: {e:#}", row.seq);
+                }
+                return;
+            }
+            Err(TransientDelivery(reason)) => {
+                attempt += 1;
+                let delay = std::time::Duration::from_secs(2u64.pow(attempt.min(6)).min(60));
+                println!(
+                    "[outbox] {machine}/{sender_id} seq {} transient delivery failure (attempt {attempt}, retrying in {delay:?}): {reason}",
+                    row.seq
+                );
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+}
+
+async fn ack_with_retry(machine: &'static str, sender_id: &str, seq: i64) {
+    for attempt in 0..5 {
+        match store().ack_outbox(machine, sender_id, seq).await {
+            Ok(()) => return,
+            Err(e) => {
+                println!("[outbox] ack failed for {machine}/{sender_id} seq {seq} (attempt {attempt}): {e:#}");
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        }
+    }
+    // give up: the row survives and redelivers on next activation; receiver dedup absorbs it
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {

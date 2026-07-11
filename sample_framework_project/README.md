@@ -22,15 +22,25 @@ work: tool add 2 3        → [work] (turn 1) add returned: 5
 exit                      → quit
 ```
 
+State lives in `./framework_db/sample.db` (Turso; standard SQLite file — inspectable with
+`python3 -c "import sqlite3; ..."`). Tables: `entities` (state + version + outbox seq),
+`outbox` (durable entity→entity actions), `call_dedup` (receiver-side idempotency).
+
 What to try:
 
 - **Persistence/resume** — send a few messages, kill the process, run again, send another:
-  the turn counter continues (state reloaded from `./framework_db/`).
+  the turn counter continues.
+- **Crash recovery of internal actions** — every user message sends a durable action to the
+  singleton `StatsMachine` through the transactional outbox. Kill the process between a
+  conversation's commit and the stats delivery (or inject a row into `outbox` while stopped):
+  on the next start, `[recovery] woke N entities` redispatches it and stats catches up.
+  Redeliver the same row twice and dedup absorbs it — no double-count.
+- **CAS as the transaction guarantee** — edit an entity's `version` in the DB while the app
+  runs and send it a message: the write conflicts, the actor logs `CAS CONFLICT` and drops,
+  and the next message rebuilds it from the store.
 - **Timers** — an idle conversation resets after 60s via `schedule()`; the deadline is part
   of persisted state, so it re-arms (or fires immediately) after a restart.
-- **Entity→entity** — every user message also sends an action to the singleton
-  `StatsMachine`, which prints running counts.
-- **Today's crash gap (what #186 fixes)** — kill the process while a decision/tool is
-  in flight (phase ≠ Idle): the in-flight effect is lost and, on restart, the conversation
-  is wedged in that phase. With the transactional outbox this becomes recoverable; this
-  harness is where that fix gets proven.
+- **What still gets lost (by design)** — external effects (`decide`, `send_reply`,
+  `execute_tool` here; the LLM/Discord in the real bot) are at-most-once and never retried:
+  kill mid-decision and that conversation stays in `AwaitingDecision` (this toy has no rescue
+  timer yet; the real chatbot's 10-min `ForceReset` is the domain-level fallback #186 keeps).

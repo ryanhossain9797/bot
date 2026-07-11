@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
 
-pub trait EntityId: Clone + Eq + Serialize + DeserializeOwned + Send + 'static {
+pub trait EntityId: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static {
     fn get_id_string(&self) -> String;
 }
 
