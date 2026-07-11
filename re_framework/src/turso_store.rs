@@ -361,41 +361,24 @@ async fn save_in_tx(conn: &turso::Connection, write: &TransitionWrite) -> anyhow
     insert_outbox_rows(conn, write.machine, &write.id_string, &write.id_json, write.generation, write.first_seq, &write.outbox)
         .await?;
     if let Some(token) = &write.dedup {
-        let changed = conn
-            .execute(
-                "UPDATE call_dedup SET
-                     last_seq = CASE WHEN caller_generation = ? THEN MAX(last_seq, ?) ELSE ? END,
-                     caller_generation = ?
-                 WHERE machine = ? AND id = ? AND caller_machine = ? AND caller_id = ?",
-                (
-                    token.sender_generation,
-                    token.seq,
-                    token.seq,
-                    token.sender_generation,
-                    write.machine,
-                    write.id_string.as_str(),
-                    token.sender_machine,
-                    token.sender_id.as_str(),
-                ),
-            )
-            .await
-            .context("dedup update")?;
-        if changed == 0 {
-            conn.execute(
-                "INSERT INTO call_dedup (machine, id, caller_machine, caller_id, caller_generation, last_seq)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    write.machine,
-                    write.id_string.as_str(),
-                    token.sender_machine,
-                    token.sender_id.as_str(),
-                    token.sender_generation,
-                    token.seq,
-                ),
-            )
-            .await
-            .context("dedup insert")?;
-        }
+        conn.execute(
+            "INSERT INTO call_dedup (machine, id, caller_machine, caller_id, caller_generation, last_seq)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(machine, id, caller_machine, caller_id) DO UPDATE SET
+                 last_seq = CASE WHEN caller_generation = excluded.caller_generation
+                                 THEN MAX(last_seq, excluded.last_seq) ELSE excluded.last_seq END,
+                 caller_generation = excluded.caller_generation",
+            (
+                write.machine,
+                write.id_string.as_str(),
+                token.sender_machine,
+                token.sender_id.as_str(),
+                token.sender_generation,
+                token.seq,
+            ),
+        )
+        .await
+        .context("dedup upsert")?;
     }
     Ok(SaveOutcome::Ok)
 }
