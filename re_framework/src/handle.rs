@@ -85,28 +85,21 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// Spawn an actor for a loaded row unless one is already live. All I/O happened before this;
-    /// the entry guard is held only for the sync check-and-insert (the narrowed lock).
-    fn spawn_if_vacant(&self, id: SM::Id, loaded: LoadedEntity) {
+    /// Spawn an actor for already-parsed state unless one is already live. All I/O happened
+    /// before this; the entry guard is held only for the sync check-and-insert (the narrowed lock).
+    fn spawn_if_vacant(&self, id: SM::Id, state: SM::State, version: i64, next_seq: i64, extra_rows: Vec<OutboxRow>) {
         use dashmap::mapref::entry::Entry as DEntry;
-        let state = match serde_json::from_str::<SM::State>(&loaded.state_json) {
-            Ok(state) => state,
-            Err(e) => {
-                log_transition::<SM>(&format!("stored state failed to deserialize — refusing to spawn: {e}"));
-                return;
-            }
-        };
         match self.entities.entry(id.get_id_string()) {
             DEntry::Occupied(_) => {}
             DEntry::Vacant(slot) => {
                 let (tx, rx) = mpsc::unbounded_channel();
                 tokio::spawn(run_entity::<SM>(
                     state,
-                    loaded.version,
-                    loaded.next_outbox_seq,
+                    version,
+                    next_seq,
                     rx,
                     EntityContext::new(&id, Arc::clone(&self.env), Arc::clone(&self.entities)),
-                    Vec::new(),
+                    extra_rows,
                 ));
                 slot.insert(SoleMailboxHandle { sender: tx });
             }
@@ -121,51 +114,50 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
         match store().load::<SM>(&id).await {
             Err(e) => log_transition::<SM>(&format!("construct aborted — load failed: {e:#}")),
-            Ok(Some(loaded)) => self.spawn_if_vacant(id, loaded),
-            Ok(None) => {
-                let mut effects = Effects::new(id.clone());
-                let state = SM::construct(construction, &mut effects);
-                let Ok(state_json) = serde_json::to_string(&state) else {
-                    log_transition::<SM>("construct aborted — state failed to serialize");
-                    return;
-                };
-                let id_json = serde_json::to_string(&id).expect("EntityId serializes");
-                match store()
-                    .insert(SM::name(), &key, &id_json, &state_json, &effects.actions)
-                    .await
-                {
-                    Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
-                    Ok(SaveOutcome::Conflict { .. }) => match store().load::<SM>(&id).await {
-                        Ok(Some(loaded)) => self.spawn_if_vacant(id, loaded),
-                        _ => log_transition::<SM>("construct raced a delete; dropping construction"),
-                    },
-                    Ok(SaveOutcome::Ok) => {
-                        let initial_rows = rows_from_drafts(0, &effects.actions);
-                        let loaded = LoadedEntity {
-                            state_json,
-                            version: 0,
-                            next_outbox_seq: effects.actions.len() as i64,
-                        };
-                        use dashmap::mapref::entry::Entry as DEntry;
-                        match self.entities.entry(key) {
-                            DEntry::Occupied(_) => {}
-                            DEntry::Vacant(slot) => {
-                                let (tx, rx) = mpsc::unbounded_channel();
-                                tokio::spawn(run_entity::<SM>(
-                                    state,
-                                    loaded.version,
-                                    loaded.next_outbox_seq,
-                                    rx,
-                                    EntityContext::new(&id, Arc::clone(&self.env), Arc::clone(&self.entities)),
-                                    initial_rows,
-                                ));
-                                slot.insert(SoleMailboxHandle { sender: tx });
-                            }
-                        }
-                        for external in effects.externals {
-                            tokio::spawn(external);
-                        }
+            Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
+                Some(state) => self.spawn_if_vacant(id, state, loaded.version, loaded.next_outbox_seq, Vec::new()),
+                None => {
+                    // interim policy (#186): corrupt state resets to a fresh construct;
+                    // proper corruption handling arrives with state versioning
+                    log_transition::<SM>("resetting entity — stored state unparseable");
+                    match store().delete(SM::name(), &key).await {
+                        Ok(()) => self.construct_fresh(id, key, construction).await,
+                        Err(e) => log_transition::<SM>(&format!("reset failed — construct aborted: {e:#}")),
                     }
+                }
+            },
+            Ok(None) => self.construct_fresh(id, key, construction).await,
+        }
+    }
+
+    async fn construct_fresh(&self, id: SM::Id, key: String, construction: SM::Construction) {
+        let mut effects = Effects::new(id.clone());
+        let state = SM::construct(construction, &mut effects);
+        let Ok(state_json) = serde_json::to_string(&state) else {
+            log_transition::<SM>("construct aborted — state failed to serialize");
+            return;
+        };
+        let id_json = serde_json::to_string(&id).expect("EntityId serializes");
+        match store()
+            .insert(SM::name(), &key, &id_json, &state_json, &effects.actions)
+            .await
+        {
+            Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
+            Ok(SaveOutcome::Conflict { .. }) => match store().load::<SM>(&id).await {
+                Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
+                    Some(existing) => {
+                        self.spawn_if_vacant(id, existing, loaded.version, loaded.next_outbox_seq, Vec::new())
+                    }
+                    None => log_transition::<SM>("construct raced another corrupt row; dropping construction"),
+                },
+                _ => log_transition::<SM>("construct raced a delete; dropping construction"),
+            },
+            Ok(SaveOutcome::Ok) => {
+                let initial_rows = rows_from_drafts(0, &effects.actions);
+                let next_seq = effects.actions.len() as i64;
+                self.spawn_if_vacant(id, state, 0, next_seq, initial_rows);
+                for external in effects.externals {
+                    tokio::spawn(external);
                 }
             }
         }
@@ -191,7 +183,15 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                     );
                     return;
                 }
-                Ok(Some(loaded)) => self.spawn_if_vacant(id.clone(), loaded),
+                Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
+                    Some(state) => {
+                        self.spawn_if_vacant(id.clone(), state, loaded.version, loaded.next_outbox_seq, Vec::new())
+                    }
+                    None => {
+                        log_transition::<SM>("act dropped — stored state unparseable (resets on next maybe_construct)");
+                        return;
+                    }
+                },
             }
         }
         log_transition::<SM>("act dropped — actor kept vanishing (raced deletes?)");
@@ -219,7 +219,16 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             match store().load::<SM>(&id).await {
                 Err(e) => return Err(TransientDelivery(format!("load failed: {e:#}"))),
                 Ok(None) => return Ok(DeliveryOutcome::Rejected(format!("unconstructed entity {key}"))),
-                Ok(Some(loaded)) => self.spawn_if_vacant(id.clone(), loaded),
+                Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
+                    Some(state) => {
+                        self.spawn_if_vacant(id.clone(), state, loaded.version, loaded.next_outbox_seq, Vec::new())
+                    }
+                    None => {
+                        return Ok(DeliveryOutcome::Rejected(format!(
+                            "entity {key} state unparseable (resets on next maybe_construct)"
+                        )))
+                    }
+                },
             }
         }
         if !sent {
@@ -238,7 +247,14 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         for id_json in senders {
             match serde_json::from_str::<SM::Id>(&id_json) {
                 Ok(id) => match store().load::<SM>(&id).await {
-                    Ok(Some(loaded)) => self.spawn_if_vacant(id, loaded),
+                    Ok(Some(loaded)) => match parse_state::<SM>(&loaded) {
+                        Some(state) => {
+                            self.spawn_if_vacant(id, state, loaded.version, loaded.next_outbox_seq, Vec::new())
+                        }
+                        None => log_transition::<SM>(&format!(
+                            "recover skipped {id_json} — state unparseable; rows remain parked"
+                        )),
+                    },
                     Ok(None) => log_transition::<SM>(&format!(
                         "pending outbox rows for deleted entity {id_json}; rows remain parked"
                     )),
@@ -254,6 +270,16 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         self.entities.remove(&id.get_id_string());
         if let Err(e) = store().delete(SM::name(), &id.get_id_string()).await {
             log_transition::<SM>(&format!("delete — {e:#}"));
+        }
+    }
+}
+
+fn parse_state<SM: StateMachine>(loaded: &LoadedEntity) -> Option<SM::State> {
+    match serde_json::from_str(&loaded.state_json) {
+        Ok(state) => Some(state),
+        Err(e) => {
+            log_transition::<SM>(&format!("stored state failed to deserialize: {e}"));
+            None
         }
     }
 }
