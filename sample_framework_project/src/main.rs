@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     re_framework::init_turso_store("framework_db/sample.db").await?;
     register::<ConversationMachine>(());
     register::<StatsMachine>(());
-    re_framework::start_sweeper();
+    re_framework::start();
 
     println!("{BANNER}");
 

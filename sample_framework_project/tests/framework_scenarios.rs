@@ -393,7 +393,7 @@ async fn c4_sweep_wake_drains_live_actor() {
     .await
     .expect("inject stalled outbox row");
 
-    re_framework::start_sweeper();
+    re_framework::start();
 
     wait_for("sweep to force-drain the live actor", Duration::from_secs(15), || {
         values("c4_r") == vec![7]

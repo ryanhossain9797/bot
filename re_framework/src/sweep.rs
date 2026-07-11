@@ -13,7 +13,7 @@ const MAX_INTERVAL: Duration = Duration::from_secs(240);
 const REWAKE_SUPPRESS: Duration = Duration::from_secs(60);
 const WAKE_STAGGER: Duration = Duration::from_millis(25);
 
-pub fn start_sweeper() {
+pub fn start() {
     tokio::spawn(sweeper_loop());
 }
 
