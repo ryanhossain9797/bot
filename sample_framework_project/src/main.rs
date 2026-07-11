@@ -27,13 +27,7 @@ async fn main() -> anyhow::Result<()> {
     register::<ConversationMachine>(());
     register::<StatsMachine>(());
     handle::<StatsMachine>().maybe_construct(StatsInit { id: StatsId }).await;
-
-    let recovered = handle::<ConversationMachine>().recover_pending().await?
-        + handle::<StatsMachine>().recover_pending().await?;
-    match recovered {
-        0 => {}
-        n => println!("[recovery] woke {n} entities with un-acked outbox rows"),
-    }
+    re_framework::start_sweeper();
 
     println!("{BANNER}");
 

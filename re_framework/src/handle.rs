@@ -51,6 +51,8 @@ enum LoadStatus {
 
 type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
 type Deliverer = Box<dyn Fn(String, String, CallToken) -> DeliverFuture + Send + Sync>;
+type WakeFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type Waker = Box<dyn Fn(String) -> WakeFuture + Send + Sync>;
 
 /// The runtime registry: every machine type registers once at startup. `HANDLES` gives typed
 /// access (`handle::<SM>()`); `DELIVERERS` routes outbox rows — which are strings of data —
@@ -58,6 +60,7 @@ type Deliverer = Box<dyn Fn(String, String, CallToken) -> DeliverFuture + Send +
 static HANDLES: OnceLock<DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)>> =
     OnceLock::new();
 static DELIVERERS: OnceLock<DashMap<String, Deliverer>> = OnceLock::new();
+static WAKERS: OnceLock<DashMap<String, Waker>> = OnceLock::new();
 
 fn handles() -> &'static DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)> {
     HANDLES.get_or_init(DashMap::new)
@@ -65,6 +68,10 @@ fn handles() -> &'static DashMap<std::any::TypeId, &'static (dyn std::any::Any +
 
 fn deliverers() -> &'static DashMap<String, Deliverer> {
     DELIVERERS.get_or_init(DashMap::new)
+}
+
+pub(crate) fn wakers() -> &'static DashMap<String, Waker> {
+    WAKERS.get_or_init(DashMap::new)
 }
 
 /// Register a machine type with its environment. Call once per machine at startup, after
@@ -79,6 +86,23 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
         .insert(std::any::TypeId::of::<SM>(), leaked as &(dyn std::any::Any + Send + Sync))
         .is_some();
     assert!(!already, "state machine {} registered twice", SM::name());
+    wakers().insert(
+        SM::name().to_string(),
+        Box::new(|id_json| {
+            Box::pin(async move {
+                match serde_json::from_str::<SM::Id>(&id_json) {
+                    Ok(id) => {
+                        // wake only — the actor's own activation path (drain-on-activate,
+                        // schedule() recompute) does all the work; a spurious wake no-ops
+                        if let Err(e) = handle::<SM>().ensure_live(&id, &id.get_id_string()).await {
+                            log_transition::<SM>(&format!("sweep wake failed for {id_json}: {e:#}"));
+                        }
+                    }
+                    Err(e) => log_transition::<SM>(&format!("sweep skipped unparseable id {id_json}: {e}")),
+                }
+            })
+        }),
+    );
     deliverers().insert(
         SM::name().to_string(),
         Box::new(|id_json, action_json, token| {
@@ -205,7 +229,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         };
         let id_json = serde_json::to_string(&id).expect("EntityId serializes");
         match store()
-            .insert(SM::name(), &key, &id_json, &state_json, &effects.actions)
+            .insert(SM::name(), &key, &id_json, &state_json, tick_deadline::<SM>(&state), &effects.actions)
             .await
         {
             Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
@@ -309,29 +333,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         ack_rx
             .await
             .map_err(|_| TransientDelivery("receiver dropped without ack".to_string()))
-    }
-
-    /// Boot recovery: wake every entity of this machine type that still has un-acked outbox
-    /// rows — spawning them triggers drain-on-activate, which redispatches. Returns how many.
-    pub async fn recover_pending(&self) -> anyhow::Result<usize> {
-        let senders = store().pending_senders(SM::name()).await?;
-        let count = senders.len();
-        for id_json in senders {
-            match serde_json::from_str::<SM::Id>(&id_json) {
-                Ok(id) => match self.ensure_live(&id, &id.get_id_string()).await {
-                    Ok(LoadStatus::Live) => {}
-                    Ok(LoadStatus::Absent) => log_transition::<SM>(&format!(
-                        "pending outbox rows for deleted entity {id_json}; rows remain parked"
-                    )),
-                    Ok(LoadStatus::Corrupt) => log_transition::<SM>(&format!(
-                        "recover skipped {id_json} — state unparseable; rows remain parked"
-                    )),
-                    Err(e) => log_transition::<SM>(&format!("recover load failed for {id_json}: {e:#}")),
-                },
-                Err(e) => log_transition::<SM>(&format!("recover skipped unparseable sender id {id_json}: {e}")),
-            }
-        }
-        Ok(count)
     }
 
     pub async fn delete(&self, id: SM::Id) {
@@ -444,6 +445,7 @@ async fn run_entity<SM: StateMachine>(
                     expected_version: version,
                     first_seq: next_seq,
                     next_outbox_seq: next_seq + effects.actions.len() as i64,
+                    next_tick_on: tick_deadline::<SM>(&next),
                     outbox: effects.actions,
                     dedup: tracked.as_ref().map(|(token, _)| token.clone()),
                 };
@@ -486,6 +488,13 @@ async fn run_entity<SM: StateMachine>(
             }
         }
     }
+}
+
+/// The persisted mirror of `schedule()`: written into the entity row at every commit so the
+/// sweep can find due timers without deserializing state. The wake carries no authority — the
+/// woken actor recomputes `schedule()` from state and fires (or doesn't) from that.
+fn tick_deadline<SM: StateMachine>(state: &SM::State) -> Option<i64> {
+    SM::schedule(state).map(|scheduled| scheduled.at.timestamp_millis())
 }
 
 fn rows_from_drafts(first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec<OutboxRow> {

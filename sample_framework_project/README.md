@@ -40,7 +40,11 @@ What to try:
   and the next message rebuilds it from the store.
 - **Timers** — an idle conversation resets after 60s via `schedule()`; the deadline is part
   of persisted state, so it re-arms (or fires immediately) after a restart.
-- **What still gets lost (by design)** — external effects (`decide`, `send_reply`,
-  `execute_tool` here; the LLM/Discord in the real bot) are at-most-once and never retried:
-  kill mid-decision and that conversation stays in `AwaitingDecision` (this toy has no rescue
-  timer yet; the real chatbot's 10-min `ForceReset` is the domain-level fallback #186 keeps).
+- **Externals lost, rescue timer catches it** — external effects (`decide`, `send_reply`,
+  `execute_tool` here; the LLM/Discord in the real bot) are at-most-once and never retried.
+  Kill mid-decision and the in-flight work is gone — but every busy phase carries a 30s
+  `ForceReset` rescue timer, `next_tick_on` is persisted, and the background sweep force-wakes
+  due entities. So the stranded conversation announces "(rescued: …)" and returns to service
+  **without any user contact** — even across the restart. (Try it: stop the app, set `main`'s
+  phase to `AwaitingDecision` with an old `phase_since`/`next_tick_on` in the DB, start the
+  app, and just wait.)

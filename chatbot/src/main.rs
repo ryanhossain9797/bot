@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<!> {
     re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
     re_framework::register::<ConversationMachine>(env);
+    re_framework::start_sweeper();
 
     tokio::spawn(async {
         match externals::bash_container_external::ensure_worker_image().await {

@@ -40,6 +40,9 @@ pub(crate) struct TransitionWrite {
     pub expected_version: i64,
     pub first_seq: i64,
     pub next_outbox_seq: i64,
+    /// Deadline derived from `SM::schedule(next_state)` at commit time — the sweep reads this
+    /// column instead of deserializing state blobs.
+    pub next_tick_on: Option<i64>,
     pub outbox: Vec<OutboxDraft>,
     pub dedup: Option<CallToken>,
 }
@@ -84,9 +87,11 @@ async fn create_tables(db: &turso::Database) -> anyhow::Result<()> {
         "CREATE TABLE IF NOT EXISTS entities (
              machine TEXT NOT NULL,
              id TEXT NOT NULL,
+             id_json TEXT NOT NULL,
              state TEXT NOT NULL,
              version INTEGER NOT NULL,
              next_outbox_seq INTEGER NOT NULL,
+             next_tick_on INTEGER,
              PRIMARY KEY (machine, id)
          );
          CREATE TABLE IF NOT EXISTS outbox (
@@ -97,6 +102,7 @@ async fn create_tables(db: &turso::Database) -> anyhow::Result<()> {
              target_machine TEXT NOT NULL,
              target_id_json TEXT NOT NULL,
              action TEXT NOT NULL,
+             created_at INTEGER NOT NULL,
              failure TEXT,
              PRIMARY KEY (sender_machine, sender_id, seq)
          );
@@ -154,11 +160,12 @@ impl Store {
         id_string: &str,
         id_json: &str,
         state_json: &str,
+        next_tick_on: Option<i64>,
         outbox: &[OutboxDraft],
     ) -> anyhow::Result<SaveOutcome> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ()).await.context("begin insert")?;
-        let result = insert_in_tx(&conn, machine, id_string, id_json, state_json, outbox).await;
+        let result = insert_in_tx(&conn, machine, id_string, id_json, state_json, next_tick_on, outbox).await;
         finish_tx(&conn, result).await
     }
 
@@ -220,22 +227,45 @@ impl Store {
         Ok(pending)
     }
 
-    /// Senders of this machine type with un-failed pending rows (boot recovery), as id JSON.
-    pub async fn pending_senders(&self, machine: &'static str) -> anyhow::Result<Vec<String>> {
+    /// Sweep: entities whose sender outbox has un-failed rows older than the cutoff.
+    /// Returns (machine, sender_id_json) pairs — the sweep wakes them; it never executes.
+    pub async fn stalled_outbox_senders(
+        &self,
+        cutoff_ms: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<(String, String)>> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
-                "SELECT DISTINCT sender_id_json FROM outbox
-                 WHERE sender_machine = ? AND failure IS NULL",
-                (machine,),
+                "SELECT DISTINCT sender_machine, sender_id_json FROM outbox
+                 WHERE failure IS NULL AND created_at < ? LIMIT ?",
+                (cutoff_ms, limit),
             )
             .await
-            .context("pending senders")?;
-        let mut senders = Vec::new();
-        while let Some(row) = rows.next().await.context("pending senders row")? {
-            senders.push(row.get(0).context("sender_id_json column")?);
+            .context("stalled outbox senders")?;
+        let mut stalled = Vec::new();
+        while let Some(row) = rows.next().await.context("stalled sender row")? {
+            stalled.push((row.get(0).context("machine column")?, row.get(1).context("id_json column")?));
         }
-        Ok(senders)
+        Ok(stalled)
+    }
+
+    /// Sweep: entities whose persisted timer deadline passed the cutoff.
+    pub async fn due_timers(&self, cutoff_ms: i64, limit: i64) -> anyhow::Result<Vec<(String, String)>> {
+        let conn = self.connect()?;
+        let mut rows = conn
+            .query(
+                "SELECT machine, id_json FROM entities
+                 WHERE next_tick_on IS NOT NULL AND next_tick_on < ? LIMIT ?",
+                (cutoff_ms, limit),
+            )
+            .await
+            .context("due timers")?;
+        let mut due = Vec::new();
+        while let Some(row) = rows.next().await.context("due timer row")? {
+            due.push((row.get(0).context("machine column")?, row.get(1).context("id_json column")?));
+        }
+        Ok(due)
     }
 
     /// Ack: the receiver definitively applied (or deduped) this row — delete it.
@@ -303,6 +333,7 @@ async fn insert_in_tx(
     id_string: &str,
     id_json: &str,
     state_json: &str,
+    next_tick_on: Option<i64>,
     outbox: &[OutboxDraft],
 ) -> anyhow::Result<SaveOutcome> {
     let mut existing = conn
@@ -317,8 +348,16 @@ async fn insert_in_tx(
         return Ok(SaveOutcome::Conflict { actual: Some(actual) });
     }
     conn.execute(
-        "INSERT INTO entities (machine, id, state, version, next_outbox_seq) VALUES (?, ?, ?, 0, ?)",
-        (machine, id_string, state_json, outbox.len() as i64),
+        "INSERT INTO entities (machine, id, id_json, state, version, next_outbox_seq, next_tick_on)
+         VALUES (?, ?, ?, ?, 0, ?, ?)",
+        (
+            machine,
+            id_string,
+            id_json,
+            state_json,
+            outbox.len() as i64,
+            turso::Value::from(next_tick_on),
+        ),
     )
     .await
     .context("insert entity")?;
@@ -333,11 +372,12 @@ async fn save_in_tx(
 ) -> anyhow::Result<SaveOutcome> {
     let updated = conn
         .execute(
-            "UPDATE entities SET state = ?, version = version + 1, next_outbox_seq = ?
+            "UPDATE entities SET state = ?, version = version + 1, next_outbox_seq = ?, next_tick_on = ?
              WHERE machine = ? AND id = ? AND version = ?",
             (
                 write.state_json.as_str(),
                 write.next_outbox_seq,
+                turso::Value::from(write.next_tick_on),
                 write.machine,
                 write.id_string.as_str(),
                 write.expected_version,
@@ -405,8 +445,8 @@ async fn insert_outbox_rows(
 ) -> anyhow::Result<()> {
     for (offset, draft) in outbox.iter().enumerate() {
         conn.execute(
-            "INSERT INTO outbox (sender_machine, sender_id, seq, sender_id_json, target_machine, target_id_json, action)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO outbox (sender_machine, sender_id, seq, sender_id_json, target_machine, target_id_json, action, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 machine,
                 id_string,
@@ -415,6 +455,7 @@ async fn insert_outbox_rows(
                 draft.target_machine,
                 draft.target_id_json.as_str(),
                 draft.action_json.as_str(),
+                chrono::Utc::now().timestamp_millis(),
             ),
         )
         .await
@@ -461,6 +502,7 @@ mod tests {
             expected_version,
             first_seq,
             next_outbox_seq: first_seq + outbox.len() as i64,
+            next_tick_on: None,
             outbox,
             dedup,
         }
@@ -472,11 +514,11 @@ mod tests {
 
         assert!(store.load("TestMachine", "e1").await.expect("load").is_none());
         assert!(matches!(
-            store.insert("TestMachine", "e1", "\"e1\"", "\"v0\"", &[]).await.expect("insert"),
+            store.insert("TestMachine", "e1", "\"e1\"", "\"v0\"", None, &[]).await.expect("insert"),
             SaveOutcome::Ok
         ));
         assert!(matches!(
-            store.insert("TestMachine", "e1", "\"e1\"", "\"v0\"", &[]).await.expect("re-insert"),
+            store.insert("TestMachine", "e1", "\"e1\"", "\"v0\"", None, &[]).await.expect("re-insert"),
             SaveOutcome::Conflict { actual: Some(0) }
         ));
 
@@ -502,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn outbox_lifecycle_and_dedup() {
         let store = fresh_store("outbox").await;
-        store.insert("TestMachine", "e1", "\"e1\"", "\"v0\"", &[]).await.expect("insert");
+        store.insert("TestMachine", "e1", "\"e1\"", "\"v0\"", None, &[]).await.expect("insert");
 
         let drafts = vec![
             OutboxDraft {
@@ -532,7 +574,11 @@ mod tests {
             pending.iter().map(|r| (r.seq, r.action_json.as_str())).collect::<Vec<_>>(),
             vec![(0, "\"a1\""), (1, "\"a2\"")]
         );
-        assert_eq!(store.pending_senders("TestMachine").await.expect("senders"), vec!["\"e1\"".to_string()]);
+        let far_future = chrono::Utc::now().timestamp_millis() + 3_600_000;
+        assert_eq!(
+            store.stalled_outbox_senders(far_future, 10).await.expect("stalled"),
+            vec![("TestMachine".to_string(), "\"e1\"".to_string())]
+        );
         assert!(store.is_duplicate("TestMachine", "e1", &token).await.expect("dup"));
         assert!(!store
             .is_duplicate("TestMachine", "e1", &CallToken { seq: 8, ..token.clone() })
@@ -543,6 +589,26 @@ mod tests {
         store.ack_outbox("TestMachine", "e1", 0).await.expect("ack");
         store.fail_outbox("TestMachine", "e1", 1, "boom").await.expect("fail");
         assert!(store.pending_outbox("TestMachine", "e1").await.expect("pending").is_empty());
-        assert!(store.pending_senders("TestMachine").await.expect("senders").is_empty());
+        assert!(store.stalled_outbox_senders(far_future, 10).await.expect("stalled").is_empty());
+    }
+
+    #[tokio::test]
+    async fn timer_deadlines() {
+        let store = fresh_store("timers").await;
+        store
+            .insert("TestMachine", "e1", "\"e1\"", "\"v0\"", Some(1_000), &[])
+            .await
+            .expect("insert");
+
+        let due = |cutoff| store.due_timers(cutoff, 10);
+        assert_eq!(due(2_000).await.expect("due"), vec![("TestMachine".to_string(), "\"e1\"".to_string())]);
+        assert!(due(500).await.expect("due").is_empty(), "not yet due");
+
+        // a transition that schedules nothing clears the persisted deadline
+        assert!(matches!(
+            store.save(&write(0, 0, Vec::new(), None), "\"e1\"").await.expect("save"),
+            SaveOutcome::Ok
+        ));
+        assert!(due(i64::MAX).await.expect("due").is_empty(), "deadline cleared on commit");
     }
 }

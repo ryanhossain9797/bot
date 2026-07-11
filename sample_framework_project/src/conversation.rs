@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const IDLE_RESET_SECS: i64 = 60;
+/// Busy-phase dead-man's timer (the chatbot's ForceReset pattern): externals are at-most-once,
+/// so a lost decide/tool/send leaves the conversation stalled — this timer is the rescue.
+const RESCUE_SECS: i64 = 30;
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConversationId(pub String);
@@ -25,6 +28,7 @@ pub struct Conversation {
     turns: u64,
     history: Vec<HistoryEntry>,
     phase: Phase,
+    phase_since: DateTime<Utc>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -49,6 +53,7 @@ pub enum ConversationAction {
     ToolCompleted { tool: String, output: String },
     ReplySent,
     IdleReset,
+    ForceReset,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -82,6 +87,7 @@ impl StateMachine for ConversationMachine {
             turns: 0,
             history: Vec::new(),
             phase: Phase::Idle { reset_at: None },
+            phase_since: Utc::now(),
         }
     }
 
@@ -101,7 +107,11 @@ impl StateMachine for ConversationMachine {
                 at: *at,
                 action: ConversationAction::IdleReset,
             }),
-            _ => None,
+            Phase::Idle { reset_at: None } => None,
+            Phase::AwaitingDecision | Phase::RunningTool { .. } | Phase::SendingReply => Some(Scheduled {
+                at: state.phase_since + Duration::seconds(RESCUE_SECS),
+                action: ConversationAction::ForceReset,
+            }),
         }
     }
 
@@ -131,6 +141,7 @@ fn conversation_transition(
                 turns: state.turns + 1,
                 history,
                 phase: Phase::AwaitingDecision,
+                phase_since: Utc::now(),
             })
         }
 
@@ -141,6 +152,7 @@ fn conversation_transition(
                 turns: state.turns,
                 history: with_entry(&state.history, HistoryEntry::Bot(reply)),
                 phase: Phase::SendingReply,
+                phase_since: Utc::now(),
             })
         }
 
@@ -150,6 +162,7 @@ fn conversation_transition(
                 turns: state.turns,
                 history: state.history.clone(),
                 phase: Phase::RunningTool { tool: tool.clone() },
+                phase_since: Utc::now(),
             })
         }
 
@@ -169,6 +182,7 @@ fn conversation_transition(
                     },
                 ),
                 phase: Phase::AwaitingDecision,
+                phase_since: Utc::now(),
             })
         }
 
@@ -178,13 +192,32 @@ fn conversation_transition(
             phase: Phase::Idle {
                 reset_at: Some(Utc::now() + Duration::seconds(IDLE_RESET_SECS)),
             },
+            phase_since: Utc::now(),
         }),
 
         (Phase::Idle { .. }, ConversationAction::IdleReset) => Ok(Conversation {
             turns: 0,
             history: Vec::new(),
             phase: Phase::Idle { reset_at: None },
+            phase_since: Utc::now(),
         }),
+
+        // busy-phase rescue: a lost external stranded us; announce and return to service
+        (
+            Phase::AwaitingDecision | Phase::RunningTool { .. } | Phase::SendingReply,
+            ConversationAction::ForceReset,
+        ) => {
+            effects.enqueue_external(send_reply(
+                id.clone(),
+                "(rescued: conversation was stalled mid-flight)".to_string(),
+            ));
+            Ok(Conversation {
+                turns: state.turns,
+                history: state.history.clone(),
+                phase: Phase::SendingReply,
+                phase_since: Utc::now(),
+            })
+        }
 
         (phase, action) => anyhow::bail!("invalid action {action:?} in phase {phase:?}"),
     }
