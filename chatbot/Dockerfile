@@ -22,7 +22,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY chatbot/src ./chatbot/src
 COPY chatbot/Cargo.toml ./chatbot/
 COPY re_framework ./re_framework
-COPY framework ./framework
+COPY sample_framework_project ./sample_framework_project
 COPY probe ./probe
 COPY extractor ./extractor
 COPY .git ./.git
