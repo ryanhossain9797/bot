@@ -1,8 +1,20 @@
-use crate::{Effects, EntityId, Identified, Scheduled, StateMachine, StateMachineHandle};
+use crate::{handle, register, Effects, EntityId, Identified, Scheduled, StateMachine};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
+
+async fn ensure_test_store() {
+    static INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    INIT.get_or_init(|| async {
+        let path = std::env::temp_dir().join(format!("re_fw_smoke_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        crate::store::turso::init_turso_store(path.to_str().expect("utf8 temp path"))
+            .await
+            .expect("init smoke test store");
+    })
+    .await;
+}
 
 impl EntityId for String {
     fn get_id_string(&self) -> String {
@@ -20,8 +32,6 @@ struct CounterEnv {
     obs: Arc<Mutex<Obs>>,
 }
 
-static COUNTER: OnceLock<StateMachineHandle<CounterMachine>> = OnceLock::new();
-
 struct CounterMachine;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -37,6 +47,7 @@ enum CounterAction {
     Tick,
 }
 
+#[derive(Serialize, Deserialize)]
 struct CounterInit {
     id: String,
     start: i64,
@@ -100,28 +111,26 @@ impl StateMachine for CounterMachine {
         })
     }
 
-    fn handle() -> &'static StateMachineHandle<CounterMachine> {
-        COUNTER.get().expect("CounterMachine not initialized")
+    fn name() -> &'static str {
+        "CounterMachine"
     }
 }
 
 #[tokio::test]
 async fn smoke() {
+    ensure_test_store().await;
     let obs = Arc::new(Mutex::new(Obs::default()));
-    COUNTER
-        .set(StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: Arc::clone(&obs) }))
-        .ok()
-        .expect("set COUNTER once");
-    let sm = CounterMachine::handle();
+    register::<CounterMachine>(CounterEnv { obs: Arc::clone(&obs) });
+    let sm = handle::<CounterMachine>();
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 });
-    sm.act("c1".to_string(), CounterAction::Add(5));
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 }).await;
+    sm.act("c1".to_string(), CounterAction::Add(5)).await;
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 });
-    sm.act("c1".to_string(), CounterAction::Add(3));
+    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 }).await;
+    sm.act("c1".to_string(), CounterAction::Add(3)).await;
 
-    sm.act("c1".to_string(), CounterAction::Add(-1000));
-    sm.act("c1".to_string(), CounterAction::Ping);
+    sm.act("c1".to_string(), CounterAction::Add(-1000)).await;
+    sm.act("c1".to_string(), CounterAction::Ping).await;
 
     tokio::time::sleep(StdDuration::from_millis(120)).await;
 
@@ -131,9 +140,9 @@ async fn smoke() {
         assert_eq!(o.ticks, 1, "timer fired exactly once");
     }
 
-    sm.delete("c1".to_string());
+    sm.delete("c1".to_string()).await;
     tokio::time::sleep(StdDuration::from_millis(20)).await;
-    sm.act("c1".to_string(), CounterAction::Add(1));
+    sm.act("c1".to_string(), CounterAction::Add(1)).await;
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
     assert_eq!(obs.lock().unwrap().totals, vec![5, 8, 18], "post-delete act dropped");
@@ -143,9 +152,6 @@ struct RtEnv {
     received: Arc<Mutex<Vec<i64>>>,
 }
 
-static PONGER: OnceLock<StateMachineHandle<PongerMachine>> = OnceLock::new();
-static PINGER: OnceLock<StateMachineHandle<PingerMachine>> = OnceLock::new();
-
 struct PongerMachine;
 #[derive(Clone, Serialize, Deserialize)]
 struct PongerState;
@@ -153,6 +159,7 @@ struct PongerState;
 enum PongerAction {
     Pong(i64),
 }
+#[derive(Serialize, Deserialize)]
 struct PongerInit {
     id: String,
 }
@@ -186,8 +193,8 @@ impl StateMachine for PongerMachine {
     fn schedule(_state: &PongerState) -> Option<Scheduled<PongerAction>> {
         None
     }
-    fn handle() -> &'static StateMachineHandle<PongerMachine> {
-        PONGER.get().expect("PongerMachine not initialized")
+    fn name() -> &'static str {
+        "PongerMachine"
     }
 }
 
@@ -198,6 +205,7 @@ struct PingerState;
 enum PingerAction {
     Ping(i64),
 }
+#[derive(Serialize, Deserialize)]
 struct PingerInit {
     id: String,
 }
@@ -215,7 +223,10 @@ impl StateMachine for PingerMachine {
     type Construction = PingerInit;
     type Env = RtEnv;
     fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
-        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0));
+        effects.enqueue_act_maybe_construct::<PongerMachine>(
+            PongerInit { id: "pong1".to_string() },
+            PongerAction::Pong(0),
+        );
         PingerState
     }
     fn transition(
@@ -235,30 +246,27 @@ impl StateMachine for PingerMachine {
     fn schedule(_state: &PingerState) -> Option<Scheduled<PingerAction>> {
         None
     }
-    fn handle() -> &'static StateMachineHandle<PingerMachine> {
-        PINGER.get().expect("PingerMachine not initialized")
+    fn name() -> &'static str {
+        "PingerMachine"
     }
 }
 
 #[tokio::test]
 async fn outbound() {
+    ensure_test_store().await;
     let received = Arc::new(Mutex::new(Vec::<i64>::new()));
-    PONGER
-        .set(StateMachineHandle::<PongerMachine>::new(RtEnv { received: Arc::clone(&received) }))
-        .ok()
-        .expect("set PONGER once");
-    PINGER
-        .set(StateMachineHandle::<PingerMachine>::new(RtEnv { received: Arc::clone(&received) }))
-        .ok()
-        .expect("set PINGER once");
-    let ponger = PongerMachine::handle();
-    let pinger = PingerMachine::handle();
+    register::<PongerMachine>(RtEnv { received: Arc::clone(&received) });
+    register::<PingerMachine>(RtEnv { received: Arc::clone(&received) });
+    let ponger = handle::<PongerMachine>();
+    let pinger = handle::<PingerMachine>();
 
-    ponger.maybe_construct(PongerInit { id: "pong1".to_string() });
-    pinger.maybe_construct(PingerInit { id: "ping1".to_string() });
+    ponger.delete("pong1".to_string()).await;
+    pinger.delete("ping1".to_string()).await;
 
-    pinger.act("ping1".to_string(), PingerAction::Ping(42));
-    pinger.act("ping1".to_string(), PingerAction::Ping(-1));
+    pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
+
+    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;
+    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await;
 
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(

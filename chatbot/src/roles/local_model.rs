@@ -1,13 +1,3 @@
-//! The loaded model and the inference mechanics around it. `LocalModel` is everything a model
-//! folder defines, loaded/resolved: weights + mmproj + backend handle, the sampling/context config,
-//! and the wire-format facts (template, flags, reasoning marker, and the parser it names). It owns
-//! `render` and `parse` because those *are* the model's wire format; the free functions below are the
-//! generic decode loop. The role layers identity (system prompt, temperature) on top — it never
-//! holds format facts, since those belong to the model, not the role.
-//!
-//! The `LlamaBackend` is a process singleton, created once in `init_env` and `Arc`-cloned into each
-//! `LocalModel` — so the model is self-contained for inference and the `Role` contract never has to
-//! mention it (a remote model would carry no backend at all).
 
 use llama_cpp_2::{
     context::{params::LlamaContextParams, LlamaContext},
@@ -30,10 +20,6 @@ use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, model_pack::Pack};
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 const DRY_BREAKS_LONG_STRINGS: bool = true;
 
-/// A fully-loaded model: everything its folder defines. The runtime handles (weights, projector,
-/// shared backend), the sampling/context config, and the wire-format facts (template, render flags,
-/// reasoning marker, and the parser the manifest names). Self-contained — it can render, run, and
-/// parse on its own.
 pub(super) struct LocalModel {
     mtmd: MtmdContext,
     model: LlamaModel,
@@ -46,7 +32,6 @@ pub(super) struct LocalModel {
 }
 
 impl LocalModel {
-    /// Render the final prompt in this model's wire format from a system prompt + conversation.
     pub(super) fn render(
         &self,
         system_prompt: &str,
@@ -55,18 +40,15 @@ impl LocalModel {
         super::render::render(&self.template, system_prompt, inputs, self.flags)
     }
 
-    /// Decode raw generation into reasoning / content / tool calls using this model's parser.
     pub(super) fn parse(&self, raw: &str) -> ParsedResponse {
         self.parser.parse(raw, &self.close_marker)
     }
 
-    /// The model's reasoning close marker — the role needs it to compose its thinking policy.
     pub(super) fn close_marker(&self) -> &str {
         &self.close_marker
     }
 }
 
-/// Inference knobs sourced from a pack manifest.
 pub(super) struct GenConfig {
     pub n_ctx: u32,
     pub n_batch: i32,
@@ -89,8 +71,6 @@ impl GenConfig {
     }
 }
 
-/// Load a pack's weights and multimodal projector into memory, taking an `Arc` to the shared backend
-/// to store alongside them. The loaded `LocalModel` then needs nothing external to run.
 pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Result<LocalModel> {
     let model_path = pack.model_path();
     println!("Loading model from: {}", model_path.display());
@@ -128,8 +108,6 @@ pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Res
     })
 }
 
-/// Run inference on an already-rendered prompt and return the raw generated text. Picks the text or
-/// multimodal path by whether any images were supplied. Blocking; callers run it on a blocking task.
 pub(super) fn run(
     model: &LocalModel,
     prompt: &str,

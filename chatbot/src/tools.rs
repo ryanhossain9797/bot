@@ -161,8 +161,6 @@ impl ToolType {
         ToolKind::from(self).wire_name()
     }
 
-    /// Argument values as an order-preserving map, ready to splice into a rendered tool call.
-    /// Most tools take a single string arg; read_file also carries optional integer offset/limit.
     pub fn arguments_map(&self) -> Map<String, Value> {
         match self {
             ToolType::WebSearch { query } => {

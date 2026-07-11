@@ -1,16 +1,17 @@
 [package]
-name = "re_framework"
+name = "sample_framework_project"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+re_framework = { path = "../re_framework" }
 tokio = { version = "1.36", features = ["full"] }
 anyhow = "1.0"
-async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
 serde_json = "1.0"
-dashmap = "6"
 turso = "0.6.1"
 
 [lints]

@@ -17,14 +17,11 @@ use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::roles::PrimaryRole;
-use crate::state_machines::conversation_state_machine::init_conversation_state_machine;
+use crate::state_machines::conversation_state_machine::ConversationMachine;
 
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
-    /// The primary conversational role, owning its loaded model (and a handle to the shared
-    /// backend). Future roles (e.g. a memory compactor on its own model) become additional fields
-    /// here; local ones share the one backend via its `Arc`.
     primary: Arc<PrimaryRole>,
     announce_tool_use: bool,
 }
@@ -48,8 +45,10 @@ async fn init_env() -> anyhow::Result<Env> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
+    re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
-    init_conversation_state_machine(env);
+    re_framework::register::<ConversationMachine>(env);
+    re_framework::start();
 
     tokio::spawn(async {
         match externals::bash_container_external::ensure_worker_image().await {

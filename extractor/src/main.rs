@@ -94,9 +94,6 @@ fn quant_name(ft: u32) -> String {
     }
 }
 
-// Unique-ish directory name from the model's embedded identity: general.name (or
-// basename + size_label, else the file stem), plus the quant so two quantizations
-// of the same model don't collide.
 fn model_dir_name(g: &GgufContext, model_path: &str) -> String {
     let name = str_key(g, "general.name")
         .or_else(|| match (str_key(g, "general.basename"), str_key(g, "general.size_label")) {
@@ -166,8 +163,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// Cross-check the raw GgufContext extract against what llama.cpp's own model API returns
-// (a different code path reading the same GGUF). Vocab-only load — no weights, no GPU.
 fn verify_template(model_path: &str, out: &Path) -> anyhow::Result<()> {
     use llama_cpp_2::llama_backend::LlamaBackend;
     use llama_cpp_2::model::params::LlamaModelParams;

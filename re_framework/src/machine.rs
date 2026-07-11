@@ -1,10 +1,9 @@
 use crate::effects::Effects;
-use crate::handle::StateMachineHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
 
-pub trait EntityId: Clone + Eq + Serialize + DeserializeOwned + Send + 'static {
+pub trait EntityId: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static {
     fn get_id_string(&self) -> String;
 }
 
@@ -22,7 +21,7 @@ pub trait StateMachine: Sized + 'static {
     type State: Clone + Serialize + DeserializeOwned + Send + 'static;
     type Id: EntityId;
     type Action: Serialize + DeserializeOwned + Send + std::fmt::Debug + 'static;
-    type Construction: Identified<Id = Self::Id> + Send + 'static;
+    type Construction: Identified<Id = Self::Id> + Serialize + DeserializeOwned + Send + 'static;
     type Env: Send + Sync + 'static;
 
     fn construct(construction: Self::Construction, effects: &mut Effects<Self>) -> Self::State;
@@ -34,12 +33,6 @@ pub trait StateMachine: Sized + 'static {
         effects: &mut Effects<Self>,
     ) -> anyhow::Result<Self::State>;
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
-    fn handle() -> &'static StateMachineHandle<Self>;
 
-    fn name() -> &'static str {
-        std::any::type_name::<Self>()
-            .rsplit("::")
-            .next()
-            .unwrap_or("?")
-    }
+    fn name() -> &'static str;
 }

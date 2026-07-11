@@ -35,14 +35,14 @@ async fn ensure_worker(name: &str) -> Result<(), String> {
     match docker(&["inspect", "-f", "{{.State.Running}}", name]).await {
         Ok(out) if out.status.success() => {
             if String::from_utf8_lossy(&out.stdout).trim() == "true" {
-                return Ok(()); 
+                return Ok(());
             }
             if docker(&["start", name]).await.map(|o| o.status.success()).unwrap_or(false) {
                 return Ok(());
             }
-            let _ = docker(&["rm", "-f", name]).await; 
+            let _ = docker(&["rm", "-f", name]).await;
         }
-        _ => {} 
+        _ => {}
     }
     spawn_worker(name).await
 }
@@ -86,10 +86,7 @@ async fn spawn_worker(name: &str) -> Result<(), String> {
     ))
 }
 
-/// Truncation cap for a tool result's full `actual` form (rendered for the live turn).
 pub(crate) const ACTUAL_MAX: usize = 20_000;
-/// Truncation cap for the compact `simplified` form. Older tool results in history fall back
-/// to `simplified`; only the live turn keeps `actual`.
 pub(crate) const SIMPLIFIED_MAX: usize = 2_000;
 
 pub(crate) fn clip_to(s: &str, max: usize) -> String {
@@ -137,8 +134,6 @@ pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImag
     Ok(MessageImage::Hydrated(image).downscaled())
 }
 
-/// Read a text file from the sandbox, returning its raw contents (lossy UTF-8). The tool layer
-/// adds line numbers, slicing, and the content hash.
 pub async fn read_file(conversation_id: &str, path: &str) -> Result<String, String> {
     let name = worker_name(conversation_id);
     ensure_worker(&name).await?;
@@ -153,8 +148,6 @@ pub async fn read_file(conversation_id: &str, path: &str) -> Result<String, Stri
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Overwrite a file in the sandbox with `content` (creates or truncates). Used by edit_file once
-/// it has applied the replacement in memory.
 pub async fn write_file(conversation_id: &str, path: &str, content: &str) -> Result<(), String> {
     let name = worker_name(conversation_id);
     ensure_worker(&name).await?;

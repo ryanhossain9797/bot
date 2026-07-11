@@ -2,12 +2,7 @@ pub const MONGODB_AUTH: &str = "FOO";
 pub mod client_tokens {
     pub const TELEGRAM_TOKEN: &str = "FOO";
     pub const DISCORD_TOKEN: &str = "FOO";
-    /// Base URL of the SearxNG instance backing `web_search` (JSON format must be enabled on it).
-    /// The bot runs with host networking, so `localhost` is the host — point a SearxNG at the
-    /// host's :8080, or set this to a remote instance's URL.
     pub const SEARXNG_URL: &str = "http://localhost:8080";
-    /// Dormant fallback: token for the legacy Brave Search path (`fetch_web_search_brave`), kept
-    /// intact but not wired into the active SearxNG `web_search`. See tool_call_external.rs.
     #[allow(dead_code)]
     pub const BRAVE_SEARCH_TOKEN: &str = "FOO";
 }
@@ -17,8 +12,5 @@ pub mod debug {
     pub const DEBUG_LLM_STATS: bool = false;
 }
 pub mod features {
-    /// When true, the bot sends a fixed "Using tool: <name>" notice (no params) before dispatching
-    /// a tool batch, so the user isn't left in silence. Off → tool turns stay silent. Loaded into
-    /// `Env` at startup; read from there, never inline.
     pub const ANNOUNCE_TOOL_USE: bool = true;
 }

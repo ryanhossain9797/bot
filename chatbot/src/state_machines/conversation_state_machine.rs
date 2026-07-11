@@ -15,16 +15,14 @@ use crate::{
     Env,
 };
 use chrono::{Duration as ChronoDuration, Utc};
-use re_framework::{Effects, Scheduled, StateMachine, StateMachineHandle};
+use re_framework::{Effects, Scheduled, StateMachine};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 type ConversationTransitionResult = anyhow::Result<Conversation>;
 type ConversationEffects = Effects<ConversationMachine>;
 
 const REDACT_HISTORY_IMAGES: bool = false;
-
-static CONVERSATION: OnceLock<StateMachineHandle<ConversationMachine>> = OnceLock::new();
 
 pub struct ConversationMachine;
 
@@ -56,19 +54,9 @@ impl StateMachine for ConversationMachine {
         conversation_schedule(state)
     }
 
-    fn handle() -> &'static StateMachineHandle<ConversationMachine> {
-        CONVERSATION
-            .get()
-            .expect("ConversationMachine not initialized")
+    fn name() -> &'static str {
+        "ConversationMachine"
     }
-}
-
-pub fn init_conversation_state_machine(env: Env) {
-    let handle = StateMachineHandle::<ConversationMachine>::new(env);
-    CONVERSATION
-        .set(handle)
-        .ok()
-        .expect("ConversationMachine initialized once");
 }
 
 fn state_label(state: &ConversationState) -> &'static str {

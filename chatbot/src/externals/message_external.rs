@@ -49,10 +49,6 @@ fn compose(platform: &Platform, message: Option<String>, tool_names: &[String]) 
     parts.join("\n")
 }
 
-/// Everything that gets delivered to a conversation in one send. `message` and
-/// `tool_names` compose into the text body; `attachments` ride alongside as files.
-/// Text and attachments may both be present — the type models that even though no
-/// current flow produces both at once.
 pub struct OutboundMessage {
     pub message: Option<String>,
     pub tool_names: Vec<String>,
@@ -74,7 +70,7 @@ fn discord_attachment(attachment: &Attachment, index: usize) -> Option<CreateAtt
         Attachment::Image(image) => image,
     };
     let MessageImage::Hydrated(image) = image else {
-        return None; 
+        return None;
     };
     let ext = match image.mime.as_str() {
         "image/png" => "png",
