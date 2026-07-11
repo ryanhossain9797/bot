@@ -21,7 +21,7 @@ pub trait StateMachine: Sized + 'static {
     type State: Clone + Serialize + DeserializeOwned + Send + 'static;
     type Id: EntityId;
     type Action: Serialize + DeserializeOwned + Send + std::fmt::Debug + 'static;
-    type Construction: Identified<Id = Self::Id> + Send + 'static;
+    type Construction: Identified<Id = Self::Id> + Serialize + DeserializeOwned + Send + 'static;
     type Env: Send + Sync + 'static;
 
     fn construct(construction: Self::Construction, effects: &mut Effects<Self>) -> Self::State;

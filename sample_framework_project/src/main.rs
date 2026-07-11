@@ -8,7 +8,7 @@ mod stats;
 
 use conversation::{ConversationAction, ConversationId, ConversationInit, ConversationMachine};
 use re_framework::{handle, register};
-use stats::{StatsId, StatsInit, StatsMachine};
+use stats::StatsMachine;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 const BANNER: &str = "\
@@ -26,7 +26,6 @@ async fn main() -> anyhow::Result<()> {
     re_framework::init_turso_store("framework_db/sample.db").await?;
     register::<ConversationMachine>(());
     register::<StatsMachine>(());
-    handle::<StatsMachine>().maybe_construct(StatsInit { id: StatsId }).await;
     re_framework::start_sweeper();
 
     println!("{BANNER}");

@@ -27,6 +27,7 @@ pub enum StatsAction {
     MessageHandled { conversation: String },
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct StatsInit {
     pub id: StatsId,
 }

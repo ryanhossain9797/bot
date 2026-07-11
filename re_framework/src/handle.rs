@@ -1,6 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use crate::store::{store, CallToken, OutboxRow, SaveOutcome, TransitionWrite};
+use crate::store::{store, CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite};
 use chrono::Utc;
 use dashmap::DashMap;
 use std::future::Future;
@@ -50,7 +50,7 @@ enum LoadStatus {
 }
 
 type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
-type Deliverer = Box<dyn Fn(String, String, CallToken) -> DeliverFuture + Send + Sync>;
+type Deliverer = Box<dyn Fn(RowKind, String, String, CallToken) -> DeliverFuture + Send + Sync>;
 type WakeFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type Waker = Box<dyn Fn(String) -> WakeFuture + Send + Sync>;
 
@@ -105,15 +105,25 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
     );
     deliverers().insert(
         SM::name().to_string(),
-        Box::new(|id_json, action_json, token| {
+        Box::new(|kind, id_json, payload_json, token| {
             Box::pin(async move {
-                let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
-                    return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
-                };
-                let Ok(action) = serde_json::from_str::<SM::Action>(&action_json) else {
-                    return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
-                };
-                handle::<SM>().deliver_tracked(id, action, token).await
+                match kind {
+                    RowKind::Act => {
+                        let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
+                            return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
+                        };
+                        let Ok(action) = serde_json::from_str::<SM::Action>(&payload_json) else {
+                            return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
+                        };
+                        handle::<SM>().deliver_tracked(id, action, token).await
+                    }
+                    RowKind::Construct => {
+                        let Ok(construction) = serde_json::from_str::<SM::Construction>(&payload_json) else {
+                            return Ok(DeliveryOutcome::Rejected(format!("unparseable construction for {}", SM::name())));
+                        };
+                        handle::<SM>().deliver_construct(construction).await
+                    }
+                }
             })
         }),
     );
@@ -207,40 +217,52 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         match self.ensure_live(&id, &key).await {
             Err(e) => log_transition::<SM>(&format!("construct aborted — load failed: {e:#}")),
             Ok(LoadStatus::Live) => {}
-            Ok(LoadStatus::Absent) => self.construct_fresh(id, key, construction).await,
+            Ok(LoadStatus::Absent) => {
+                let _ = self.construct_fresh(id, key, construction).await;
+            }
             Ok(LoadStatus::Corrupt) => {
                 // interim policy (#186): corrupt state resets to a fresh construct;
                 // proper corruption handling arrives with state versioning
                 log_transition::<SM>("resetting entity — stored state unparseable");
                 match store().delete(SM::name(), &key).await {
-                    Ok(()) => self.construct_fresh(id, key, construction).await,
+                    Ok(()) => {
+                        let _ = self.construct_fresh(id, key, construction).await;
+                    }
                     Err(e) => log_transition::<SM>(&format!("reset failed — construct aborted: {e:#}")),
                 }
             }
         }
     }
 
-    async fn construct_fresh(&self, id: SM::Id, key: String, construction: SM::Construction) {
+    /// Construct-if-absent core. `Ok` covers both "constructed" and benign races (someone else
+    /// constructed / a delete raced); `Err` is a store failure the caller may retry.
+    async fn construct_fresh(&self, id: SM::Id, key: String, construction: SM::Construction) -> anyhow::Result<()> {
         let mut effects = Effects::new(id.clone());
         let state = SM::construct(construction, &mut effects);
-        let Ok(state_json) = serde_json::to_string(&state) else {
+        let state_json = serde_json::to_string(&state).map_err(|e| {
             log_transition::<SM>("construct aborted — state failed to serialize");
-            return;
-        };
+            anyhow::anyhow!("state failed to serialize: {e}")
+        })?;
         let id_json = serde_json::to_string(&id).expect("EntityId serializes");
         match store()
             .insert(SM::name(), &key, &id_json, &state_json, tick_deadline::<SM>(&state), &effects.actions)
             .await
         {
-            Err(e) => log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}")),
-            Ok(SaveOutcome::Conflict { .. }) => match self.ensure_live(&id, &key).await {
-                Ok(LoadStatus::Live) => {}
-                Ok(LoadStatus::Absent) => log_transition::<SM>("construct raced a delete; dropping construction"),
-                Ok(LoadStatus::Corrupt) => {
-                    log_transition::<SM>("construct raced another corrupt row; dropping construction")
+            Err(e) => {
+                log_transition::<SM>(&format!("construct aborted — persistence failed: {e:#}"));
+                Err(e)
+            }
+            Ok(SaveOutcome::Conflict { .. }) => {
+                match self.ensure_live(&id, &key).await {
+                    Ok(LoadStatus::Live) => {}
+                    Ok(LoadStatus::Absent) => log_transition::<SM>("construct raced a delete; dropping construction"),
+                    Ok(LoadStatus::Corrupt) => {
+                        log_transition::<SM>("construct raced another corrupt row; dropping construction")
+                    }
+                    Err(e) => log_transition::<SM>(&format!("construct raced; reload failed: {e:#}")),
                 }
-                Err(e) => log_transition::<SM>(&format!("construct aborted — reload failed: {e:#}")),
-            },
+                Ok(())
+            }
             Ok(SaveOutcome::Ok) => {
                 let initial_rows = rows_from_drafts(0, &effects.actions);
                 let persisted = Persisted {
@@ -252,7 +274,35 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 for external in effects.externals {
                     tokio::spawn(external);
                 }
+                Ok(())
             }
+        }
+    }
+
+    /// A durable Construct row arriving from another entity's outbox. Idempotent by nature —
+    /// an existing target is a successful no-op, so constructs need no dedup slot.
+    async fn deliver_construct(&self, construction: SM::Construction) -> Result<DeliveryOutcome, TransientDelivery> {
+        let id = construction.get_id().clone();
+        let key = id.get_id_string();
+        match self.ensure_live(&id, &key).await {
+            Err(e) => Err(TransientDelivery(format!("load failed: {e:#}"))),
+            Ok(LoadStatus::Live) => Ok(DeliveryOutcome::Duplicate),
+            Ok(LoadStatus::Corrupt) => {
+                log_transition::<SM>("resetting entity — stored state unparseable");
+                match store().delete(SM::name(), &key).await {
+                    Err(e) => Err(TransientDelivery(format!("reset failed: {e:#}"))),
+                    Ok(()) => self
+                        .construct_fresh(id, key, construction)
+                        .await
+                        .map(|()| DeliveryOutcome::Applied)
+                        .map_err(|e| TransientDelivery(format!("{e:#}"))),
+                }
+            }
+            Ok(LoadStatus::Absent) => self
+                .construct_fresh(id, key, construction)
+                .await
+                .map(|()| DeliveryOutcome::Applied)
+                .map_err(|e| TransientDelivery(format!("{e:#}"))),
         }
     }
 
@@ -503,9 +553,10 @@ fn rows_from_drafts(first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec
         .enumerate()
         .map(|(offset, draft)| OutboxRow {
             seq: first_seq + offset as i64,
+            kind: draft.kind,
             target_machine: draft.target_machine.to_string(),
             target_id_json: draft.target_id_json.clone(),
-            action_json: draft.action_json.clone(),
+            payload_json: draft.payload_json.clone(),
         })
         .collect()
 }
@@ -534,7 +585,7 @@ async fn dispatch_row(machine: &'static str, sender_id: &str, row: OutboxRow) {
         };
         let outcome = match deliverers().get(&row.target_machine) {
             None => Ok(DeliveryOutcome::Rejected(format!("no machine named {}", row.target_machine))),
-            Some(deliver) => deliver(row.target_id_json.clone(), row.action_json.clone(), token).await,
+            Some(deliver) => deliver(row.kind, row.target_id_json.clone(), row.payload_json.clone(), token).await,
         };
         match outcome {
             // ack-vs-execute separation: after a definitive verdict, only the storage ack is

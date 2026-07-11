@@ -47,6 +47,7 @@ enum CounterAction {
     Tick,
 }
 
+#[derive(Serialize, Deserialize)]
 struct CounterInit {
     id: String,
     start: i64,
@@ -158,6 +159,7 @@ struct PongerState;
 enum PongerAction {
     Pong(i64),
 }
+#[derive(Serialize, Deserialize)]
 struct PongerInit {
     id: String,
 }
@@ -203,6 +205,7 @@ struct PingerState;
 enum PingerAction {
     Ping(i64),
 }
+#[derive(Serialize, Deserialize)]
 struct PingerInit {
     id: String,
 }
@@ -220,7 +223,11 @@ impl StateMachine for PingerMachine {
     type Construction = PingerInit;
     type Env = RtEnv;
     fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
-        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(0));
+        // construct-if-absent + act, durably — subject's ActMaybeConstruct as two serial rows
+        effects.enqueue_act_maybe_construct::<PongerMachine>(
+            PongerInit { id: "pong1".to_string() },
+            PongerAction::Pong(0),
+        );
         PingerState
     }
     fn transition(
@@ -258,7 +265,7 @@ async fn outbound() {
     ponger.delete("pong1".to_string()).await;
     pinger.delete("ping1".to_string()).await;
 
-    ponger.maybe_construct(PongerInit { id: "pong1".to_string() }).await;
+    // pong1 is NOT pre-constructed: pinger's construct effect creates it via the outbox
     pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
 
     pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;

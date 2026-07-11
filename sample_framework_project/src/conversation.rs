@@ -3,7 +3,7 @@
 //! (tool results go back through the brain), deterministic externals instead of an LLM.
 
 use crate::externals::{decide, execute_tool, send_reply, BrainInput};
-use crate::stats::{StatsAction, StatsId, StatsMachine};
+use crate::stats::{StatsAction, StatsId, StatsInit, StatsMachine};
 use chrono::{DateTime, Duration, Utc};
 use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine};
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,7 @@ pub enum Decision {
     CallTool { tool: String, args: Vec<String> },
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ConversationInit {
     pub id: ConversationId,
 }
@@ -131,8 +132,8 @@ fn conversation_transition(
             let history = with_entry(&state.history, HistoryEntry::User(text.clone()));
             let input = BrainInput::UserText(text.clone());
             effects.enqueue_external(async move { ConversationAction::Decided(decide(input).await) });
-            effects.enqueue_action::<StatsMachine>(
-                StatsId,
+            effects.enqueue_act_maybe_construct::<StatsMachine>(
+                StatsInit { id: StatsId },
                 StatsAction::MessageHandled {
                     conversation: id.0.clone(),
                 },

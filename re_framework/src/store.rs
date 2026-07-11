@@ -5,22 +5,50 @@
 use anyhow::Context;
 use std::sync::OnceLock;
 
-/// An internal entity→entity action captured during a transition, already serialized —
+/// What a durable outbox row does at the target: deliver an action, or construct the entity
+/// (idempotent — an existing target makes it a no-op). Serial per-sender dispatch means
+/// Construct-then-Act rows compose into subject's ActMaybeConstruct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowKind {
+    Act,
+    Construct,
+}
+
+impl RowKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RowKind::Act => "act",
+            RowKind::Construct => "construct",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<RowKind> {
+        match s {
+            "act" => Some(RowKind::Act),
+            "construct" => Some(RowKind::Construct),
+            _ => None,
+        }
+    }
+}
+
+/// An internal entity→entity operation captured during a transition, already serialized —
 /// first-class data, unlike external effects which stay opaque futures.
 #[derive(Debug, Clone)]
 pub(crate) struct OutboxDraft {
+    pub kind: RowKind,
     pub target_machine: &'static str,
     pub target_id_json: String,
-    pub action_json: String,
+    pub payload_json: String,
 }
 
 /// A durable outbox row loaded back from the store (drain-on-activate / boot recovery).
 #[derive(Debug, Clone)]
 pub(crate) struct OutboxRow {
     pub seq: i64,
+    pub kind: RowKind,
     pub target_machine: String,
     pub target_id_json: String,
-    pub action_json: String,
+    pub payload_json: String,
 }
 
 /// Identifies one delivered action for receiver-side dedup: the sender plus the
@@ -102,6 +130,7 @@ async fn create_tables(db: &turso::Database) -> anyhow::Result<()> {
              target_machine TEXT NOT NULL,
              target_id_json TEXT NOT NULL,
              action TEXT NOT NULL,
+             kind TEXT NOT NULL,
              created_at INTEGER NOT NULL,
              failure TEXT,
              PRIMARY KEY (sender_machine, sender_id, seq)
@@ -208,7 +237,7 @@ impl Store {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
-                "SELECT seq, target_machine, target_id_json, action FROM outbox
+                "SELECT seq, target_machine, target_id_json, action, kind FROM outbox
                  WHERE sender_machine = ? AND sender_id = ? AND failure IS NULL
                  ORDER BY seq",
                 (machine, sender_id),
@@ -217,11 +246,14 @@ impl Store {
             .context("pending outbox")?;
         let mut pending = Vec::new();
         while let Some(row) = rows.next().await.context("pending outbox row")? {
+            let kind: String = row.get(4).context("kind column")?;
             pending.push(OutboxRow {
                 seq: row.get(0).context("seq column")?,
+                kind: RowKind::parse(&kind)
+                    .with_context(|| format!("unknown outbox row kind {kind}"))?,
                 target_machine: row.get(1).context("target_machine column")?,
                 target_id_json: row.get(2).context("target_id_json column")?,
-                action_json: row.get(3).context("action column")?,
+                payload_json: row.get(3).context("action column")?,
             });
         }
         Ok(pending)
@@ -445,8 +477,8 @@ async fn insert_outbox_rows(
 ) -> anyhow::Result<()> {
     for (offset, draft) in outbox.iter().enumerate() {
         conn.execute(
-            "INSERT INTO outbox (sender_machine, sender_id, seq, sender_id_json, target_machine, target_id_json, action, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO outbox (sender_machine, sender_id, seq, sender_id_json, target_machine, target_id_json, action, kind, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 machine,
                 id_string,
@@ -454,7 +486,8 @@ async fn insert_outbox_rows(
                 id_json,
                 draft.target_machine,
                 draft.target_id_json.as_str(),
-                draft.action_json.as_str(),
+                draft.payload_json.as_str(),
+                draft.kind.as_str(),
                 chrono::Utc::now().timestamp_millis(),
             ),
         )
@@ -548,14 +581,16 @@ mod tests {
 
         let drafts = vec![
             OutboxDraft {
+                kind: RowKind::Act,
                 target_machine: "Other",
                 target_id_json: "\"t1\"".to_string(),
-                action_json: "\"a1\"".to_string(),
+                payload_json: "\"a1\"".to_string(),
             },
             OutboxDraft {
+                kind: RowKind::Construct,
                 target_machine: "Other",
                 target_id_json: "\"t1\"".to_string(),
-                action_json: "\"a2\"".to_string(),
+                payload_json: "\"a2\"".to_string(),
             },
         ];
         let token = CallToken {
@@ -571,8 +606,8 @@ mod tests {
         // rows durable + ordered; senders visible for boot recovery; dedup row committed with them
         let pending = store.pending_outbox("TestMachine", "e1").await.expect("pending");
         assert_eq!(
-            pending.iter().map(|r| (r.seq, r.action_json.as_str())).collect::<Vec<_>>(),
-            vec![(0, "\"a1\""), (1, "\"a2\"")]
+            pending.iter().map(|r| (r.seq, r.kind, r.payload_json.as_str())).collect::<Vec<_>>(),
+            vec![(0, RowKind::Act, "\"a1\""), (1, RowKind::Construct, "\"a2\"")]
         );
         let far_future = chrono::Utc::now().timestamp_millis() + 3_600_000;
         assert_eq!(
