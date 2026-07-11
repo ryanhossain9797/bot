@@ -9,7 +9,7 @@ async fn ensure_test_store() {
     INIT.get_or_init(|| async {
         let path = std::env::temp_dir().join(format!("re_fw_smoke_{}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        crate::turso_store::init_turso_store(path.to_str().expect("utf8 temp path"))
+        crate::store::turso::init_turso_store(path.to_str().expect("utf8 temp path"))
             .await
             .expect("init smoke test store");
     })
