@@ -1,5 +1,5 @@
 
-use crate::handle::wakers;
+use crate::handle::machines;
 use crate::store::store;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -19,15 +19,11 @@ pub fn start_sweeper() {
 
 async fn sweeper_loop() {
     let mut recently_woken: HashMap<(String, String), Instant> = HashMap::new();
+    sweep_once((0, 0), &mut recently_woken).await;
     let mut interval = MIN_INTERVAL;
-    let mut grace = (0, 0);
     loop {
-        let woke = sweep_once(grace, &mut recently_woken).await;
-        grace = (OUTBOX_GRACE_MS, TIMER_GRACE_MS);
-        interval = match woke {
-            0 => (interval * 2).min(MAX_INTERVAL),
-            _ => MIN_INTERVAL,
-        };
+        let woke = sweep_once((OUTBOX_GRACE_MS, TIMER_GRACE_MS), &mut recently_woken).await;
+        interval = if woke == 0 { (interval * 2).min(MAX_INTERVAL) } else { MIN_INTERVAL };
         tokio::time::sleep(interval).await;
     }
 }
@@ -88,9 +84,9 @@ async fn sweep_once(
             continue;
         }
         let (machine, id_json) = &key;
-        match wakers().get(machine) {
-            Some(wake) => {
-                wake(id_json.clone()).await;
+        match machines().get(machine) {
+            Some(vtable) => {
+                (vtable.wake)(id_json.clone()).await;
                 recently_woken.insert(key, now);
                 woke += 1;
                 tokio::time::sleep(WAKE_STAGGER).await;

@@ -117,10 +117,10 @@ impl Store for TursoStore {
         finish_tx(&conn, result).await
     }
 
-    async fn save(&self, write: &TransitionWrite, id_json: &str) -> anyhow::Result<SaveOutcome> {
+    async fn save(&self, write: &TransitionWrite) -> anyhow::Result<SaveOutcome> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ()).await.context("begin save")?;
-        let result = save_in_tx(&conn, write, id_json).await;
+        let result = save_in_tx(&conn, write).await;
         finish_tx(&conn, result).await
     }
 
@@ -196,11 +196,7 @@ impl Store for TursoStore {
             )
             .await
             .context("stalled outbox senders")?;
-        let mut stalled = Vec::new();
-        while let Some(row) = rows.next().await.context("stalled sender row")? {
-            stalled.push((row.get(0).context("machine column")?, row.get(1).context("id_json column")?));
-        }
-        Ok(stalled)
+        collect_pairs(&mut rows).await
     }
 
     async fn due_timers(&self, cutoff_ms: i64, limit: i64, offset: i64) -> anyhow::Result<Vec<(String, String)>> {
@@ -214,11 +210,7 @@ impl Store for TursoStore {
             )
             .await
             .context("due timers")?;
-        let mut due = Vec::new();
-        while let Some(row) = rows.next().await.context("due timer row")? {
-            due.push((row.get(0).context("machine column")?, row.get(1).context("id_json column")?));
-        }
-        Ok(due)
+        collect_pairs(&mut rows).await
     }
 
     async fn ack_outbox(
@@ -293,6 +285,25 @@ impl Store for TursoStore {
     }
 }
 
+async fn collect_pairs(rows: &mut turso::Rows) -> anyhow::Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.context("pair row")? {
+        out.push((row.get(0).context("column 0")?, row.get(1).context("column 1")?));
+    }
+    Ok(out)
+}
+
+async fn current_version(conn: &turso::Connection, machine: &str, id: &str) -> anyhow::Result<Option<i64>> {
+    let mut rows = conn
+        .query("SELECT version FROM entities WHERE machine = ? AND id = ?", (machine, id))
+        .await
+        .context("version probe")?;
+    match rows.next().await.context("version probe row")? {
+        Some(row) => Ok(Some(row.get(0).context("version column")?)),
+        None => Ok(None),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_in_tx(
     conn: &turso::Connection,
@@ -304,15 +315,7 @@ async fn insert_in_tx(
     next_tick_on: Option<i64>,
     outbox: &[OutboxDraft],
 ) -> anyhow::Result<SaveOutcome> {
-    let mut existing = conn
-        .query(
-            "SELECT version FROM entities WHERE machine = ? AND id = ?",
-            (machine, id_string),
-        )
-        .await
-        .context("insert pre-check")?;
-    if let Some(row) = existing.next().await.context("insert pre-check row")? {
-        let actual: i64 = row.get(0).context("version column")?;
+    if let Some(actual) = current_version(conn, machine, id_string).await? {
         return Ok(SaveOutcome::Conflict { actual: Some(actual) });
     }
     conn.execute(
@@ -334,11 +337,7 @@ async fn insert_in_tx(
     Ok(SaveOutcome::Ok)
 }
 
-async fn save_in_tx(
-    conn: &turso::Connection,
-    write: &TransitionWrite,
-    id_json: &str,
-) -> anyhow::Result<SaveOutcome> {
+async fn save_in_tx(conn: &turso::Connection, write: &TransitionWrite) -> anyhow::Result<SaveOutcome> {
     let updated = conn
         .execute(
             "UPDATE entities SET state = ?, version = version + 1, next_outbox_seq = ?, next_tick_on = ?
@@ -356,20 +355,10 @@ async fn save_in_tx(
         .await
         .context("CAS update")?;
     if updated == 0 {
-        let mut rows = conn
-            .query(
-                "SELECT version FROM entities WHERE machine = ? AND id = ?",
-                (write.machine, write.id_string.as_str()),
-            )
-            .await
-            .context("conflict probe")?;
-        let actual = match rows.next().await.context("conflict probe row")? {
-            Some(row) => Some(row.get::<i64>(0).context("version column")?),
-            None => None,
-        };
+        let actual = current_version(conn, write.machine, &write.id_string).await?;
         return Ok(SaveOutcome::Conflict { actual });
     }
-    insert_outbox_rows(conn, write.machine, &write.id_string, id_json, write.generation, write.first_seq, &write.outbox)
+    insert_outbox_rows(conn, write.machine, &write.id_string, &write.id_json, write.generation, write.first_seq, &write.outbox)
         .await?;
     if let Some(token) = &write.dedup {
         let changed = conn

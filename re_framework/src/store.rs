@@ -60,6 +60,7 @@ pub(crate) struct CallToken {
 pub(crate) struct TransitionWrite {
     pub machine: &'static str,
     pub id_string: String,
+    pub id_json: String,
     pub state_json: String,
     pub generation: i64,
     pub expected_version: i64,
@@ -98,7 +99,7 @@ pub(crate) trait Store: Send + Sync {
         outbox: &[OutboxDraft],
     ) -> anyhow::Result<SaveOutcome>;
 
-    async fn save(&self, write: &TransitionWrite, id_json: &str) -> anyhow::Result<SaveOutcome>;
+    async fn save(&self, write: &TransitionWrite) -> anyhow::Result<SaveOutcome>;
 
     async fn is_duplicate(
         &self,
@@ -164,6 +165,7 @@ pub(crate) mod contract {
         TransitionWrite {
             machine: "TestMachine",
             id_string: "e1".to_string(),
+            id_json: "\"e1\"".to_string(),
             state_json: format!("\"v{}\"", expected_version + 1),
             generation: GEN,
             expected_version,
@@ -190,11 +192,11 @@ pub(crate) mod contract {
         assert_eq!((loaded.version, loaded.next_outbox_seq), (0, 0));
 
         assert!(matches!(
-            store.save(&write(0, 0, Vec::new(), None), "\"e1\"").await.expect("save"),
+            store.save(&write(0, 0, Vec::new(), None)).await.expect("save"),
             SaveOutcome::Ok
         ));
         assert!(matches!(
-            store.save(&write(0, 0, Vec::new(), None), "\"e1\"").await.expect("stale save"),
+            store.save(&write(0, 0, Vec::new(), None)).await.expect("stale save"),
             SaveOutcome::Conflict { actual: Some(1) }
         ));
         let loaded = store.load("TestMachine", "e1").await.expect("load").expect("exists");
@@ -228,7 +230,7 @@ pub(crate) mod contract {
             seq: 7,
         };
         assert!(matches!(
-            store.save(&write(0, 0, drafts, Some(token.clone())), "\"e1\"").await.expect("save"),
+            store.save(&write(0, 0, drafts, Some(token.clone()))).await.expect("save"),
             SaveOutcome::Ok
         ));
 
@@ -262,7 +264,7 @@ pub(crate) mod contract {
 
         let regress = CallToken { seq: 6, ..token.clone() };
         assert!(matches!(
-            store.save(&write(1, 2, Vec::new(), Some(regress)), "\"e1\"").await.expect("save"),
+            store.save(&write(1, 2, Vec::new(), Some(regress))).await.expect("save"),
             SaveOutcome::Ok
         ));
         assert!(store.is_duplicate("TestMachine", "e1", &token).await.expect("dup"));
@@ -273,7 +275,7 @@ pub(crate) mod contract {
 
         let next_gen = CallToken { sender_generation: 6, seq: 0, ..token.clone() };
         assert!(matches!(
-            store.save(&write(2, 2, Vec::new(), Some(next_gen.clone())), "\"e1\"").await.expect("save"),
+            store.save(&write(2, 2, Vec::new(), Some(next_gen.clone()))).await.expect("save"),
             SaveOutcome::Ok
         ));
         assert!(store.is_duplicate("TestMachine", "e1", &next_gen).await.expect("dup"));
@@ -301,11 +303,11 @@ pub(crate) mod contract {
 
         let zombie = TransitionWrite { generation: GEN + 1, ..write(0, 0, Vec::new(), None) };
         assert!(matches!(
-            store.save(&zombie, "\"e1\"").await.expect("zombie save"),
+            store.save(&zombie).await.expect("zombie save"),
             SaveOutcome::Conflict { actual: Some(0) }
         ));
         assert!(matches!(
-            store.save(&write(0, 0, Vec::new(), None), "\"e1\"").await.expect("save"),
+            store.save(&write(0, 0, Vec::new(), None)).await.expect("save"),
             SaveOutcome::Ok
         ));
         let loaded = store.load("TestMachine", "e1").await.expect("load").expect("exists");
@@ -323,7 +325,7 @@ pub(crate) mod contract {
         assert!(due(500).await.expect("due").is_empty(), "not yet due");
 
         assert!(matches!(
-            store.save(&write(0, 0, Vec::new(), None), "\"e1\"").await.expect("save"),
+            store.save(&write(0, 0, Vec::new(), None)).await.expect("save"),
             SaveOutcome::Ok
         ));
         assert!(due(i64::MAX).await.expect("due").is_empty(), "deadline cleared on commit");

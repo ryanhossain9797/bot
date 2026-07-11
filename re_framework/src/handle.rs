@@ -18,13 +18,13 @@ enum Envelope<A> {
     },
 }
 
-enum DeliveryOutcome {
+pub(crate) enum DeliveryOutcome {
     Applied,
     Duplicate,
     Rejected(String),
 }
 
-struct TransientDelivery(String);
+pub(crate) struct TransientDelivery(String);
 
 struct Persisted<SM: StateMachine> {
     state: SM::State,
@@ -44,21 +44,21 @@ type Deliverer = Box<dyn Fn(RowKind, String, String, CallToken) -> DeliverFuture
 type WakeFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type Waker = Box<dyn Fn(String) -> WakeFuture + Send + Sync>;
 
+pub(crate) struct MachineVtable {
+    pub deliver: Deliverer,
+    pub wake: Waker,
+}
+
 static HANDLES: OnceLock<DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)>> =
     OnceLock::new();
-static DELIVERERS: OnceLock<DashMap<String, Deliverer>> = OnceLock::new();
-static WAKERS: OnceLock<DashMap<String, Waker>> = OnceLock::new();
+static MACHINES: OnceLock<DashMap<String, MachineVtable>> = OnceLock::new();
 
 fn handles() -> &'static DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)> {
     HANDLES.get_or_init(DashMap::new)
 }
 
-fn deliverers() -> &'static DashMap<String, Deliverer> {
-    DELIVERERS.get_or_init(DashMap::new)
-}
-
-pub(crate) fn wakers() -> &'static DashMap<String, Waker> {
-    WAKERS.get_or_init(DashMap::new)
+pub(crate) fn machines() -> &'static DashMap<String, MachineVtable> {
+    MACHINES.get_or_init(DashMap::new)
 }
 
 pub fn register<SM: StateMachine>(env: SM::Env) {
@@ -68,7 +68,7 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
         SM::name()
     );
     assert!(
-        !deliverers().contains_key(SM::name()) && !wakers().contains_key(SM::name()),
+        !machines().contains_key(SM::name()),
         "two state machine types registered with the name {}",
         SM::name()
     );
@@ -77,40 +77,39 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
         env: Arc::new(env),
     }));
     handles().insert(std::any::TypeId::of::<SM>(), leaked as &(dyn std::any::Any + Send + Sync));
-    wakers().insert(
+    machines().insert(
         SM::name().to_string(),
-        Box::new(|id_json| {
-            Box::pin(async move {
-                match serde_json::from_str::<SM::Id>(&id_json) {
-                    Ok(id) => handle::<SM>().wake(&id).await,
-                    Err(e) => log_transition::<SM>(&format!("sweep skipped unparseable id {id_json}: {e}")),
-                }
-            })
-        }),
-    );
-    deliverers().insert(
-        SM::name().to_string(),
-        Box::new(|kind, id_json, payload_json, token| {
-            Box::pin(async move {
-                match kind {
-                    RowKind::Act => {
-                        let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
-                            return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
-                        };
-                        let Ok(action) = serde_json::from_str::<SM::Action>(&payload_json) else {
-                            return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
-                        };
-                        handle::<SM>().deliver_tracked(id, action, token).await
+        MachineVtable {
+            wake: Box::new(|id_json| {
+                Box::pin(async move {
+                    match serde_json::from_str::<SM::Id>(&id_json) {
+                        Ok(id) => handle::<SM>().wake(&id).await,
+                        Err(e) => log_transition::<SM>(&format!("sweep skipped unparseable id {id_json}: {e}")),
                     }
-                    RowKind::Construct => {
-                        let Ok(construction) = serde_json::from_str::<SM::Construction>(&payload_json) else {
-                            return Ok(DeliveryOutcome::Rejected(format!("unparseable construction for {}", SM::name())));
-                        };
-                        handle::<SM>().deliver_construct(construction).await
+                })
+            }),
+            deliver: Box::new(|kind, id_json, payload_json, token| {
+                Box::pin(async move {
+                    match kind {
+                        RowKind::Act => {
+                            let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
+                                return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
+                            };
+                            let Ok(action) = serde_json::from_str::<SM::Action>(&payload_json) else {
+                                return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
+                            };
+                            handle::<SM>().deliver_tracked(id, action, token).await
+                        }
+                        RowKind::Construct => {
+                            let Ok(construction) = serde_json::from_str::<SM::Construction>(&payload_json) else {
+                                return Ok(DeliveryOutcome::Rejected(format!("unparseable construction for {}", SM::name())));
+                            };
+                            handle::<SM>().deliver_construct(construction).await
+                        }
                     }
-                }
-            })
-        }),
+                })
+            }),
+        },
     );
 }
 
@@ -486,6 +485,7 @@ async fn run_entity<SM: StateMachine>(
                 let write = TransitionWrite {
                     machine: SM::name(),
                     id_string: ctx.id_string.clone(),
+                    id_json: ctx.id_json.clone(),
                     state_json,
                     generation,
                     expected_version: version,
@@ -495,7 +495,7 @@ async fn run_entity<SM: StateMachine>(
                     outbox: effects.actions,
                     dedup: tracked.as_ref().map(|(token, _)| token.clone()),
                 };
-                match store().save(&write, &ctx.id_json).await {
+                match store().save(&write).await {
                     Ok(SaveOutcome::Ok) => {
                         state = next;
                         version += 1;
@@ -584,12 +584,12 @@ async fn dispatch_row(
             sender_generation: row.sender_generation,
             seq: row.seq,
         };
-        let outcome = match deliverers().get(&row.target_machine) {
+        let outcome = match machines().get(&row.target_machine) {
             None => Err(TransientDelivery(format!(
                 "no machine named {} registered yet",
                 row.target_machine
             ))),
-            Some(deliver) => deliver(row.kind, row.target_id_json.clone(), row.payload_json.clone(), token).await,
+            Some(vtable) => (vtable.deliver)(row.kind, row.target_id_json.clone(), row.payload_json.clone(), token).await,
         };
         match outcome {
             Ok(DeliveryOutcome::Applied | DeliveryOutcome::Duplicate) => {
