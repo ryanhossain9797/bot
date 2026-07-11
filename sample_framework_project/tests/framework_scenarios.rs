@@ -333,8 +333,10 @@ async fn c2_c3_stale_seq_redelivery_is_deduped() {
 
     let conn = raw_conn().await;
     conn.execute(
-        "INSERT INTO outbox (sender_machine, sender_id, seq, sender_id_json, target_machine, target_id_json, action, kind, created_at)
-         VALUES ('ScnSender', 'c2_s', 0, '\"c2_s\"', 'ScnRecv', '\"c2_r\"', ?, 'act', ?)",
+        "INSERT INTO outbox (sender_machine, sender_id, seq, sender_generation, sender_id_json, target_machine, target_id_json, action, kind, created_at)
+         VALUES ('ScnSender', 'c2_s', 0,
+                 (SELECT generation FROM entities WHERE machine = 'ScnSender' AND id = 'c2_s'),
+                 '\"c2_s\"', 'ScnRecv', '\"c2_r\"', ?, 'act', ?)",
         (
             serde_json::to_string(&RecvAction::Val(1)).expect("serialize action"),
             chrono::Utc::now().timestamp_millis(),
@@ -379,8 +381,10 @@ async fn c4_sweep_wake_drains_live_actor() {
     }
     let conn = raw_conn().await;
     conn.execute(
-        "INSERT INTO outbox (sender_machine, sender_id, seq, sender_id_json, target_machine, target_id_json, action, kind, created_at)
-         VALUES ('ScnSender', 'c4_s', 0, '\"c4_s\"', 'ScnRecv', '\"c4_r\"', ?, 'act', ?)",
+        "INSERT INTO outbox (sender_machine, sender_id, seq, sender_generation, sender_id_json, target_machine, target_id_json, action, kind, created_at)
+         VALUES ('ScnSender', 'c4_s', 0,
+                 (SELECT generation FROM entities WHERE machine = 'ScnSender' AND id = 'c4_s'),
+                 '\"c4_s\"', 'ScnRecv', '\"c4_r\"', ?, 'act', ?)",
         (
             serde_json::to_string(&RecvAction::Val(7)).expect("serialize action"),
             chrono::Utc::now().timestamp_millis() - 600_000,

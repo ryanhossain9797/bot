@@ -1,6 +1,6 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use crate::store::{store, CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite};
+use crate::store::{new_generation, store, CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite};
 use chrono::Utc;
 use dashmap::DashMap;
 use std::future::Future;
@@ -8,11 +8,6 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{mpsc, oneshot};
 
-/// Mailbox message. `Act` is fire-and-forget (external callers); `Tracked` carries a durable
-/// outbox row's identity and an ack channel — the sender's dispatcher deletes the row only
-/// after the receiver commits. `Drain` (sweep wake of a live actor) re-reads the pending
-/// outbox and redispatches it; duplicate deliveries this causes are absorbed by monotonic
-/// receiver dedup / idempotent constructs, so a spurious drain is safe.
 enum Envelope<A> {
     Act(A),
     Drain,
@@ -24,31 +19,23 @@ enum Envelope<A> {
 }
 
 enum DeliveryOutcome {
-    /// Transition committed (dedup row written with it).
     Applied,
-    /// Receiver had already applied this exact call — safe to ack.
     Duplicate,
-    /// Domain rejection (invalid transition, unconstructed target, unparseable row) —
-    /// permanent; the row gets poisoned, never retried.
     Rejected(String),
 }
 
-/// Dropped ack (receiver died mid-processing) or infra failure — retry the delivery.
 struct TransientDelivery(String);
 
-/// A parsed entity row image: the unit that flows from store to actor and back.
 struct Persisted<SM: StateMachine> {
     state: SM::State,
+    generation: i64,
     version: i64,
     next_seq: i64,
 }
 
 enum LoadStatus {
-    /// Actor is now live (was already, or just spawned from its row).
     Live,
-    /// No row in the store.
     Absent,
-    /// Row exists but its state doesn't deserialize (logged where detected).
     Corrupt,
 }
 
@@ -57,9 +44,6 @@ type Deliverer = Box<dyn Fn(RowKind, String, String, CallToken) -> DeliverFuture
 type WakeFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type Waker = Box<dyn Fn(String) -> WakeFuture + Send + Sync>;
 
-/// The runtime registry: every machine type registers once at startup. `HANDLES` gives typed
-/// access (`handle::<SM>()`); `DELIVERERS` routes outbox rows — which are strings of data —
-/// back to a concrete `StateMachine` impl, including after a restart.
 static HANDLES: OnceLock<DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)>> =
     OnceLock::new();
 static DELIVERERS: OnceLock<DashMap<String, Deliverer>> = OnceLock::new();
@@ -77,9 +61,6 @@ pub(crate) fn wakers() -> &'static DashMap<String, Waker> {
     WAKERS.get_or_init(DashMap::new)
 }
 
-/// Register a machine type with its environment. Call once per machine at startup, after
-/// `init_turso_store`. Handles live for the program's lifetime (they were per-machine statics
-/// before; now the runtime owns them).
 pub fn register<SM: StateMachine>(env: SM::Env) {
     let leaked: &'static StateMachineHandle<SM> = Box::leak(Box::new(StateMachineHandle {
         entities: Arc::new(DashMap::new()),
@@ -124,11 +105,9 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
             })
         }),
     ).is_some();
-    // two different types with one name would silently steal each other's outbox routing
     assert!(!name_clash, "two state machine types registered with the name {}", SM::name());
 }
 
-/// Typed access to a registered machine's handle.
 pub fn handle<SM: StateMachine>() -> &'static StateMachineHandle<SM> {
     let entry = handles()
         .get(&std::any::TypeId::of::<SM>())
@@ -144,9 +123,6 @@ pub fn handle<SM: StateMachine>() -> &'static StateMachineHandle<SM> {
         .expect("registry entry type matches its TypeId key")
 }
 
-/// Sole sender to a live actor's mailbox; not `Clone` — dropping it (via registry removal) stops the actor (RAII).
-/// `generation` identifies which activation owns the slot, so a dying actor's cleanup can't
-/// evict a successor that already replaced it.
 struct SoleMailboxHandle<SM: StateMachine> {
     sender: mpsc::UnboundedSender<Envelope<SM::Action>>,
     generation: u64,
@@ -163,8 +139,6 @@ pub struct StateMachineHandle<SM: StateMachine> {
 }
 
 impl<SM: StateMachine> StateMachineHandle<SM> {
-    /// Send an envelope if the actor is live; hand it back if not. Never blocks, never awaits —
-    /// safe to call while a map shard guard is held (send on an unbounded channel is sync).
     fn try_send(&self, key: &str, envelope: Envelope<SM::Action>) -> Result<(), Envelope<SM::Action>> {
         match self.entities.get(key) {
             Some(handle) => handle.sender.send(envelope).map_err(|e| e.0),
@@ -172,10 +146,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// Spawn an actor for a parsed row image unless one is already live. All I/O happened
-    /// before this; the entry guard is held only for the sync check-and-insert (the narrowed lock).
-    /// Durable outbox rows are NOT handed over here — the actor's drain-on-activate reads them
-    /// from the store, the single source, so nothing can be dispatched twice at activation.
     fn spawn_if_vacant(&self, id: SM::Id, persisted: Persisted<SM>) {
         use dashmap::mapref::entry::Entry as DEntry;
         match self.entities.entry(id.get_id_string()) {
@@ -193,10 +163,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// Sweep wake. A live actor is told to re-drain its outbox — pending rows must not hide
-    /// behind a long-lived actor whose activation drain failed or predates them. A dead one
-    /// is loaded and spawned; drain-on-activate covers the rest. Carries no authority either
-    /// way: the actor re-reads everything from the store.
     async fn wake(&self, id: &SM::Id) {
         let key = id.get_id_string();
         if self.try_send(&key, Envelope::Drain).is_ok() {
@@ -207,9 +173,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// The one load→parse→spawn path. After `Ok(Live)` the actor is guaranteed live
-    /// (already was, or just spawned from its row); `Corrupt` is logged here so the
-    /// interim reset policy stays single-sourced.
     async fn ensure_live(&self, id: &SM::Id, key: &str) -> anyhow::Result<LoadStatus> {
         if self.entities.contains_key(key) {
             return Ok(LoadStatus::Live);
@@ -220,6 +183,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 Ok(state) => {
                     let persisted = Persisted {
                         state,
+                        generation: loaded.generation,
                         version: loaded.version,
                         next_seq: loaded.next_outbox_seq,
                     };
@@ -244,8 +208,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 let _ = self.construct_fresh(id, key, construction).await;
             }
             Ok(LoadStatus::Corrupt) => {
-                // interim policy (#186): corrupt state resets to a fresh construct;
-                // proper corruption handling arrives with state versioning
                 log_transition::<SM>("resetting entity — stored state unparseable");
                 match store().delete(SM::name(), &key).await {
                     Ok(()) => {
@@ -257,8 +219,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// Construct-if-absent core. `Ok` covers both "constructed" and benign races (someone else
-    /// constructed / a delete raced); `Err` is a store failure the caller may retry.
     async fn construct_fresh(&self, id: SM::Id, key: String, construction: SM::Construction) -> anyhow::Result<()> {
         let mut effects = Effects::new(id.clone());
         let state = SM::construct(construction, &mut effects);
@@ -267,8 +227,9 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             anyhow::anyhow!("state failed to serialize: {e}")
         })?;
         let id_json = serde_json::to_string(&id).expect("EntityId serializes");
+        let generation = new_generation();
         match store()
-            .insert(SM::name(), &key, &id_json, &state_json, tick_deadline::<SM>(&state), &effects.actions)
+            .insert(SM::name(), &key, &id_json, generation, &state_json, tick_deadline::<SM>(&state), &effects.actions)
             .await
         {
             Err(e) => {
@@ -287,10 +248,9 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 Ok(())
             }
             Ok(SaveOutcome::Ok) => {
-                // the committed construct rows reach the dispatcher via drain-on-activate
-                // ONLY — handing them over here as well would dispatch every one twice
                 let persisted = Persisted {
                     state,
+                    generation,
                     version: 0,
                     next_seq: effects.actions.len() as i64,
                 };
@@ -303,8 +263,6 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    /// A durable Construct row arriving from another entity's outbox. Idempotent by nature —
-    /// an existing target is a successful no-op, so constructs need no dedup slot.
     async fn deliver_construct(&self, construction: SM::Construction) -> Result<DeliveryOutcome, TransientDelivery> {
         let id = construction.get_id().clone();
         let key = id.get_id_string();
@@ -360,16 +318,12 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         log_transition::<SM>("act dropped — actor kept vanishing (raced deletes?)");
     }
 
-    /// Construct-if-absent, then act: the everyday frontend entry point (subject's
-    /// ActMaybeConstruct). `act` alone still exists for actions to entities that must
-    /// already exist (e.g. externals feeding results back).
     pub async fn act_maybe_construct(&self, construction: SM::Construction, action: SM::Action) {
         let id = construction.get_id().clone();
         self.maybe_construct(construction).await;
         self.act(id, action).await;
     }
 
-    /// Deliver a durable outbox row's action and wait for the receiver's verdict.
     async fn deliver_tracked(
         &self,
         id: SM::Id,
@@ -444,10 +398,6 @@ impl<SM: StateMachine> EntityContext<SM> {
     }
 }
 
-/// Re-read the pending outbox from the store and hand it to the dispatcher. Used at
-/// activation and on `Drain` wakes. May re-send rows the dispatcher already has in flight —
-/// harmless: redelivery is absorbed by monotonic receiver dedup / idempotent constructs,
-/// and acking an already-deleted row is a no-op.
 async fn drain_outbox<SM: StateMachine>(
     id_string: &str,
     dispatch_tx: &mpsc::UnboundedSender<Vec<OutboxRow>>,
@@ -468,17 +418,14 @@ async fn run_entity<SM: StateMachine>(
 ) {
     let Persisted {
         mut state,
+        generation,
         mut version,
         mut next_seq,
     } = persisted;
     let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<Vec<OutboxRow>>();
-    // dropped when this actor ends, telling the dispatcher to stop: an orphaned dispatcher
-    // must not keep retrying (or acking) rows a successor activation now owns
     let (_dispatcher_stop, stopped) = tokio::sync::watch::channel(());
     tokio::spawn(run_dispatcher(SM::name(), ctx.id_string.clone(), dispatch_rx, stopped));
 
-    // drain-on-activate: redispatch every un-acked durable row before serving new work
-    // (construct-time rows arrive this way too — the store is the only handover)
     drain_outbox::<SM>(&ctx.id_string, &dispatch_tx).await;
 
     loop {
@@ -489,9 +436,6 @@ async fn run_entity<SM: StateMachine>(
                     .to_std()
                     .unwrap_or(std::time::Duration::ZERO);
 
-                // Firing the pre-computed action is safe only because this loop is the sole
-                // writer of `state` — nothing can change it between deriving and firing. Any
-                // future out-of-loop tick delivery (e.g. a sweep) must recompute from state.
                 tokio::time::timeout(delay, rx.recv())
                     .await
                     .unwrap_or_else(|_e| Some(Envelope::Act(scheduled.action)))
@@ -519,7 +463,6 @@ async fn run_entity<SM: StateMachine>(
                 }
                 Ok(false) => tracked = Some((token, ack)),
                 Err(e) => {
-                    // no ack — the sender's dispatcher retries the delivery
                     log_transition::<SM>(&format!("dedup check failed, deferring delivery: {e:#}"));
                     continue;
                 }
@@ -538,6 +481,7 @@ async fn run_entity<SM: StateMachine>(
                     machine: SM::name(),
                     id_string: ctx.id_string.clone(),
                     state_json,
+                    generation,
                     expected_version: version,
                     first_seq: next_seq,
                     next_outbox_seq: next_seq + effects.actions.len() as i64,
@@ -551,7 +495,7 @@ async fn run_entity<SM: StateMachine>(
                         version += 1;
                         next_seq = write.next_outbox_seq;
                         if !write.outbox.is_empty() {
-                            let _ = dispatch_tx.send(rows_from_drafts(write.first_seq, &write.outbox));
+                            let _ = dispatch_tx.send(rows_from_drafts(generation, write.first_seq, &write.outbox));
                         }
                         for external in effects.externals {
                             tokio::spawn(external);
@@ -561,20 +505,14 @@ async fn run_entity<SM: StateMachine>(
                         }
                     }
                     Ok(SaveOutcome::Conflict { actual }) => {
-                        // reload-and-drop (#186): a CAS miss means this instance is illegitimate —
-                        // kill it; the next message rebuilds from the store. Dropping the ack makes
-                        // the sender's dispatcher retry against the rebuilt actor.
                         log_transition::<SM>(&format!(
                             "CAS CONFLICT (expected v{version}, store has {actual:?}) — dropping actor; state rebuilds from store"
                         ));
-                        // generation-checked: a concurrent delete + reconstruct may already
-                        // have installed a successor, which must not be evicted by our death
                         ctx.entities
                             .remove_if(&ctx.id_string, |_, current| current.generation == ctx.generation);
                         break;
                     }
                     Err(e) => {
-                        // no ack on I/O failure — sender retries; state unchanged
                         log_transition::<SM>(&format!("aborted — persistence failed: {e:#}"));
                     }
                 }
@@ -589,19 +527,17 @@ async fn run_entity<SM: StateMachine>(
     }
 }
 
-/// The persisted mirror of `schedule()`: written into the entity row at every commit so the
-/// sweep can find due timers without deserializing state. The wake carries no authority — the
-/// woken actor recomputes `schedule()` from state and fires (or doesn't) from that.
 fn tick_deadline<SM: StateMachine>(state: &SM::State) -> Option<i64> {
     SM::schedule(state).map(|scheduled| scheduled.at.timestamp_millis())
 }
 
-fn rows_from_drafts(first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec<OutboxRow> {
+fn rows_from_drafts(generation: i64, first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec<OutboxRow> {
     drafts
         .iter()
         .enumerate()
         .map(|(offset, draft)| OutboxRow {
             seq: first_seq + offset as i64,
+            sender_generation: generation,
             kind: draft.kind,
             target_machine: draft.target_machine.to_string(),
             target_id_json: draft.target_id_json.clone(),
@@ -610,10 +546,6 @@ fn rows_from_drafts(first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec
         .collect()
 }
 
-/// Per-entity outbound dispatcher: strictly serial per sender, delete-on-ack,
-/// poison-on-rejection, retry-forever on transient. Stops when `stopped` closes (its actor
-/// ended): whatever it still holds stays in the outbox for the successor activation, and it
-/// must not race that successor with deliveries or acks of rows it no longer owns.
 async fn run_dispatcher(
     machine: &'static str,
     sender_id: String,
@@ -629,8 +561,6 @@ async fn run_dispatcher(
     }
 }
 
-/// Resolve one row to a definitive verdict. Returns false if the actor ended first —
-/// the row remains in the outbox for the successor.
 async fn dispatch_row(
     machine: &'static str,
     sender_id: &str,
@@ -645,11 +575,10 @@ async fn dispatch_row(
         let token = CallToken {
             sender_machine: machine,
             sender_id: sender_id.to_string(),
+            sender_generation: row.sender_generation,
             seq: row.seq,
         };
         let outcome = match deliverers().get(&row.target_machine) {
-            // transient, not a rejection: registration may simply not have happened yet
-            // (startup ordering) — poisoning here would destroy the delivery irreversibly
             None => Err(TransientDelivery(format!(
                 "no machine named {} registered yet",
                 row.target_machine
@@ -657,15 +586,13 @@ async fn dispatch_row(
             Some(deliver) => deliver(row.kind, row.target_id_json.clone(), row.payload_json.clone(), token).await,
         };
         match outcome {
-            // ack-vs-execute separation: after a definitive verdict, only the storage ack is
-            // retried — the delivery is never re-run in this session
             Ok(DeliveryOutcome::Applied | DeliveryOutcome::Duplicate) => {
-                ack_with_retry(machine, sender_id, row.seq, stopped).await;
+                ack_with_retry(machine, sender_id, row.sender_generation, row.seq, stopped).await;
                 return true;
             }
             Ok(DeliveryOutcome::Rejected(reason)) => {
                 println!("[outbox] {machine}/{sender_id} seq {} rejected by {}: {reason}", row.seq, row.target_machine);
-                if let Err(e) = store().fail_outbox(machine, sender_id, row.seq, &reason).await {
+                if let Err(e) = store().fail_outbox(machine, sender_id, row.sender_generation, row.seq, &reason).await {
                     println!("[outbox] failed to poison row seq {}: {e:#}", row.seq);
                 }
                 return true;
@@ -689,25 +616,22 @@ async fn dispatch_row(
 async fn ack_with_retry(
     machine: &'static str,
     sender_id: &str,
+    sender_generation: i64,
     seq: i64,
     stopped: &mut tokio::sync::watch::Receiver<()>,
 ) {
     for attempt in 0..5 {
-        match store().ack_outbox(machine, sender_id, seq).await {
+        match store().ack_outbox(machine, sender_id, sender_generation, seq).await {
             Ok(()) => return,
             Err(e) => {
                 println!("[outbox] ack failed for {machine}/{sender_id} seq {seq} (attempt {attempt}): {e:#}");
                 if stopped.has_changed().is_err() {
-                    // actor ended: stop touching this lane — a successor now owns the row,
-                    // and its redelivery resolves to Duplicate and acks
                     return;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
     }
-    // give up: the row survives and redelivers on a later activation, where it resolves to
-    // Duplicate (monotonic dedup — the verdict here was definitive) and gets acked then
 }
 
 fn log_transition<SM: StateMachine>(label: &str) {
