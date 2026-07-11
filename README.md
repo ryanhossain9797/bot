@@ -96,10 +96,39 @@ A minimal typed actor system. You implement the `StateMachine` trait with associ
   outbox, redelivered across crashes, deduped at the receiver); `enqueue_external(future)` runs
   an async op at-most-once and feeds its result back as an action. Effects fire only *after*
   the transition commits.
-- **Persistence** (#186): a Turso (SQLite) database is the source of truth — one transaction per
-  transition commits {state CAS on `version` + outbox rows + dedup marker}. A CAS conflict drops
-  the in-memory actor, which rebuilds from the store on its next message.
+- **Persistence** (#186): the store is the source of truth — one transaction per transition
+  commits {state CAS + outbox rows + dedup marker}. A CAS conflict drops the in-memory actor,
+  which rebuilds from the store on its next message.
 - **`Scheduled`**: an entity can declare a timed wakeup (used here for a force-reset watchdog).
+
+The persistence layer sits behind the `Store` trait (`store.rs`); `TursoStore` (`turso_store.rs`,
+Turso/SQLite, `init_turso_store`) is the only backend today. Any backend must honor the
+contract — the runtime's correctness proofs assume every clause, and `store::contract` encodes
+them as a reusable test suite any new backend must pass:
+
+- `save` commits {state CAS + outbox inserts + dedup upsert} atomically, or nothing; the CAS
+  predicate is `version` **and** `generation`, so a zombie actor from a deleted incarnation can
+  never commit onto a recreated row.
+- `insert` is insert-if-absent with its outbox rows in the same transaction.
+- `generation` is an entity's incarnation id: assigned at construct, immutable, strictly
+  increasing across lives of the same `(machine, id)` (`new_generation()` — atomic counter
+  seeded from boot time in µs; sound while a process constructs slower than one entity per
+  elapsed µs).
+- `ack_outbox` / `fail_outbox` only touch rows of the given generation — a dead life's wedged
+  ack cannot delete or poison its successor's rows.
+- `is_duplicate` is two-tier: caller generation older than the slot ⇒ duplicate (revoked
+  history), newer ⇒ fresh, equal ⇒ `seq <= last_seq`. The slot's `last_seq` never regresses
+  within a generation (enforced in the upsert, not just by the serial mailbox).
+- `pending_outbox` returns un-poisoned rows in seq order; `stalled_outbox_senders` /
+  `due_timers` support cutoff + stable-order paging.
+- `delete` purges the entity row, its outbox, and dedup slots in **both** directions (as
+  receiver and as caller) in one transaction.
+
+Two invariants the *runtime* relies on around the store: each live actor's loop is the sole
+writer of its in-memory state (the pre-computed `schedule()` action is only safe to fire
+because nothing can change state between deriving and firing — out-of-loop tick delivery must
+recompute), and a dispatcher never advances past an outbox row without a definitive
+Applied/Duplicate/Rejected verdict (what makes monotonic dedup sound).
 
 ## Architecture
 

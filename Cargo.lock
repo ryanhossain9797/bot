@@ -3116,6 +3116,7 @@ name = "re_framework"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dashmap 6.1.0",
  "serde",
