@@ -52,12 +52,63 @@ enum LoadStatus {
 type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
 type Deliverer = Box<dyn Fn(String, String, CallToken) -> DeliverFuture + Send + Sync>;
 
-/// Global machine-name → typed-delivery registry. Outbox rows are (strings of) data; this is
-/// how a row finds its way back to a concrete `StateMachine` impl after a restart.
+/// The runtime registry: every machine type registers once at startup. `HANDLES` gives typed
+/// access (`handle::<SM>()`); `DELIVERERS` routes outbox rows — which are strings of data —
+/// back to a concrete `StateMachine` impl, including after a restart.
+static HANDLES: OnceLock<DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)>> =
+    OnceLock::new();
 static DELIVERERS: OnceLock<DashMap<String, Deliverer>> = OnceLock::new();
+
+fn handles() -> &'static DashMap<std::any::TypeId, &'static (dyn std::any::Any + Send + Sync)> {
+    HANDLES.get_or_init(DashMap::new)
+}
 
 fn deliverers() -> &'static DashMap<String, Deliverer> {
     DELIVERERS.get_or_init(DashMap::new)
+}
+
+/// Register a machine type with its environment. Call once per machine at startup, after
+/// `init_turso_store`. Handles live for the program's lifetime (they were per-machine statics
+/// before; now the runtime owns them).
+pub fn register<SM: StateMachine>(env: SM::Env) {
+    let leaked: &'static StateMachineHandle<SM> = Box::leak(Box::new(StateMachineHandle {
+        entities: Arc::new(DashMap::new()),
+        env: Arc::new(env),
+    }));
+    let already = handles()
+        .insert(std::any::TypeId::of::<SM>(), leaked as &(dyn std::any::Any + Send + Sync))
+        .is_some();
+    assert!(!already, "state machine {} registered twice", SM::name());
+    deliverers().insert(
+        SM::name().to_string(),
+        Box::new(|id_json, action_json, token| {
+            Box::pin(async move {
+                let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
+                    return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
+                };
+                let Ok(action) = serde_json::from_str::<SM::Action>(&action_json) else {
+                    return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
+                };
+                handle::<SM>().deliver_tracked(id, action, token).await
+            })
+        }),
+    );
+}
+
+/// Typed access to a registered machine's handle.
+pub fn handle<SM: StateMachine>() -> &'static StateMachineHandle<SM> {
+    let entry = handles()
+        .get(&std::any::TypeId::of::<SM>())
+        .unwrap_or_else(|| {
+            panic!(
+                "state machine {} not registered — call re_framework::register::<{}>(env) at startup",
+                SM::name(),
+                SM::name()
+            )
+        });
+    let any: &'static (dyn std::any::Any + Send + Sync) = *entry.value();
+    any.downcast_ref::<StateMachineHandle<SM>>()
+        .expect("registry entry type matches its TypeId key")
 }
 
 /// Sole sender to a live actor's mailbox; not `Clone` — dropping it (via registry removal) stops the actor (RAII).
@@ -71,27 +122,6 @@ pub struct StateMachineHandle<SM: StateMachine> {
 }
 
 impl<SM: StateMachine> StateMachineHandle<SM> {
-    pub fn new(env: SM::Env) -> Self {
-        deliverers().insert(
-            SM::name().to_string(),
-            Box::new(|id_json, action_json, token| {
-                Box::pin(async move {
-                    let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
-                        return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
-                    };
-                    let Ok(action) = serde_json::from_str::<SM::Action>(&action_json) else {
-                        return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
-                    };
-                    SM::handle().deliver_tracked(id, action, token).await
-                })
-            }),
-        );
-        StateMachineHandle {
-            entities: Arc::new(DashMap::new()),
-            env: Arc::new(env),
-        }
-    }
-
     /// Send an envelope if the actor is live; hand it back if not. Never blocks, never awaits —
     /// safe to call while a map shard guard is held (send on an unbounded channel is sync).
     fn try_send(&self, key: &str, envelope: Envelope<SM::Action>) -> Result<(), Envelope<SM::Action>> {

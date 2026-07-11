@@ -7,7 +7,7 @@ mod externals;
 mod stats;
 
 use conversation::{ConversationAction, ConversationId, ConversationInit, ConversationMachine};
-use re_framework::StateMachine;
+use re_framework::{handle, register};
 use stats::{StatsId, StatsInit, StatsMachine};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -24,12 +24,12 @@ Idle conversations reset after 60s (persisted timer — survives a restart too).
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     re_framework::init_turso_store("framework_db/sample.db").await?;
-    conversation::init_conversation_machine();
-    stats::init_stats_machine();
-    StatsMachine::handle().maybe_construct(StatsInit { id: StatsId }).await;
+    register::<ConversationMachine>(());
+    register::<StatsMachine>(());
+    handle::<StatsMachine>().maybe_construct(StatsInit { id: StatsId }).await;
 
-    let recovered = ConversationMachine::handle().recover_pending().await?
-        + StatsMachine::handle().recover_pending().await?;
+    let recovered = handle::<ConversationMachine>().recover_pending().await?
+        + handle::<StatsMachine>().recover_pending().await?;
     match recovered {
         0 => {}
         n => println!("[recovery] woke {n} entities with un-acked outbox rows"),
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
                     .map(|(conv, text)| (conv.trim(), text.trim()))
                     .unwrap_or(("main", line));
                 let id = ConversationId(conv.to_string());
-                ConversationMachine::handle()
+                handle::<ConversationMachine>()
                     .act_maybe_construct(
                         ConversationInit { id },
                         ConversationAction::UserMessage(text.to_string()),

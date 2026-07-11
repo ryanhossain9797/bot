@@ -2,10 +2,10 @@
 //! Exists to exercise entity→entity messaging (conversations enqueue actions to it)
 //! and the framework's design-for-N-machine-types goal.
 
-use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine, StateMachineHandle};
+use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StatsId;
@@ -38,16 +38,7 @@ impl Identified for StatsInit {
     }
 }
 
-static STATS: OnceLock<StateMachineHandle<StatsMachine>> = OnceLock::new();
-
 pub struct StatsMachine;
-
-pub fn init_stats_machine() {
-    STATS
-        .set(StateMachineHandle::new(()))
-        .ok()
-        .expect("StatsMachine initialized once");
-}
 
 impl StateMachine for StatsMachine {
     type State = Stats;
@@ -98,10 +89,6 @@ impl StateMachine for StatsMachine {
 
     fn schedule(_state: &Stats) -> Option<Scheduled<StatsAction>> {
         None
-    }
-
-    fn handle() -> &'static StateMachineHandle<StatsMachine> {
-        STATS.get().expect("StatsMachine not initialized")
     }
 
     fn name() -> &'static str {

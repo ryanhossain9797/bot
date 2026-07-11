@@ -1,4 +1,3 @@
-use re_framework::StateMachine;
 use regex::Regex;
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
@@ -72,7 +71,7 @@ impl EventHandler for Handler {
         let conversation_id =
             ConversationId(Platform::Discord, message.channel_id.get().to_string());
 
-        let handle = ConversationMachine::handle();
+        let handle = re_framework::handle::<ConversationMachine>();
 
         let constructor = ConversationConstructor {
             id: conversation_id,

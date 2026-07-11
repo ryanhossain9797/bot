@@ -5,9 +5,9 @@
 use crate::externals::{decide, execute_tool, send_reply, BrainInput};
 use crate::stats::{StatsAction, StatsId, StatsMachine};
 use chrono::{DateTime, Duration, Utc};
-use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine, StateMachineHandle};
+use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 const IDLE_RESET_SECS: i64 = 60;
 
@@ -68,16 +68,7 @@ impl Identified for ConversationInit {
     }
 }
 
-static CONVERSATION: OnceLock<StateMachineHandle<ConversationMachine>> = OnceLock::new();
-
 pub struct ConversationMachine;
-
-pub fn init_conversation_machine() {
-    CONVERSATION
-        .set(StateMachineHandle::new(()))
-        .ok()
-        .expect("ConversationMachine initialized once");
-}
 
 impl StateMachine for ConversationMachine {
     type State = Conversation;
@@ -112,12 +103,6 @@ impl StateMachine for ConversationMachine {
             }),
             _ => None,
         }
-    }
-
-    fn handle() -> &'static StateMachineHandle<ConversationMachine> {
-        CONVERSATION
-            .get()
-            .expect("ConversationMachine not initialized")
     }
 
     fn name() -> &'static str {

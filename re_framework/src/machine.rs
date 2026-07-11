@@ -1,5 +1,4 @@
 use crate::effects::Effects;
-use crate::handle::StateMachineHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
@@ -34,7 +33,6 @@ pub trait StateMachine: Sized + 'static {
         effects: &mut Effects<Self>,
     ) -> anyhow::Result<Self::State>;
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
-    fn handle() -> &'static StateMachineHandle<Self>;
 
     /// Persisted identity: keys `entities`/`outbox`/`call_dedup` rows and routes outbox
     /// dispatch. Must be explicit and stable — renaming the Rust type must not change it.

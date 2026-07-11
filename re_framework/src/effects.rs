@@ -39,7 +39,7 @@ impl<SM: StateMachine> Effects<SM> {
         let id = self.id.clone();
         self.externals.push(Box::pin(async move {
             let action = fut.await;
-            SM::handle().act(id, action).await;
+            crate::handle::handle::<SM>().act(id, action).await;
         }));
     }
 }

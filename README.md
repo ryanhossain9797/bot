@@ -86,9 +86,11 @@ A minimal typed actor system. You implement the `StateMachine` trait with associ
 (`State`, `Id`, `Action`, `Construction`, `Env`) and four functions (`construct`, `transition`,
 `schedule`, `handle`).
 
-- **`StateMachineHandle`**: a registry (`DashMap<id → mailbox>`); `maybe_construct` / `act` /
-  `delete`. Each live entity is a `tokio` task with an mpsc mailbox; entities lazily rehydrate from
-  disk on first access.
+- **`StateMachineHandle`**: per-machine actor registry (`DashMap<id → mailbox>`); `maybe_construct`
+  / `act` / `act_maybe_construct` / `delete`. Machines register once at startup
+  (`re_framework::register::<SM>(env)`) and are reached via `re_framework::handle::<SM>()`. Each
+  live entity is a `tokio` task with an mpsc mailbox; entities lazily rehydrate from the store on
+  first access.
 - **`Effects`**: transitions don't perform side effects directly — they *enqueue* them.
   `enqueue_action` sends a durable action to another machine (serialized into a transactional
   outbox, redelivered across crashes, deduped at the receiver); `enqueue_external(future)` runs

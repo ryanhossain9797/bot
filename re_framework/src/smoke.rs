@@ -1,7 +1,7 @@
-use crate::{Effects, EntityId, Identified, Scheduled, StateMachine, StateMachineHandle};
+use crate::{handle, register, Effects, EntityId, Identified, Scheduled, StateMachine};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 async fn ensure_test_store() {
@@ -31,8 +31,6 @@ struct Obs {
 struct CounterEnv {
     obs: Arc<Mutex<Obs>>,
 }
-
-static COUNTER: OnceLock<StateMachineHandle<CounterMachine>> = OnceLock::new();
 
 struct CounterMachine;
 
@@ -112,9 +110,6 @@ impl StateMachine for CounterMachine {
         })
     }
 
-    fn handle() -> &'static StateMachineHandle<CounterMachine> {
-        COUNTER.get().expect("CounterMachine not initialized")
-    }
     fn name() -> &'static str {
         "CounterMachine"
     }
@@ -124,11 +119,8 @@ impl StateMachine for CounterMachine {
 async fn smoke() {
     ensure_test_store().await;
     let obs = Arc::new(Mutex::new(Obs::default()));
-    COUNTER
-        .set(StateMachineHandle::<CounterMachine>::new(CounterEnv { obs: Arc::clone(&obs) }))
-        .ok()
-        .expect("set COUNTER once");
-    let sm = CounterMachine::handle();
+    register::<CounterMachine>(CounterEnv { obs: Arc::clone(&obs) });
+    let sm = handle::<CounterMachine>();
 
     sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 }).await;
     sm.act("c1".to_string(), CounterAction::Add(5)).await;
@@ -158,9 +150,6 @@ async fn smoke() {
 struct RtEnv {
     received: Arc<Mutex<Vec<i64>>>,
 }
-
-static PONGER: OnceLock<StateMachineHandle<PongerMachine>> = OnceLock::new();
-static PINGER: OnceLock<StateMachineHandle<PingerMachine>> = OnceLock::new();
 
 struct PongerMachine;
 #[derive(Clone, Serialize, Deserialize)]
@@ -201,9 +190,6 @@ impl StateMachine for PongerMachine {
     }
     fn schedule(_state: &PongerState) -> Option<Scheduled<PongerAction>> {
         None
-    }
-    fn handle() -> &'static StateMachineHandle<PongerMachine> {
-        PONGER.get().expect("PongerMachine not initialized")
     }
     fn name() -> &'static str {
         "PongerMachine"
@@ -254,9 +240,6 @@ impl StateMachine for PingerMachine {
     fn schedule(_state: &PingerState) -> Option<Scheduled<PingerAction>> {
         None
     }
-    fn handle() -> &'static StateMachineHandle<PingerMachine> {
-        PINGER.get().expect("PingerMachine not initialized")
-    }
     fn name() -> &'static str {
         "PingerMachine"
     }
@@ -266,16 +249,10 @@ impl StateMachine for PingerMachine {
 async fn outbound() {
     ensure_test_store().await;
     let received = Arc::new(Mutex::new(Vec::<i64>::new()));
-    PONGER
-        .set(StateMachineHandle::<PongerMachine>::new(RtEnv { received: Arc::clone(&received) }))
-        .ok()
-        .expect("set PONGER once");
-    PINGER
-        .set(StateMachineHandle::<PingerMachine>::new(RtEnv { received: Arc::clone(&received) }))
-        .ok()
-        .expect("set PINGER once");
-    let ponger = PongerMachine::handle();
-    let pinger = PingerMachine::handle();
+    register::<PongerMachine>(RtEnv { received: Arc::clone(&received) });
+    register::<PingerMachine>(RtEnv { received: Arc::clone(&received) });
+    let ponger = handle::<PongerMachine>();
+    let pinger = handle::<PingerMachine>();
 
     // a previous run's persisted state would make maybe_construct load instead of construct
     ponger.delete("pong1".to_string()).await;
