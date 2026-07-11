@@ -2624,6 +2624,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sample_framework_project"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "re_framework",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
