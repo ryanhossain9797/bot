@@ -1,129 +1,101 @@
-# Models Directory
+# Models Directory — Model Packs
 
-This directory contains GGUF format language models for use with this llama.cpp-based project.
+This directory holds **model packs**: self-contained folders, one per model, that bundle everything
+model-specific. The bot loads exactly one pack at startup (chosen by the `MODEL_PACK_DIR`
+environment variable), and nothing about a model is compiled into the binary — swapping the folder
+and restarting is enough to change models.
 
-## Current Models
+## What a pack contains
 
-- `Llama-3.2-1B-Instruct-Q4_K_M.gguf` - Lightweight Llama 3.2 model (1B parameters)
-- `Llama-3.3-70B-Instruct-Q4_K_M.gguf` - Default model (14B parameters)
+```
+qwen-qwen3-6-35b-a3b/
+├── manifest.toml        # the knobs (see below)
+├── chat_template.jinja  # the chat template the prompt is rendered from
+├── <model>.gguf         # GGUF weights (referenced by manifest `model`)
+└── mmproj-<...>.gguf     # multimodal projector (referenced by manifest `mmproj`)
+```
 
-## Supported Format
+The `.gguf` weight/projector files are large and are **not** checked into git (see
+[.gitignore](../../.gitignore)). Download them into the pack folder before running — the
+`manifest.toml` names the exact filenames it expects.
 
-This project uses **GGUF** (GPT-Generated Unified Format) models, which are quantized models optimized for running on CPU with llama.cpp.
+## The manifest
 
-## Where to Get Models
+`manifest.toml` is the pack's contract with the loader ([chatbot/src/model_pack.rs](../src/model_pack.rs)).
+The bundled Qwen pack:
 
-### 1. Hugging Face (Recommended)
+```toml
+model    = "Qwen3.6-35B-A3B-Q8_0.gguf"       # GGUF weights (filename within this folder)
+mmproj   = "mmproj-Qwen3.6-35B-A3B-BF16.gguf" # multimodal projector
+template = "chat_template.jinja"              # chat template file within this folder
 
-The easiest way to get GGUF models is from Hugging Face repositories that provide pre-quantized versions:
+[sampling]
+top_k = 20
+top_p = 0.95
 
-**Popular GGUF Model Repositories:**
-- **Qwen Models**: https://huggingface.co/Qwen
-- **Llama Models**: https://huggingface.co/meta-llama
-- **Quantized Collections** (various models pre-quantized):
-  - https://huggingface.co/bartowski (many models in GGUF format)
-  - https://huggingface.co/TheBloke (extensive GGUF collection)
-  - https://huggingface.co/lmstudio-community
+[context]
+n_ctx                 = 196608   # context window
+n_batch               = 4096     # llama.cpp batch size
+batch_chunk           = 2048     # tokens decoded per chunk while ingesting the prompt
+max_generation_tokens = 8192     # cap on generated tokens per turn
 
-**Download Example:**
+[format]
+enable_thinking       = true     # emit a reasoning block
+add_generation_prompt = true     # template appends the assistant generation prompt
+parser                = "qwen"   # response parser to use (resolved in roles/parsers)
+
+[thinking]
+close_marker = "</think>"        # marker that ends the reasoning block
+```
+
+The `parser` name is resolved against the parser family in
+[chatbot/src/roles/parsers.rs](../src/roles/parsers.rs). A model whose output grammar matches an
+existing parser is a manifest change; a genuinely new grammar means adding a `Parser` impl and a
+line in `from_name`.
+
+## Supported format
+
+Weights and projector must be **GGUF** (the quantized format llama.cpp loads). The projector
+(`mmproj`) is what gives the model its vision capability.
+
+## Adding a new pack
+
+1. Create a folder here, e.g. `models/my-model/`.
+2. Drop the GGUF weights and mmproj projector into it.
+3. Write a `manifest.toml` (copy the Qwen one and adjust filenames/knobs).
+4. Add the chat template the model expects as a `.jinja` file and point `template` at it.
+5. Make sure `[format] parser` names a parser the bot knows (`qwen` today), or add one.
+6. Run with `MODEL_PACK_DIR=./models/my-model` (see the `Justfile`'s `run_local`, which mounts the
+   pack and sets this variable).
+
+## Where to get GGUF weights
+
+Pre-quantized GGUF models are easiest to obtain from Hugging Face:
+
+- Qwen: <https://huggingface.co/Qwen>
+- Community quantizers: <https://huggingface.co/bartowski>, <https://huggingface.co/lmstudio-community>
+
 ```bash
-# Using huggingface-cli (install with: pip install huggingface-hub)
-huggingface-cli download Qwen/Qwen2.5-14B-Instruct-GGUF \
-  Llama-3.3-70B-Instruct-Q4_K_M.gguf \
-  --local-dir models/ \
-  --local-dir-use-symlinks False
-
-# Or using wget/curl from a direct URL
-wget https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/Llama-3.3-70B-Instruct-Q4_K_M.gguf \
-  -O models/Llama-3.3-70B-Instruct-Q4_K_M.gguf
+# example: fetch a weight file straight into a pack folder
+huggingface-cli download <repo> <file>.gguf \
+  --local-dir models/qwen-qwen3-6-35b-a3b
 ```
 
-### 2. Ollama
-
-You can also export models from Ollama:
-```bash
-# Pull a model
-ollama pull qwen2.5:14b
-
-# Note: Ollama stores models in its own format, but you can use llama.cpp tools
-# to convert if needed, or download GGUF directly from Hugging Face instead
-```
-
-## Quantization Levels Explained
-
-GGUF models come in different quantization levels. The format is typically: `Q[bits]_[variant]`
-
-| Quantization | Size | Quality | Speed | Recommended Use |
-|--------------|------|---------|-------|-----------------|
-| Q2_K | Smallest | Lowest | Fastest | Testing only |
-| Q3_K_M | Small | Low | Fast | Resource-constrained |
-| Q4_K_M | Medium | Good | Balanced | **Recommended** |
-| Q4_K_S | Medium | Good | Balanced | Alternative to Q4_K_M |
-| Q5_K_M | Large | High | Slower | Quality-focused |
-| Q6_K | Larger | Very High | Slower | Near-original quality |
-| Q8_0 | Largest | Highest | Slowest | Maximum quality |
-
-**For this project, Q4_K_M is recommended** as it provides a good balance of quality and performance.
-
-
-## Using Different Models
-
-### Method 1: Environment Variable
-```bash
-# Use a different model temporarily
-MODEL_PATH=models/Llama-3.2-1B-Instruct-Q4_K_M.gguf cargo run
-```
-
-### Method 2: Change Default
-Edit `src/main.rs` line 15 to change the default model:
-```rust
-let model_path = std::env::var("MODEL_PATH")
-    .unwrap_or_else(|_| "models/YOUR-MODEL-NAME.gguf".to_string());
-```
-
-## Prompt Formats
-
-Different models use different prompt formats. This project currently uses Qwen's ChatML format:
-
-**Qwen/ChatML Format (Current):**
-```
-<|im_start|>system
-You are a helpful assistant.<|im_end|>
-<|im_start|>user
-{prompt}<|im_end|>
-<|im_start|>assistant
-```
-
-**Llama Format:**
-```
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-You are a helpful assistant.<|eot_id|>
-<|start_header_id|>user<|end_header_id|>
-{prompt}<|eot_id|>
-<|start_header_id|>assistant<|end_header_id|>
-```
-
-If you use a non-Qwen model, you may need to adjust the prompt format in `src/main.rs` (lines 59-62).
+Remember to fetch the matching **mmproj** projector file for multimodal support, not just the
+weights.
 
 ## Troubleshooting
 
-### Model fails to load
-- Check file integrity: ensure the .gguf file downloaded completely
-- Verify RAM: ensure you have enough memory for the model
-- Check permissions: ensure the file is readable
+**Model fails to load** — confirm the `.gguf` files downloaded completely, that their filenames
+match `manifest.toml` exactly, and that there's enough VRAM/RAM for the quantization you chose.
 
-### Poor quality responses
-- Try a higher quantization (Q5_K_M or Q6_K)
-- Verify you're using the correct prompt format for your model
-- Increase context size in main.rs (line 28)
+**Poor quality responses** — try a higher-quality quantization (e.g. Q6_K / Q8_0), and verify the
+`chat_template.jinja` and `close_marker` actually match the model family.
 
-### Slow performance
-- Use a smaller model or lower quantization
-- Reduce n_threads in main.rs (line 29)
-- Reduce context size (currently 2048 tokens)
+**Slow performance** — use a smaller model or a lower quantization, or lower `n_ctx` /
+`max_generation_tokens` in the manifest.
 
-## Additional Resources
+## Additional resources
 
-- llama.cpp GitHub: https://github.com/ggerganov/llama.cpp
-- GGUF Specification: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
-- Model Performance Comparisons: https://huggingface.co/spaces/lmsys/chatbot-arena-leaderboard
+- llama.cpp: <https://github.com/ggerganov/llama.cpp>
+- GGUF spec: <https://github.com/ggerganov/ggml/blob/master/docs/gguf.md>
