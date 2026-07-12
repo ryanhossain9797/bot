@@ -472,27 +472,30 @@ fn post_transition(
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
-    let (at, action) = match &conversation.state {
-        ConversationState::Idle { .. } => return None,
-        ConversationState::AwaitingLLMDecision { .. } => (
-            conversation.last_transition + ChronoDuration::milliseconds(LLM_TIMEOUT_MS),
-            ConversationAction::LLMDecisionResult(Err("timed out".to_string())),
-        ),
-        ConversationState::SendingMessage { .. } => (
-            conversation.last_transition + ChronoDuration::milliseconds(SEND_TIMEOUT_MS),
-            ConversationAction::MessageSent(Err("timed out".to_string())),
-        ),
-        ConversationState::RunningTools { pending_tools, .. } => {
-            let (id, at) = pending_tools
-                .iter()
-                .map(|(id, call)| {
-                    (id.clone(), conversation.last_transition + call.tool_type.rescue_timeout())
-                })
-                .min_by_key(|(_, at)| *at)?;
-            (at, ConversationAction::ToolResult { id, result: Err("timed out".to_string()) })
-        }
-    };
-    Some(Scheduled { at, action })
+    match &conversation.state {
+        ConversationState::Idle { .. } => None,
+        ConversationState::AwaitingLLMDecision { .. } => Some(Scheduled {
+            at: conversation.last_transition + ChronoDuration::milliseconds(LLM_TIMEOUT_MS),
+            action: ConversationAction::LLMDecisionResult(Err("timed out".to_string())),
+        }),
+        ConversationState::SendingMessage { .. } => Some(Scheduled {
+            at: conversation.last_transition + ChronoDuration::milliseconds(SEND_TIMEOUT_MS),
+            action: ConversationAction::MessageSent(Err("timed out".to_string())),
+        }),
+        ConversationState::RunningTools { pending_tools, .. } => pending_tools
+            .iter()
+            .map(|(id, call)| {
+                (id.clone(), conversation.last_transition + call.tool_type.rescue_timeout())
+            })
+            .min_by_key(|(_, at)| *at)
+            .map(|(id, at)| Scheduled {
+                at,
+                action: ConversationAction::ToolResult {
+                    id,
+                    result: Err("timed out".to_string()),
+                },
+            }),
+    }
 }
 
 fn construct_conversation(constructor: ConversationConstructor) -> Conversation {
