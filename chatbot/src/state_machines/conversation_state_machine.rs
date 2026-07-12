@@ -24,6 +24,9 @@ type ConversationEffects = Effects<ConversationMachine>;
 
 const REDACT_HISTORY_IMAGES: bool = false;
 
+const LLM_TIMEOUT_MS: i64 = 300_000;
+const SEND_TIMEOUT_MS: i64 = 60_000;
+
 pub struct ConversationMachine;
 
 impl StateMachine for ConversationMachine {
@@ -469,23 +472,27 @@ fn post_transition(
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
-    let action = match &conversation.state {
+    let (at, action) = match &conversation.state {
         ConversationState::Idle { .. } => return None,
-        ConversationState::AwaitingLLMDecision { .. } => {
-            ConversationAction::LLMDecisionResult(Err("timed out".to_string()))
+        ConversationState::AwaitingLLMDecision { .. } => (
+            conversation.last_transition + ChronoDuration::milliseconds(LLM_TIMEOUT_MS),
+            ConversationAction::LLMDecisionResult(Err("timed out".to_string())),
+        ),
+        ConversationState::SendingMessage { .. } => (
+            conversation.last_transition + ChronoDuration::milliseconds(SEND_TIMEOUT_MS),
+            ConversationAction::MessageSent(Err("timed out".to_string())),
+        ),
+        ConversationState::RunningTools { pending_tools, .. } => {
+            let (id, at) = pending_tools
+                .iter()
+                .map(|(id, call)| {
+                    (id.clone(), conversation.last_transition + call.tool_type.rescue_timeout())
+                })
+                .min_by_key(|(_, at)| *at)?;
+            (at, ConversationAction::ToolResult { id, result: Err("timed out".to_string()) })
         }
-        ConversationState::SendingMessage { .. } => {
-            ConversationAction::MessageSent(Err("timed out".to_string()))
-        }
-        ConversationState::RunningTools { pending_tools, .. } => ConversationAction::ToolResult {
-            id: pending_tools.keys().next().cloned().unwrap_or_default(),
-            result: Err("timed out".to_string()),
-        },
     };
-    Some(Scheduled {
-        at: conversation.last_transition + ChronoDuration::milliseconds(600_000),
-        action,
-    })
+    Some(Scheduled { at, action })
 }
 
 fn construct_conversation(constructor: ConversationConstructor) -> Conversation {

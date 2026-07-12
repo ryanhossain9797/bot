@@ -1,6 +1,6 @@
 use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
 use crate::types::media::MessageImage;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -314,6 +314,21 @@ pub enum ToolType {
         old_string: String,
         new_string: String,
     },
+}
+
+impl ToolType {
+    pub fn rescue_timeout(&self) -> Duration {
+        let ms = match self {
+            ToolType::RunBashCommand { .. } => 300_000,
+            ToolType::VisitUrl { .. } => 90_000,
+            ToolType::WebSearch { .. } | ToolType::ResetBashContainer => 60_000,
+            ToolType::ViewImage { .. }
+            | ToolType::SendImageToUser { .. }
+            | ToolType::ReadFile { .. }
+            | ToolType::EditFile { .. } => 30_000,
+        };
+        Duration::milliseconds(ms)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
