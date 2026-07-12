@@ -206,9 +206,61 @@ fn conversation_transition(
 ) -> ConversationTransitionResult {
     let from = state_label(&conversation.state);
     let state = match (conversation.state, action) {
-        (_, ConversationAction::ForceReset) => Ok(Conversation {
+        (
+            ConversationState::AwaitingLLMDecision { history, .. },
+            ConversationAction::LLMDecisionTimeout,
+        ) => {
+            let mut history = history;
+            history.push(HistoryEntry::Interrupted);
+            Ok(Conversation {
+                pending: Vec::new(),
+                state: ConversationState::Idle {
+                    recent_conversation: RecentConversation::new(String::new(), history),
+                },
+                last_transition: Utc::now(),
+                ..conversation
+            })
+        }
+        (
+            ConversationState::RunningTools {
+                recent_conversation,
+                mut pending_tools,
+                mut completed_tools,
+                ..
+            },
+            ConversationAction::ToolExecutionTimeout,
+        ) => {
+            for (_id, call) in pending_tools.drain() {
+                let msg =
+                    "Tool execution was interrupted by a restart and did not complete.".to_string();
+                completed_tools.push((call, ToolResultData::text(msg.clone(), msg)));
+            }
+            completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
+            let results = completed_tools
+                .into_iter()
+                .map(|(call, data)| ToolResult { call, data })
+                .collect();
+            let mut history = recent_conversation.history();
+            history.push(HistoryEntry::Input(LLMInput::ToolResults(results, None)));
+            Ok(Conversation {
+                pending: Vec::new(),
+                state: ConversationState::Idle {
+                    recent_conversation: RecentConversation::new(String::new(), history),
+                },
+                last_transition: Utc::now(),
+                ..conversation
+            })
+        }
+        (
+            ConversationState::SendingMessage {
+                recent_conversation, ..
+            },
+            ConversationAction::MessageSendTimeout,
+        ) => Ok(Conversation {
             pending: Vec::new(),
-            state: ConversationState::default(),
+            state: ConversationState::Idle {
+                recent_conversation,
+            },
             last_transition: Utc::now(),
             ..conversation
         }),
@@ -472,15 +524,16 @@ fn post_transition(
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
-    match conversation.state {
-        ConversationState::Idle { .. } => None,
-        ConversationState::AwaitingLLMDecision { .. }
-        | ConversationState::SendingMessage { .. }
-        | ConversationState::RunningTools { .. } => Some(Scheduled {
-            at: conversation.last_transition + ChronoDuration::milliseconds(600_000),
-            action: ConversationAction::ForceReset,
-        }),
-    }
+    let action = match conversation.state {
+        ConversationState::Idle { .. } => return None,
+        ConversationState::AwaitingLLMDecision { .. } => ConversationAction::LLMDecisionTimeout,
+        ConversationState::RunningTools { .. } => ConversationAction::ToolExecutionTimeout,
+        ConversationState::SendingMessage { .. } => ConversationAction::MessageSendTimeout,
+    };
+    Some(Scheduled {
+        at: conversation.last_transition + ChronoDuration::milliseconds(600_000),
+        action,
+    })
 }
 
 fn construct_conversation(constructor: ConversationConstructor) -> Conversation {

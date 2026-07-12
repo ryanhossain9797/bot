@@ -384,6 +384,7 @@ impl LLMResponse {
 pub enum HistoryEntry {
     Input(LLMInput),
     Output(LLMResponse),
+    Interrupted,
 }
 
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
@@ -404,7 +405,9 @@ pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
-    ForceReset,
+    LLMDecisionTimeout,
+    ToolExecutionTimeout,
+    MessageSendTimeout,
     NewMessage {
         msg: String,
         user_id: String,
@@ -443,7 +446,9 @@ impl ToolResultData {
 impl std::fmt::Debug for ConversationAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConversationAction::ForceReset => write!(f, "ForceReset"),
+            ConversationAction::LLMDecisionTimeout => write!(f, "LLMDecisionTimeout"),
+            ConversationAction::ToolExecutionTimeout => write!(f, "ToolExecutionTimeout"),
+            ConversationAction::MessageSendTimeout => write!(f, "MessageSendTimeout"),
             ConversationAction::NewMessage { .. } => write!(f, "NewMessage"),
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
