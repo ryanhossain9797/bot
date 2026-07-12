@@ -211,7 +211,7 @@ fn conversation_transition(
             ConversationAction::LLMDecisionTimeout,
         ) => {
             let mut history = history;
-            history.push(HistoryEntry::Interrupted);
+            history.push(HistoryEntry::OutputInterrupted);
             Ok(Conversation {
                 pending: Vec::new(),
                 state: ConversationState::Idle {
@@ -251,19 +251,6 @@ fn conversation_transition(
                 ..conversation
             })
         }
-        (
-            ConversationState::SendingMessage {
-                recent_conversation, ..
-            },
-            ConversationAction::MessageSendTimeout,
-        ) => Ok(Conversation {
-            pending: Vec::new(),
-            state: ConversationState::Idle {
-                recent_conversation,
-            },
-            last_transition: Utc::now(),
-            ..conversation
-        }),
         (
             user_state,
             ConversationAction::NewMessage {
@@ -358,7 +345,7 @@ fn conversation_transition(
                 recent_conversation,
                 post_send,
             },
-            ConversationAction::MessageSent(_res),
+            ConversationAction::MessageSent(_) | ConversationAction::MessageSendTimeout,
         ) => apply_post_send(
             env,
             conversation_id,

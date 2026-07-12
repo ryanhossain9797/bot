@@ -104,7 +104,7 @@ fn build_conversation(
                 images.extend(bytes);
             }
             HistoryEntry::Output(response) => messages.push(response.to_chat_message()),
-            HistoryEntry::Interrupted => messages.push(ChatMessage::assistant(
+            HistoryEntry::OutputInterrupted => messages.push(ChatMessage::assistant(
                 "[Your previous turn was interrupted and did not complete.]",
             )),
         }

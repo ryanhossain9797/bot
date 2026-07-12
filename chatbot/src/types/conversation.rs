@@ -384,7 +384,7 @@ impl LLMResponse {
 pub enum HistoryEntry {
     Input(LLMInput),
     Output(LLMResponse),
-    Interrupted,
+    OutputInterrupted,
 }
 
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
