@@ -232,7 +232,7 @@ fn conversation_transition(
         ) => {
             for (_id, call) in pending_tools.drain() {
                 let msg =
-                    "Tool execution was interrupted by a restart and did not complete.".to_string();
+                    "Tool execution was interrupted and did not complete.".to_string();
                 completed_tools.push((call, ToolResultData::text(msg.clone(), msg)));
             }
             completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));

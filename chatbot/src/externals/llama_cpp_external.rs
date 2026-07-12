@@ -105,7 +105,7 @@ fn build_conversation(
             }
             HistoryEntry::Output(response) => messages.push(response.to_chat_message()),
             HistoryEntry::Interrupted => messages.push(ChatMessage::assistant(
-                "[Your previous turn was interrupted by a restart and did not complete.]",
+                "[Your previous turn was interrupted and did not complete.]",
             )),
         }
     }
