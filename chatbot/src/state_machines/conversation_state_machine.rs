@@ -381,7 +381,6 @@ fn conversation_transition(
                         pending_tools,
                         completed_tools,
                     },
-                    last_transition: Utc::now(),
                     ..conversation
                 })
             }
