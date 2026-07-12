@@ -9,8 +9,8 @@ use crate::types::conversation::{
 use crate::{
     types::conversation::{
         Conversation, ConversationAction, ConversationConstructor, ConversationId,
-        ConversationMessage, ConversationState, HistoryEntry, LLMInput, PostSend,
-        RecentConversation,
+        ConversationMessage, ConversationState, HistoryEntry, InterruptionReason, LLMInput,
+        PostSend, RecentConversation,
     },
     Env,
 };
@@ -23,6 +23,9 @@ type ConversationTransitionResult = anyhow::Result<Conversation>;
 type ConversationEffects = Effects<ConversationMachine>;
 
 const REDACT_HISTORY_IMAGES: bool = false;
+
+const LLM_TIMEOUT_MS: i64 = 300_000;
+const SEND_TIMEOUT_MS: i64 = 60_000;
 
 pub struct ConversationMachine;
 
@@ -206,12 +209,6 @@ fn conversation_transition(
 ) -> ConversationTransitionResult {
     let from = state_label(&conversation.state);
     let state = match (conversation.state, action) {
-        (_, ConversationAction::ForceReset) => Ok(Conversation {
-            pending: Vec::new(),
-            state: ConversationState::default(),
-            last_transition: Utc::now(),
-            ..conversation
-        }),
         (
             user_state,
             ConversationAction::NewMessage {
@@ -293,13 +290,17 @@ fn conversation_transition(
                     effects,
                 )
             }
-            Err(_) => Ok(Conversation {
-                state: ConversationState::Idle {
-                    recent_conversation: RecentConversation::new(String::new(), history),
-                },
-                last_transition: Utc::now(),
-                ..conversation
-            }),
+            Err(reason) => {
+                let mut history = history;
+                history.push(HistoryEntry::OutputInterrupted(reason.clone()));
+                Ok(Conversation {
+                    state: ConversationState::Idle {
+                        recent_conversation: RecentConversation::new(String::new(), history),
+                    },
+                    last_transition: Utc::now(),
+                    ..conversation
+                })
+            }
         },
         (
             ConversationState::SendingMessage {
@@ -383,7 +384,6 @@ fn conversation_transition(
                         pending_tools,
                         completed_tools,
                     },
-                    last_transition: Utc::now(),
                     ..conversation
                 })
             }
@@ -472,14 +472,29 @@ fn post_transition(
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
-    match conversation.state {
+    match &conversation.state {
         ConversationState::Idle { .. } => None,
-        ConversationState::AwaitingLLMDecision { .. }
-        | ConversationState::SendingMessage { .. }
-        | ConversationState::RunningTools { .. } => Some(Scheduled {
-            at: conversation.last_transition + ChronoDuration::milliseconds(600_000),
-            action: ConversationAction::ForceReset,
+        ConversationState::AwaitingLLMDecision { .. } => Some(Scheduled {
+            at: conversation.last_transition + ChronoDuration::milliseconds(LLM_TIMEOUT_MS),
+            action: ConversationAction::LLMDecisionResult(Err(InterruptionReason::TimedOut)),
         }),
+        ConversationState::SendingMessage { .. } => Some(Scheduled {
+            at: conversation.last_transition + ChronoDuration::milliseconds(SEND_TIMEOUT_MS),
+            action: ConversationAction::MessageSent(Err("timed out".to_string())),
+        }),
+        ConversationState::RunningTools { pending_tools, .. } => pending_tools
+            .iter()
+            .map(|(id, call)| {
+                (id.clone(), conversation.last_transition + call.tool_type.rescue_timeout())
+            })
+            .min_by_key(|(_, at)| *at)
+            .map(|(id, at)| Scheduled {
+                at,
+                action: ConversationAction::ToolResult {
+                    id,
+                    result: Err("timed out".to_string()),
+                },
+            }),
     }
 }
 

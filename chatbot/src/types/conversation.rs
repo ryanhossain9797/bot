@@ -1,6 +1,6 @@
 use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
 use crate::types::media::MessageImage;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -316,6 +316,21 @@ pub enum ToolType {
     },
 }
 
+impl ToolType {
+    pub fn rescue_timeout(&self) -> Duration {
+        let ms = match self {
+            ToolType::RunBashCommand { .. } => 300_000,
+            ToolType::VisitUrl { .. } => 90_000,
+            ToolType::WebSearch { .. } | ToolType::ResetBashContainer => 60_000,
+            ToolType::ViewImage { .. }
+            | ToolType::SendImageToUser { .. }
+            | ToolType::ReadFile { .. }
+            | ToolType::EditFile { .. } => 30_000,
+        };
+        Duration::milliseconds(ms)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
@@ -381,9 +396,31 @@ impl LLMResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InterruptionReason {
+    TimedOut,
+    Failed,
+    MalformedToolCall,
+}
+
+impl InterruptionReason {
+    pub fn note(&self) -> &'static str {
+        match self {
+            InterruptionReason::TimedOut => "[Your previous turn timed out before it completed.]",
+            InterruptionReason::Failed => {
+                "[Your previous turn failed with an internal error and did not complete.]"
+            }
+            InterruptionReason::MalformedToolCall => {
+                "[Your previous tool call could not be parsed, so the turn was dropped — check your tool-call format.]"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HistoryEntry {
     Input(LLMInput),
     Output(LLMResponse),
+    OutputInterrupted(InterruptionReason),
 }
 
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
@@ -404,14 +441,13 @@ pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
-    ForceReset,
     NewMessage {
         msg: String,
         user_id: String,
         name: String,
         images: Vec<MessageImage>,
     },
-    LLMDecisionResult(Result<LLMResponse, String>),
+    LLMDecisionResult(Result<LLMResponse, InterruptionReason>),
     MessageSent(Result<(), String>),
     ToolResult {
         id: String,
@@ -443,7 +479,6 @@ impl ToolResultData {
 impl std::fmt::Debug for ConversationAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConversationAction::ForceReset => write!(f, "ForceReset"),
             ConversationAction::NewMessage { .. } => write!(f, "NewMessage"),
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
