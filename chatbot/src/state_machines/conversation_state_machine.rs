@@ -207,51 +207,6 @@ fn conversation_transition(
     let from = state_label(&conversation.state);
     let state = match (conversation.state, action) {
         (
-            ConversationState::AwaitingLLMDecision { history, .. },
-            ConversationAction::LLMDecisionTimeout,
-        ) => {
-            let mut history = history;
-            history.push(HistoryEntry::OutputInterrupted);
-            Ok(Conversation {
-                pending: Vec::new(),
-                state: ConversationState::Idle {
-                    recent_conversation: RecentConversation::new(String::new(), history),
-                },
-                last_transition: Utc::now(),
-                ..conversation
-            })
-        }
-        (
-            ConversationState::RunningTools {
-                recent_conversation,
-                mut pending_tools,
-                mut completed_tools,
-                ..
-            },
-            ConversationAction::ToolExecutionTimeout,
-        ) => {
-            for (_id, call) in pending_tools.drain() {
-                let msg =
-                    "Tool execution was interrupted and did not complete.".to_string();
-                completed_tools.push((call, ToolResultData::text(msg.clone(), msg)));
-            }
-            completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
-            let results = completed_tools
-                .into_iter()
-                .map(|(call, data)| ToolResult { call, data })
-                .collect();
-            let mut history = recent_conversation.history();
-            history.push(HistoryEntry::Input(LLMInput::ToolResults(results, None)));
-            Ok(Conversation {
-                pending: Vec::new(),
-                state: ConversationState::Idle {
-                    recent_conversation: RecentConversation::new(String::new(), history),
-                },
-                last_transition: Utc::now(),
-                ..conversation
-            })
-        }
-        (
             user_state,
             ConversationAction::NewMessage {
                 msg,
@@ -332,20 +287,24 @@ fn conversation_transition(
                     effects,
                 )
             }
-            Err(_) => Ok(Conversation {
-                state: ConversationState::Idle {
-                    recent_conversation: RecentConversation::new(String::new(), history),
-                },
-                last_transition: Utc::now(),
-                ..conversation
-            }),
+            Err(_) => {
+                let mut history = history;
+                history.push(HistoryEntry::OutputInterrupted);
+                Ok(Conversation {
+                    state: ConversationState::Idle {
+                        recent_conversation: RecentConversation::new(String::new(), history),
+                    },
+                    last_transition: Utc::now(),
+                    ..conversation
+                })
+            }
         },
         (
             ConversationState::SendingMessage {
                 recent_conversation,
                 post_send,
             },
-            ConversationAction::MessageSent(_) | ConversationAction::MessageSendTimeout,
+            ConversationAction::MessageSent(_res),
         ) => apply_post_send(
             env,
             conversation_id,
@@ -511,11 +470,18 @@ fn post_transition(
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
-    let action = match conversation.state {
+    let action = match &conversation.state {
         ConversationState::Idle { .. } => return None,
-        ConversationState::AwaitingLLMDecision { .. } => ConversationAction::LLMDecisionTimeout,
-        ConversationState::RunningTools { .. } => ConversationAction::ToolExecutionTimeout,
-        ConversationState::SendingMessage { .. } => ConversationAction::MessageSendTimeout,
+        ConversationState::AwaitingLLMDecision { .. } => {
+            ConversationAction::LLMDecisionResult(Err("timed out".to_string()))
+        }
+        ConversationState::SendingMessage { .. } => {
+            ConversationAction::MessageSent(Err("timed out".to_string()))
+        }
+        ConversationState::RunningTools { pending_tools, .. } => ConversationAction::ToolResult {
+            id: pending_tools.keys().next().cloned().unwrap_or_default(),
+            result: Err("timed out".to_string()),
+        },
     };
     Some(Scheduled {
         at: conversation.last_transition + ChronoDuration::milliseconds(600_000),

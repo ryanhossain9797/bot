@@ -405,9 +405,6 @@ pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
-    LLMDecisionTimeout,
-    ToolExecutionTimeout,
-    MessageSendTimeout,
     NewMessage {
         msg: String,
         user_id: String,
@@ -446,9 +443,6 @@ impl ToolResultData {
 impl std::fmt::Debug for ConversationAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConversationAction::LLMDecisionTimeout => write!(f, "LLMDecisionTimeout"),
-            ConversationAction::ToolExecutionTimeout => write!(f, "ToolExecutionTimeout"),
-            ConversationAction::MessageSendTimeout => write!(f, "MessageSendTimeout"),
             ConversationAction::NewMessage { .. } => write!(f, "NewMessage"),
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
