@@ -9,8 +9,8 @@ use crate::types::conversation::{
 use crate::{
     types::conversation::{
         Conversation, ConversationAction, ConversationConstructor, ConversationId,
-        ConversationMessage, ConversationState, HistoryEntry, LLMInput, PostSend,
-        RecentConversation,
+        ConversationMessage, ConversationState, HistoryEntry, InterruptionReason, LLMInput,
+        PostSend, RecentConversation,
     },
     Env,
 };
@@ -290,9 +290,9 @@ fn conversation_transition(
                     effects,
                 )
             }
-            Err(_) => {
+            Err(reason) => {
                 let mut history = history;
-                history.push(HistoryEntry::OutputInterrupted);
+                history.push(HistoryEntry::OutputInterrupted(reason.clone()));
                 Ok(Conversation {
                     state: ConversationState::Idle {
                         recent_conversation: RecentConversation::new(String::new(), history),
@@ -476,7 +476,7 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
         ConversationState::Idle { .. } => None,
         ConversationState::AwaitingLLMDecision { .. } => Some(Scheduled {
             at: conversation.last_transition + ChronoDuration::milliseconds(LLM_TIMEOUT_MS),
-            action: ConversationAction::LLMDecisionResult(Err("timed out".to_string())),
+            action: ConversationAction::LLMDecisionResult(Err(InterruptionReason::TimedOut)),
         }),
         ConversationState::SendingMessage { .. } => Some(Scheduled {
             at: conversation.last_transition + ChronoDuration::milliseconds(SEND_TIMEOUT_MS),

@@ -2,8 +2,8 @@ use crate::{
     chat_format::ChatMessage,
     roles::{PrimaryRole, RenderInputs, Role},
     types::conversation::{
-        ConversationAction, HistoryEntry, LLMInput, LLMResponse, Platform, RecentConversation,
-        Reply, ToolCall, ToolType,
+        ConversationAction, HistoryEntry, InterruptionReason, LLMInput, LLMResponse, Platform,
+        RecentConversation, Reply, ToolCall, ToolType,
     },
     Env,
 };
@@ -104,9 +104,9 @@ fn build_conversation(
                 images.extend(bytes);
             }
             HistoryEntry::Output(response) => messages.push(response.to_chat_message()),
-            HistoryEntry::OutputInterrupted => messages.push(ChatMessage::assistant(
-                "[Your previous turn was interrupted and did not complete.]",
-            )),
+            HistoryEntry::OutputInterrupted(reason) => {
+                messages.push(ChatMessage::assistant(reason.note()))
+            }
         }
     }
 
@@ -135,7 +135,7 @@ async fn get_response_from_llm(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
-) -> anyhow::Result<LLMResponse> {
+) -> Result<LLMResponse, InterruptionReason> {
     let (messages, footer, images) = build_conversation(
         current_input,
         maybe_recent_conversation,
@@ -158,13 +158,21 @@ async fn get_response_from_llm(
     }
 
     let tools = allow_tools.then(ToolType::tool_definitions);
-    let prompt = role.render_prompt(&RenderInputs {
-        messages: &messages,
-        tools: tools.as_deref(),
-        footer: Some(&footer),
-    })?;
+    let prompt = role
+        .render_prompt(&RenderInputs {
+            messages: &messages,
+            tools: tools.as_deref(),
+            footer: Some(&footer),
+        })
+        .map_err(|e| {
+            eprintln!("[llm] prompt render failed: {e:#}");
+            InterruptionReason::Failed
+        })?;
 
-    let raw = Arc::clone(&role).generate(prompt, images).await?;
+    let raw = Arc::clone(&role).generate(prompt, images).await.map_err(|e| {
+        eprintln!("[llm] generation failed: {e:#}");
+        InterruptionReason::Failed
+    })?;
     let parsed = role.parse_response(&raw);
 
     let thoughts = parsed.reasoning;
@@ -174,12 +182,14 @@ async fn get_response_from_llm(
         .iter()
         .enumerate()
         .map(|(i, call)| {
-            Ok(ToolCall {
-                id: format!("call_{i}"),
-                tool_type: ToolType::bind(&call.name, &call.arguments)?,
-            })
+            ToolType::bind(&call.name, &call.arguments)
+                .map(|tool_type| ToolCall { id: format!("call_{i}"), tool_type })
+                .map_err(|e| {
+                    eprintln!("[llm] tool call did not parse: {e:#}");
+                    InterruptionReason::MalformedToolCall
+                })
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>, InterruptionReason>>()?;
 
     let explicit_empty = content.eq_ignore_ascii_case("[EMPTY]");
     let reply = if !content.is_empty() && !explicit_empty {
@@ -238,9 +248,6 @@ pub async fn get_llm_decision(
 
     match llama_cpp_result {
         Ok(llama_cpp_response) => ConversationAction::LLMDecisionResult(Ok(llama_cpp_response)),
-        Err(err) => {
-            eprintln!("[llm] decision failed: {err}");
-            ConversationAction::LLMDecisionResult(Err(err.to_string()))
-        }
+        Err(reason) => ConversationAction::LLMDecisionResult(Err(reason)),
     }
 }

@@ -396,10 +396,31 @@ impl LLMResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum InterruptionReason {
+    TimedOut,
+    Failed,
+    MalformedToolCall,
+}
+
+impl InterruptionReason {
+    pub fn note(&self) -> &'static str {
+        match self {
+            InterruptionReason::TimedOut => "[Your previous turn timed out before it completed.]",
+            InterruptionReason::Failed => {
+                "[Your previous turn failed with an internal error and did not complete.]"
+            }
+            InterruptionReason::MalformedToolCall => {
+                "[Your previous tool call could not be parsed, so the turn was dropped — check your tool-call format.]"
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum HistoryEntry {
     Input(LLMInput),
     Output(LLMResponse),
-    OutputInterrupted,
+    OutputInterrupted(InterruptionReason),
 }
 
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
@@ -426,7 +447,7 @@ pub enum ConversationAction {
         name: String,
         images: Vec<MessageImage>,
     },
-    LLMDecisionResult(Result<LLMResponse, String>),
+    LLMDecisionResult(Result<LLMResponse, InterruptionReason>),
     MessageSent(Result<(), String>),
     ToolResult {
         id: String,
