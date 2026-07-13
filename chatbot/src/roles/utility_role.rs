@@ -13,8 +13,14 @@ const SYSTEM_PROMPT: &str = "You are a summarization engine. You are given the o
     everything later turns would need: who the participants are, stable facts and preferences the \
     user stated, decisions and conclusions reached, tools used and what they returned, and any \
     open threads or unfinished requests. Drop small talk and redundant back-and-forth. Write it as \
-    dense prose or terse bullet points, in the third person. Output only the summary itself, with \
-    no preamble, no headers, and no commentary.";
+    dense prose or terse bullet points, in the third person.\n\n\
+    The transcript may mark that an image was attached, viewed, or produced (e.g. '[attached 1 \
+    image(s) — not visible to you]'). You cannot see these images. When one appears, record in the \
+    summary that an image was present at that point, and — based only on what the surrounding \
+    conversation says about it — add a brief description of what it most likely showed, clearly \
+    marked as an assumption (e.g. 'presumably a screenshot of ...'). If nothing in the conversation \
+    hints at its content, just note that an image was shared without guessing.\n\n\
+    Output only the summary itself, with no preamble, no headers, and no commentary.";
 
 const TEMPERATURE: f32 = 0.3;
 

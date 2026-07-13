@@ -2,9 +2,20 @@ use std::sync::Arc;
 
 use crate::chat_format::ChatMessage;
 use crate::roles::{RenderInputs, Role};
-use crate::types::conversation::{HistoryEntry, InterruptionReason, LLMInput};
+use crate::types::conversation::{ConversationMessage, HistoryEntry, InterruptionReason, LLMInput};
 use crate::types::memory::MemoryManagerAction;
 use crate::Env;
+
+fn render_message(msg: &ConversationMessage) -> String {
+    let mut line = format!("{}: {}", msg.name, msg.to_content());
+    if !msg.images.is_empty() {
+        line.push_str(&format!(
+            " [attached {} image(s) — not visible to you]",
+            msg.images.len()
+        ));
+    }
+    line
+}
 
 fn history_to_transcript(history: &[HistoryEntry]) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -14,18 +25,25 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
                 lines.push(format!("Summary of earlier conversation:\n{summary}"))
             }
             HistoryEntry::Input(LLMInput::ConversationMessage(msg)) => {
-                lines.push(format!("{}: {}", msg.name, msg.to_content()))
+                lines.push(render_message(msg))
             }
             HistoryEntry::Input(LLMInput::ToolResults(results, followup)) => {
                 for result in results {
-                    lines.push(format!(
+                    let mut line = format!(
                         "Tool result [{}]: {}",
                         result.call.tool_type.wire_name(),
                         result.data.simplified
-                    ));
+                    );
+                    if result.data.image_for_assistant.is_some() {
+                        line.push_str(" [returned an image the assistant viewed — not visible to you]");
+                    }
+                    if result.data.image_for_user.is_some() {
+                        line.push_str(" [produced an image shown to the user — not visible to you]");
+                    }
+                    lines.push(line);
                 }
                 if let Some(msg) = followup {
-                    lines.push(format!("{}: {}", msg.name, msg.to_content()));
+                    lines.push(render_message(msg));
                 }
             }
             HistoryEntry::Output(response) => {
