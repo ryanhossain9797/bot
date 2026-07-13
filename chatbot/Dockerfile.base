@@ -21,3 +21,6 @@ RUN curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker /tmp/docker.tgz \
     && docker --version
+
+COPY models/qwen-qwen3-6-35b-a3b /app/models/qwen-qwen3-6-35b-a3b
+COPY models/qwen3-4b /app/models/qwen3-4b
