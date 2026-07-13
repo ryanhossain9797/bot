@@ -11,7 +11,7 @@ pub struct Pack {
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
     pub model: String,
-    pub mmproj: String,
+    pub mmproj: Option<String>,
     pub template: String,
     pub sampling: Sampling,
     pub context: Context,
@@ -73,7 +73,7 @@ impl Pack {
         self.dir.join(&self.manifest.model)
     }
 
-    pub fn mmproj_path(&self) -> PathBuf {
-        self.dir.join(&self.manifest.mmproj)
+    pub fn mmproj_path(&self) -> Option<PathBuf> {
+        self.manifest.mmproj.as_ref().map(|m| self.dir.join(m))
     }
 }

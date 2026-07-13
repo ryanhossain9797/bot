@@ -107,6 +107,9 @@ fn build_conversation(
             HistoryEntry::OutputInterrupted(reason) => {
                 messages.push(ChatMessage::assistant(reason.note()))
             }
+            HistoryEntry::Summary(summary) => messages.push(ChatMessage::assistant(format!(
+                "[Summary of earlier conversation, condensed to save context]\n{summary}"
+            ))),
         }
     }
 

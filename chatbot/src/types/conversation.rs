@@ -210,6 +210,8 @@ pub struct Conversation {
     pub last_transition: DateTime<Utc>,
     pub is_group: bool,
     pub bot_identity: String,
+    #[serde(default)]
+    pub compaction_in_flight: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -421,6 +423,7 @@ pub enum HistoryEntry {
     Input(LLMInput),
     Output(LLMResponse),
     OutputInterrupted(InterruptionReason),
+    Summary(String),
 }
 
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
@@ -453,6 +456,7 @@ pub enum ConversationAction {
         id: String,
         result: Result<ToolResultData, String>,
     },
+    CompactionResult(Result<String, InterruptionReason>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -483,6 +487,7 @@ impl std::fmt::Debug for ConversationAction {
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
             ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),
+            ConversationAction::CompactionResult(_) => write!(f, "CompactionResult"),
         }
     }
 }

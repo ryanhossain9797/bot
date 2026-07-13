@@ -21,7 +21,7 @@ const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 const DRY_BREAKS_LONG_STRINGS: bool = true;
 
 pub(super) struct LocalModel {
-    mtmd: MtmdContext,
+    mtmd: Option<MtmdContext>,
     model: LlamaModel,
     backend: Arc<LlamaBackend>,
     cfg: GenConfig,
@@ -77,21 +77,30 @@ pub(super) fn load_model(backend: Arc<LlamaBackend>, pack: &Pack) -> anyhow::Res
     let model = LlamaModel::load_from_file(&backend, &model_path, &LlamaModelParams::default())?;
     println!("Loaded model from: {}", model_path.display());
 
-    let mmproj_path = pack.mmproj_path();
-    println!(
-        "Loading multimodal projector from: {}",
-        mmproj_path.display()
-    );
-    let mmproj_str = mmproj_path.to_str().ok_or_else(|| {
-        anyhow::anyhow!("mmproj path is not valid UTF-8: {}", mmproj_path.display())
-    })?;
-    let mtmd = MtmdContext::init_from_file(mmproj_str, &model, &MtmdContextParams::default())?;
-    println!(
-        "Loaded multimodal projector from: {} (vision={}, audio={})",
-        mmproj_path.display(),
-        mtmd.support_vision(),
-        mtmd.support_audio()
-    );
+    let mtmd = match pack.mmproj_path() {
+        None => {
+            println!("No multimodal projector in pack — loading text-only");
+            None
+        }
+        Some(mmproj_path) => {
+            println!(
+                "Loading multimodal projector from: {}",
+                mmproj_path.display()
+            );
+            let mmproj_str = mmproj_path.to_str().ok_or_else(|| {
+                anyhow::anyhow!("mmproj path is not valid UTF-8: {}", mmproj_path.display())
+            })?;
+            let mtmd =
+                MtmdContext::init_from_file(mmproj_str, &model, &MtmdContextParams::default())?;
+            println!(
+                "Loaded multimodal projector from: {} (vision={}, audio={})",
+                mmproj_path.display(),
+                mtmd.support_vision(),
+                mtmd.support_audio()
+            );
+            Some(mtmd)
+        }
+    };
 
     Ok(LocalModel {
         mtmd,
@@ -116,10 +125,15 @@ pub(super) fn run(
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let cfg = &model.cfg;
-    if images.is_empty() {
-        run_generation_text(model, cfg, prompt, temperature, thinking)
-    } else {
-        run_generation_mtmd(model, cfg, prompt, images, temperature, thinking)
+    match (&model.mtmd, images.is_empty()) {
+        (_, true) => run_generation_text(model, cfg, prompt, temperature, thinking),
+        (Some(mtmd), false) => {
+            run_generation_mtmd(model, mtmd, cfg, prompt, images, temperature, thinking)
+        }
+        (None, false) => Err(anyhow::anyhow!(
+            "text-only model received {} image(s) but has no multimodal projector",
+            images.len()
+        )),
     }
 }
 
@@ -199,6 +213,7 @@ fn run_generation_text(
 
 fn run_generation_mtmd(
     model: &LocalModel,
+    mtmd: &MtmdContext,
     cfg: &GenConfig,
     prompt: &str,
     images: &[Arc<Vec<u8>>],
@@ -206,7 +221,6 @@ fn run_generation_mtmd(
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
     let llama = &model.model;
-    let mtmd = &model.mtmd;
 
     let bitmaps = images
         .iter()
