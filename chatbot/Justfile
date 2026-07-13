@@ -27,8 +27,8 @@ run_local tag="latest":
         --group-add video \
         --group-add render \
         -v /var/run/docker.sock:/var/run/docker.sock \
-        -v "$(pwd)/models/qwen-qwen3-6-35b-a3b:/app/models/qwen-qwen3-6-35b-a3b:ro" \
         -e MODEL_PACK_DIR=/app/models/qwen-qwen3-6-35b-a3b \
+        -e UTILITY_MODEL_PACK_DIR=/app/models/qwen3-4b \
         --restart unless-stopped \
         zireael9797/bot:{{tag}}
 
