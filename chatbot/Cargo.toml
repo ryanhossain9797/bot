@@ -28,6 +28,7 @@ serenity = { version = "0.12", default-features = false, features = [
     "cache",
 ] }
 regex = "1.12"
+uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2.1"

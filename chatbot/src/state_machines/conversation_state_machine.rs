@@ -10,9 +10,9 @@ use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
 use crate::{
     types::conversation::{
-        Conversation, ConversationAction, ConversationConstructor, ConversationId,
-        ConversationMessage, ConversationState, HistoryEntry, InterruptionReason, LLMInput,
-        PostSend, RecentConversation,
+        CompactionOutput, Conversation, ConversationAction, ConversationConstructor,
+        ConversationId, ConversationMessage, ConversationState, HistoryEntry, HistoryEntryKind,
+        InterruptionReason, LLMInput, PostSend, RecentConversation,
     },
     Env,
 };
@@ -85,7 +85,7 @@ fn send_then(
     pending: Vec<ConversationMessage>,
     is_group: bool,
     bot_identity: String,
-    compaction_in_flight: Option<usize>,
+    compaction_in_flight: bool,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     if outbound.is_empty() {
@@ -129,7 +129,7 @@ fn apply_post_send(
     pending: Vec<ConversationMessage>,
     is_group: bool,
     bot_identity: String,
-    compaction_in_flight: Option<usize>,
+    compaction_in_flight: bool,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     match post_send {
@@ -261,8 +261,8 @@ fn conversation_transition(
                     current_input
                 };
                 let mut updated_history = history;
-                updated_history.push(HistoryEntry::Input(recorded_input));
-                updated_history.push(HistoryEntry::Output(response.clone()));
+                updated_history.push(HistoryEntry::input(recorded_input));
+                updated_history.push(HistoryEntry::output(response.clone()));
 
                 let updated_conversation =
                     RecentConversation::new(response.thoughts.clone(), updated_history);
@@ -305,7 +305,7 @@ fn conversation_transition(
             }
             Err(reason) => {
                 let mut history = history;
-                history.push(HistoryEntry::OutputInterrupted(reason.clone()));
+                history.push(HistoryEntry::interrupted(reason.clone()));
                 Ok(Conversation {
                     state: ConversationState::Idle {
                         recent_conversation: RecentConversation::new(String::new(), history),
@@ -404,35 +404,18 @@ fn conversation_transition(
             }
         }
         (current_state, ConversationAction::CompactionResult(result)) => {
-            let in_flight = conversation.compaction_in_flight;
-            match (current_state, in_flight) {
-                (ConversationState::Idle { recent_conversation }, Some(prefix_len)) => {
-                    let recent_conversation = match result {
-                        Ok(summary) => {
-                            apply_compaction(conversation_id, recent_conversation, prefix_len, summary)
-                        }
-                        Err(reason) => {
-                            println!("[compact] {conversation_id} compaction did not complete: {reason:?}");
-                            recent_conversation
-                        }
-                    };
-                    Ok(Conversation {
-                        state: ConversationState::Idle {
-                            recent_conversation,
-                        },
-                        compaction_in_flight: None,
-                        ..conversation
-                    })
+            let state = match result {
+                Ok(output) => compact_state(conversation_id, current_state, output),
+                Err(reason) => {
+                    println!("[compact] {conversation_id} compaction did not complete: {reason:?}");
+                    current_state
                 }
-                (current_state, _) => {
-                    println!("[compact] {conversation_id} compaction result arrived while busy or untracked; dropping");
-                    Ok(Conversation {
-                        state: current_state,
-                        compaction_in_flight: None,
-                        ..conversation
-                    })
-                }
-            }
+            };
+            Ok(Conversation {
+                state,
+                compaction_in_flight: false,
+                ..conversation
+            })
         }
         _ => Err(anyhow::anyhow!(
             "no transition for {action:?} in state {from}"
@@ -527,14 +510,14 @@ fn maybe_fire_compaction(
     recent_conversation: &RecentConversation,
     effects: &mut ConversationEffects,
 ) {
-    if env.utility.is_none() || conversation.compaction_in_flight.is_some() {
+    if env.utility.is_none() || conversation.compaction_in_flight {
         return;
     }
 
     let history = recent_conversation.history();
     let compactable = history
         .iter()
-        .filter(|entry| !matches!(entry, HistoryEntry::Summary(_)))
+        .filter(|entry| !matches!(entry.kind, HistoryEntryKind::Summary(_)))
         .count();
     if compactable < COMPACT_WATERMARK {
         return;
@@ -552,27 +535,82 @@ fn maybe_fire_compaction(
         },
         MemoryManagerAction::Compact { history: prefix },
     );
-    conversation.compaction_in_flight = Some(prefix_len);
+    conversation.compaction_in_flight = true;
     println!("[compact] {conversation_id} firing compaction of {prefix_len} entries");
 }
 
-fn apply_compaction(
+fn compact_state(
+    conversation_id: &ConversationId,
+    state: ConversationState,
+    output: &CompactionOutput,
+) -> ConversationState {
+    match state {
+        ConversationState::Idle {
+            recent_conversation,
+        } => ConversationState::Idle {
+            recent_conversation: compact_recent(conversation_id, recent_conversation, output),
+        },
+        ConversationState::SendingMessage {
+            recent_conversation,
+            post_send,
+        } => ConversationState::SendingMessage {
+            recent_conversation: compact_recent(conversation_id, recent_conversation, output),
+            post_send,
+        },
+        ConversationState::RunningTools {
+            recent_conversation,
+            tool_rounds,
+            pending_tools,
+            completed_tools,
+        } => ConversationState::RunningTools {
+            recent_conversation: compact_recent(conversation_id, recent_conversation, output),
+            tool_rounds,
+            pending_tools,
+            completed_tools,
+        },
+        ConversationState::AwaitingLLMDecision {
+            history,
+            current_input,
+            tool_rounds,
+        } => ConversationState::AwaitingLLMDecision {
+            history: compact_history(conversation_id, history, output),
+            current_input,
+            tool_rounds,
+        },
+    }
+}
+
+fn compact_recent(
     conversation_id: &ConversationId,
     recent_conversation: RecentConversation,
-    prefix_len: usize,
-    summary: &str,
+    output: &CompactionOutput,
 ) -> RecentConversation {
-    let mut history = recent_conversation.history();
-    let drop = prefix_len.min(history.len());
-    let tail = history.split_off(drop);
+    let RecentConversation { thoughts, history } = recent_conversation;
+    let compacted = compact_history(conversation_id, history.into(), output);
+    RecentConversation::new(thoughts, compacted)
+}
+
+fn compact_history(
+    conversation_id: &ConversationId,
+    history: Vec<HistoryEntry>,
+    output: &CompactionOutput,
+) -> Vec<HistoryEntry> {
+    let Some(boundary) = history.iter().position(|entry| entry.id == output.through) else {
+        println!("[compact] {conversation_id} boundary already compacted away — no-op");
+        return history;
+    };
+
+    let mut history = history;
+    let tail = history.split_off(boundary + 1);
     let kept = tail.len();
+    let dropped = boundary + 1;
     let mut compacted = Vec::with_capacity(kept + 1);
-    compacted.push(HistoryEntry::Summary(summary.to_string()));
+    compacted.push(HistoryEntry::summary(output.summary.clone()));
     compacted.extend(tail);
     println!(
-        "[compact] {conversation_id} applied summary — dropped {drop} entries, kept {kept} recent"
+        "[compact] {conversation_id} applied summary — replaced {dropped} entries, kept {kept}"
     );
-    RecentConversation::new(recent_conversation.thoughts.clone(), compacted)
+    compacted
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
@@ -609,6 +647,6 @@ fn construct_conversation(constructor: ConversationConstructor) -> Conversation 
         last_transition: Utc::now(),
         is_group: constructor.is_group,
         bot_identity: constructor.bot_identity,
-        compaction_in_flight: None,
+        compaction_in_flight: false,
     }
 }

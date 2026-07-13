@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::types::conversation::{ConversationId, HistoryEntry, InterruptionReason};
+use crate::types::conversation::{CompactionOutput, ConversationId, HistoryEntry, InterruptionReason};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MemoryManager {
@@ -18,7 +18,7 @@ pub enum MemoryManagerState {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum MemoryManagerAction {
     Compact { history: Vec<HistoryEntry> },
-    CompactionDone(Result<String, InterruptionReason>),
+    CompactionDone(Result<CompactionOutput, InterruptionReason>),
 }
 
 impl std::fmt::Debug for MemoryManagerAction {

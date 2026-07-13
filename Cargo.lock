@@ -553,6 +553,7 @@ dependencies = [
  "tokio",
  "toml",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]

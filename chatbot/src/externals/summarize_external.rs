@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use crate::chat_format::ChatMessage;
 use crate::roles::{RenderInputs, Role};
-use crate::types::conversation::{ConversationMessage, HistoryEntry, InterruptionReason, LLMInput};
+use crate::types::conversation::{
+    CompactionOutput, ConversationMessage, HistoryEntry, HistoryEntryKind, InterruptionReason,
+    LLMInput,
+};
 use crate::types::memory::MemoryManagerAction;
 use crate::Env;
 
@@ -20,14 +23,14 @@ fn render_message(msg: &ConversationMessage) -> String {
 fn history_to_transcript(history: &[HistoryEntry]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for entry in history {
-        match entry {
-            HistoryEntry::Summary(summary) => {
+        match &entry.kind {
+            HistoryEntryKind::Summary(summary) => {
                 lines.push(format!("Summary of earlier conversation:\n{summary}"))
             }
-            HistoryEntry::Input(LLMInput::ConversationMessage(msg)) => {
+            HistoryEntryKind::Input(LLMInput::ConversationMessage(msg)) => {
                 lines.push(render_message(msg))
             }
-            HistoryEntry::Input(LLMInput::ToolResults(results, followup)) => {
+            HistoryEntryKind::Input(LLMInput::ToolResults(results, followup)) => {
                 for result in results {
                     let mut line = format!(
                         "Tool result [{}]: {}",
@@ -46,7 +49,7 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
                     lines.push(render_message(msg));
                 }
             }
-            HistoryEntry::Output(response) => {
+            HistoryEntryKind::Output(response) => {
                 if let Some(message) = response.message() {
                     lines.push(format!("Assistant: {message}"));
                 }
@@ -54,7 +57,7 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
                     lines.push(format!("Assistant called tool: {}", call.tool_type.wire_name()));
                 }
             }
-            HistoryEntry::OutputInterrupted(reason) => {
+            HistoryEntryKind::OutputInterrupted(reason) => {
                 lines.push(format!("Assistant: {}", reason.note()))
             }
         }
@@ -65,6 +68,11 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
 pub async fn summarize(env: Arc<Env>, history: Vec<HistoryEntry>) -> MemoryManagerAction {
     let Some(utility) = env.utility.clone() else {
         eprintln!("[compact] utility model unavailable — skipping compaction");
+        return MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed));
+    };
+
+    let Some(through) = history.last().map(|entry| entry.id.clone()) else {
+        eprintln!("[compact] empty history — nothing to compact");
         return MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed));
     };
 
@@ -89,7 +97,7 @@ pub async fn summarize(env: Arc<Env>, history: Vec<HistoryEntry>) -> MemoryManag
                 .map_or(raw.as_str(), |(_, after)| after)
                 .trim()
                 .to_string();
-            MemoryManagerAction::CompactionDone(Ok(summary))
+            MemoryManagerAction::CompactionDone(Ok(CompactionOutput { summary, through }))
         }
         Err(e) => {
             eprintln!("[compact] summarization failed: {e:#}");

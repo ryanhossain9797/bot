@@ -2,7 +2,7 @@ use crate::{
     chat_format::ChatMessage,
     roles::{PrimaryRole, RenderInputs, Role},
     types::conversation::{
-        ConversationAction, HistoryEntry, InterruptionReason, LLMInput, LLMResponse, Platform,
+        ConversationAction, HistoryEntryKind, InterruptionReason, LLMInput, LLMResponse, Platform,
         RecentConversation, Reply, ToolCall, ToolType,
     },
     Env,
@@ -97,17 +97,17 @@ fn build_conversation(
     let mut images: Vec<Arc<Vec<u8>>> = Vec::new();
 
     for entry in &history {
-        match entry {
-            HistoryEntry::Input(input) => {
+        match &entry.kind {
+            HistoryEntryKind::Input(input) => {
                 let (msgs, bytes) = input.messages_and_media(marker, false);
                 messages.extend(msgs);
                 images.extend(bytes);
             }
-            HistoryEntry::Output(response) => messages.push(response.to_chat_message()),
-            HistoryEntry::OutputInterrupted(reason) => {
+            HistoryEntryKind::Output(response) => messages.push(response.to_chat_message()),
+            HistoryEntryKind::OutputInterrupted(reason) => {
                 messages.push(ChatMessage::assistant(reason.note()))
             }
-            HistoryEntry::Summary(summary) => messages.push(ChatMessage::assistant(format!(
+            HistoryEntryKind::Summary(summary) => messages.push(ChatMessage::assistant(format!(
                 "[Summary of earlier conversation, condensed to save context]\n{summary}"
             ))),
         }
