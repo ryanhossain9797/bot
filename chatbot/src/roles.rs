@@ -2,6 +2,7 @@ mod local_model;
 mod parsers;
 mod primary_role;
 mod render;
+mod utility_role;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use crate::chat_format::{ChatMessage, ToolDefinition};
 
 pub use primary_role::PrimaryRole;
+pub use utility_role::UtilityRole;
 
 pub trait Role: Send + Sync {
     fn system_prompt(&self) -> &str;

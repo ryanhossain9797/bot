@@ -210,6 +210,8 @@ pub struct Conversation {
     pub last_transition: DateTime<Utc>,
     pub is_group: bool,
     pub bot_identity: String,
+    #[serde(default)]
+    pub compaction_in_flight: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -416,16 +418,59 @@ impl InterruptionReason {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct HistoryId(uuid::Uuid);
+
+impl HistoryId {
+    pub fn new() -> Self {
+        HistoryId(uuid::Uuid::new_v4())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum HistoryEntry {
+pub struct HistoryEntry {
+    pub id: HistoryId,
+    pub kind: HistoryEntryKind,
+}
+
+impl HistoryEntry {
+    fn with_kind(kind: HistoryEntryKind) -> Self {
+        HistoryEntry {
+            id: HistoryId::new(),
+            kind,
+        }
+    }
+    pub fn input(input: LLMInput) -> Self {
+        Self::with_kind(HistoryEntryKind::Input(input))
+    }
+    pub fn output(response: LLMResponse) -> Self {
+        Self::with_kind(HistoryEntryKind::Output(response))
+    }
+    pub fn interrupted(reason: InterruptionReason) -> Self {
+        Self::with_kind(HistoryEntryKind::OutputInterrupted(reason))
+    }
+    pub fn summary(summary: String) -> Self {
+        Self::with_kind(HistoryEntryKind::Summary(summary))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum HistoryEntryKind {
     Input(LLMInput),
     Output(LLMResponse),
     OutputInterrupted(InterruptionReason),
+    Summary(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionOutput {
+    pub summary: String,
+    pub through: HistoryId,
 }
 
 pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
-    history.iter().rev().find_map(|entry| match entry {
-        HistoryEntry::Input(LLMInput::ToolResults(results, _)) => {
+    history.iter().rev().find_map(|entry| match &entry.kind {
+        HistoryEntryKind::Input(LLMInput::ToolResults(results, _)) => {
             results.iter().rev().find_map(|r| match &r.call.tool_type {
                 ToolType::ReadFile { path: p, .. } | ToolType::EditFile { path: p, .. }
                     if p == path =>
@@ -453,6 +498,7 @@ pub enum ConversationAction {
         id: String,
         result: Result<ToolResultData, String>,
     },
+    CompactionResult(Result<CompactionOutput, InterruptionReason>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -483,6 +529,7 @@ impl std::fmt::Debug for ConversationAction {
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
             ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),
+            ConversationAction::CompactionResult(_) => write!(f, "CompactionResult"),
         }
     }
 }

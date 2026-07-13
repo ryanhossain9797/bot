@@ -6,11 +6,13 @@ use crate::externals::{
 use crate::types::conversation::{
     latest_file_hash, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
 };
+use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
+use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
 use crate::{
     types::conversation::{
-        Conversation, ConversationAction, ConversationConstructor, ConversationId,
-        ConversationMessage, ConversationState, HistoryEntry, InterruptionReason, LLMInput,
-        PostSend, RecentConversation,
+        CompactionOutput, Conversation, ConversationAction, ConversationConstructor,
+        ConversationId, ConversationMessage, ConversationState, HistoryEntry, HistoryEntryKind,
+        InterruptionReason, LLMInput, PostSend, RecentConversation,
     },
     Env,
 };
@@ -27,39 +29,83 @@ const REDACT_HISTORY_IMAGES: bool = false;
 const LLM_TIMEOUT_MS: i64 = 300_000;
 const SEND_TIMEOUT_MS: i64 = 60_000;
 
+const COMPACT_WATERMARK: usize = 24;
+const KEEP_RECENT: usize = 12;
+
 pub struct ConversationMachine;
 
-impl StateMachine for ConversationMachine {
-    type State = Conversation;
-    type Id = ConversationId;
-    type Action = ConversationAction;
-    type Construction = ConversationConstructor;
-    type Env = crate::Env;
-
-    fn construct(
-        constructor: ConversationConstructor,
-        _effects: &mut ConversationEffects,
-    ) -> Conversation {
-        construct_conversation(constructor)
+fn compact_state(
+    conversation_id: &ConversationId,
+    state: ConversationState,
+    output: &CompactionOutput,
+) -> ConversationState {
+    match state {
+        ConversationState::Idle {
+            recent_conversation,
+        } => ConversationState::Idle {
+            recent_conversation: compact_recent(conversation_id, recent_conversation, output),
+        },
+        ConversationState::SendingMessage {
+            recent_conversation,
+            post_send,
+        } => ConversationState::SendingMessage {
+            recent_conversation: compact_recent(conversation_id, recent_conversation, output),
+            post_send,
+        },
+        ConversationState::RunningTools {
+            recent_conversation,
+            tool_rounds,
+            pending_tools,
+            completed_tools,
+        } => ConversationState::RunningTools {
+            recent_conversation: compact_recent(conversation_id, recent_conversation, output),
+            tool_rounds,
+            pending_tools,
+            completed_tools,
+        },
+        ConversationState::AwaitingLLMDecision {
+            history,
+            current_input,
+            tool_rounds,
+        } => ConversationState::AwaitingLLMDecision {
+            history: compact_history(conversation_id, history, output),
+            current_input,
+            tool_rounds,
+        },
     }
+}
 
-    fn transition(
-        state: &Conversation,
-        id: &ConversationId,
-        env: &Arc<Env>,
-        action: &ConversationAction,
-        effects: &mut ConversationEffects,
-    ) -> ConversationTransitionResult {
-        conversation_transition(env, id, state.clone(), action, effects)
-    }
+fn compact_recent(
+    conversation_id: &ConversationId,
+    recent_conversation: RecentConversation,
+    output: &CompactionOutput,
+) -> RecentConversation {
+    let RecentConversation { thoughts, history } = recent_conversation;
+    let compacted = compact_history(conversation_id, history.into(), output);
+    RecentConversation::new(thoughts, compacted)
+}
 
-    fn schedule(state: &Conversation) -> Option<Scheduled<ConversationAction>> {
-        conversation_schedule(state)
-    }
+fn compact_history(
+    conversation_id: &ConversationId,
+    history: Vec<HistoryEntry>,
+    output: &CompactionOutput,
+) -> Vec<HistoryEntry> {
+    let Some(boundary) = history.iter().position(|entry| entry.id == output.through) else {
+        println!("[compact] {conversation_id} boundary already compacted away — no-op");
+        return history;
+    };
 
-    fn name() -> &'static str {
-        "ConversationMachine"
-    }
+    let mut history = history;
+    let tail = history.split_off(boundary + 1);
+    let kept = tail.len();
+    let dropped = boundary + 1;
+    let mut compacted = Vec::with_capacity(kept + 1);
+    compacted.push(HistoryEntry::summary(output.summary.clone()));
+    compacted.extend(tail);
+    println!(
+        "[compact] {conversation_id} applied summary — replaced {dropped} entries, kept {kept}"
+    );
+    compacted
 }
 
 fn state_label(state: &ConversationState) -> &'static str {
@@ -80,6 +126,7 @@ fn send_then(
     pending: Vec<ConversationMessage>,
     is_group: bool,
     bot_identity: String,
+    compaction_in_flight: bool,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     if outbound.is_empty() {
@@ -91,6 +138,7 @@ fn send_then(
             pending,
             is_group,
             bot_identity,
+            compaction_in_flight,
             effects,
         );
     }
@@ -110,6 +158,7 @@ fn send_then(
         pending,
         is_group,
         bot_identity,
+        compaction_in_flight,
     })
 }
 
@@ -121,6 +170,7 @@ fn apply_post_send(
     pending: Vec<ConversationMessage>,
     is_group: bool,
     bot_identity: String,
+    compaction_in_flight: bool,
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     match post_send {
@@ -132,6 +182,7 @@ fn apply_post_send(
             pending,
             is_group,
             bot_identity,
+            compaction_in_flight,
         }),
         PostSend::CallTools {
             tool_rounds,
@@ -165,6 +216,7 @@ fn apply_post_send(
                 pending,
                 is_group,
                 bot_identity,
+                compaction_in_flight,
             })
         }
         PostSend::SendToolResponse {
@@ -195,6 +247,7 @@ fn apply_post_send(
                 pending,
                 is_group,
                 bot_identity,
+                compaction_in_flight,
             })
         }
     }
@@ -249,8 +302,8 @@ fn conversation_transition(
                     current_input
                 };
                 let mut updated_history = history;
-                updated_history.push(HistoryEntry::Input(recorded_input));
-                updated_history.push(HistoryEntry::Output(response.clone()));
+                updated_history.push(HistoryEntry::input(recorded_input));
+                updated_history.push(HistoryEntry::output(response.clone()));
 
                 let updated_conversation =
                     RecentConversation::new(response.thoughts.clone(), updated_history);
@@ -287,12 +340,13 @@ fn conversation_transition(
                     conversation.pending,
                     conversation.is_group,
                     conversation.bot_identity.clone(),
+                    conversation.compaction_in_flight,
                     effects,
                 )
             }
             Err(reason) => {
                 let mut history = history;
-                history.push(HistoryEntry::OutputInterrupted(reason.clone()));
+                history.push(HistoryEntry::interrupted(reason.clone()));
                 Ok(Conversation {
                     state: ConversationState::Idle {
                         recent_conversation: RecentConversation::new(String::new(), history),
@@ -316,6 +370,7 @@ fn conversation_transition(
             conversation.pending,
             conversation.is_group,
             conversation.bot_identity.clone(),
+            conversation.compaction_in_flight,
             effects,
         ),
         (
@@ -374,6 +429,7 @@ fn conversation_transition(
                     pending,
                     conversation.is_group,
                     conversation.bot_identity.clone(),
+                    conversation.compaction_in_flight,
                     effects,
                 )
             } else {
@@ -387,6 +443,20 @@ fn conversation_transition(
                     ..conversation
                 })
             }
+        }
+        (current_state, ConversationAction::CompactionResult(result)) => {
+            let state = match result {
+                Ok(output) => compact_state(conversation_id, current_state, output),
+                Err(reason) => {
+                    println!("[compact] {conversation_id} compaction did not complete: {reason:?}");
+                    current_state
+                }
+            };
+            Ok(Conversation {
+                state,
+                compaction_in_flight: false,
+                ..conversation
+            })
         }
         _ => Err(anyhow::anyhow!(
             "no transition for {action:?} in state {from}"
@@ -437,11 +507,13 @@ fn post_transition(
     };
 
     let Some(msg) = take_pending(&mut conversation.pending) else {
+        maybe_fire_compaction(env, conversation_id, &mut conversation, &recent_conversation, effects);
         return Ok(conversation);
     };
 
     let is_group = conversation.is_group;
     let bot_identity = conversation.bot_identity.clone();
+    let compaction_in_flight = conversation.compaction_in_flight;
 
     let history = recent_conversation.history();
 
@@ -468,7 +540,44 @@ fn post_transition(
         pending: Vec::new(),
         is_group,
         bot_identity,
+        compaction_in_flight,
     })
+}
+
+fn maybe_fire_compaction(
+    env: &Arc<Env>,
+    conversation_id: &ConversationId,
+    conversation: &mut Conversation,
+    recent_conversation: &RecentConversation,
+    effects: &mut ConversationEffects,
+) {
+    if env.utility.is_none() || conversation.compaction_in_flight {
+        return;
+    }
+
+    let history = recent_conversation.history();
+    let compactable = history
+        .iter()
+        .filter(|entry| !matches!(entry.kind, HistoryEntryKind::Summary(_)))
+        .count();
+    if compactable < COMPACT_WATERMARK {
+        return;
+    }
+
+    let prefix_len = history.len().saturating_sub(KEEP_RECENT);
+    if prefix_len == 0 {
+        return;
+    }
+
+    let prefix = history[..prefix_len].to_vec();
+    effects.enqueue_act_maybe_construct::<MemoryManagerMachine>(
+        MemoryManagerConstructor {
+            id: conversation_id.clone(),
+        },
+        MemoryManagerAction::Compact { history: prefix },
+    );
+    conversation.compaction_in_flight = true;
+    println!("[compact] {conversation_id} firing compaction of {prefix_len} entries");
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
@@ -505,5 +614,39 @@ fn construct_conversation(constructor: ConversationConstructor) -> Conversation 
         last_transition: Utc::now(),
         is_group: constructor.is_group,
         bot_identity: constructor.bot_identity,
+        compaction_in_flight: false,
+    }
+}
+
+impl StateMachine for ConversationMachine {
+    type State = Conversation;
+    type Id = ConversationId;
+    type Action = ConversationAction;
+    type Construction = ConversationConstructor;
+    type Env = crate::Env;
+
+    fn construct(
+        constructor: ConversationConstructor,
+        _effects: &mut ConversationEffects,
+    ) -> Conversation {
+        construct_conversation(constructor)
+    }
+
+    fn transition(
+        state: &Conversation,
+        id: &ConversationId,
+        env: &Arc<Env>,
+        action: &ConversationAction,
+        effects: &mut ConversationEffects,
+    ) -> ConversationTransitionResult {
+        conversation_transition(env, id, state.clone(), action, effects)
+    }
+
+    fn schedule(state: &Conversation) -> Option<Scheduled<ConversationAction>> {
+        conversation_schedule(state)
+    }
+
+    fn name() -> &'static str {
+        "ConversationMachine"
     }
 }

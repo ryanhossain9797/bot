@@ -16,13 +16,15 @@ use services::discord::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
-use crate::roles::PrimaryRole;
+use crate::roles::{PrimaryRole, UtilityRole};
 use crate::state_machines::conversation_state_machine::ConversationMachine;
+use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
     primary: Arc<PrimaryRole>,
+    utility: Option<Arc<UtilityRole>>,
     announce_tool_use: bool,
 }
 
@@ -31,14 +33,31 @@ async fn init_env() -> anyhow::Result<Env> {
 
     send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
     let backend = Arc::new(LlamaBackend::init()?);
-    let primary =
-        Arc::new(tokio::task::spawn_blocking(move || PrimaryRole::load(backend)).await??);
+    let primary = Arc::new(
+        tokio::task::spawn_blocking({
+            let backend = Arc::clone(&backend);
+            move || PrimaryRole::load(backend)
+        })
+        .await??,
+    );
+
+    let utility = match tokio::task::spawn_blocking(move || UtilityRole::load(backend)).await? {
+        Ok(role) => {
+            println!("[startup] utility model ready");
+            Some(Arc::new(role))
+        }
+        Err(e) => {
+            eprintln!("[startup] utility model not loaded: {e:#} — compaction disabled");
+            None
+        }
+    };
 
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
     Ok(Env {
         discord_http,
         primary,
+        utility,
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
     })
 }
@@ -47,7 +66,8 @@ async fn init_env() -> anyhow::Result<Env> {
 async fn main() -> anyhow::Result<!> {
     re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
-    re_framework::register::<ConversationMachine>(env);
+    re_framework::register::<ConversationMachine>(env.clone());
+    re_framework::register::<MemoryManagerMachine>(env);
     re_framework::start();
 
     tokio::spawn(async {
