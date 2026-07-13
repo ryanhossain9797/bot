@@ -407,40 +407,22 @@ fn conversation_transition(
             let in_flight = conversation.compaction_in_flight;
             match (current_state, in_flight) {
                 (ConversationState::Idle { recent_conversation }, Some(prefix_len)) => {
-                    match result {
+                    let recent_conversation = match result {
                         Ok(summary) => {
-                            let mut history = recent_conversation.history();
-                            let drop = prefix_len.min(history.len());
-                            let tail = history.split_off(drop);
-                            let kept = tail.len();
-                            let mut compacted = Vec::with_capacity(kept + 1);
-                            compacted.push(HistoryEntry::Summary(summary.clone()));
-                            compacted.extend(tail);
-                            println!(
-                                "[compact] {conversation_id} applied summary — dropped {drop} entries, kept {kept} recent"
-                            );
-                            Ok(Conversation {
-                                state: ConversationState::Idle {
-                                    recent_conversation: RecentConversation::new(
-                                        recent_conversation.thoughts.clone(),
-                                        compacted,
-                                    ),
-                                },
-                                compaction_in_flight: None,
-                                ..conversation
-                            })
+                            apply_compaction(conversation_id, recent_conversation, prefix_len, summary)
                         }
                         Err(reason) => {
                             println!("[compact] {conversation_id} compaction did not complete: {reason:?}");
-                            Ok(Conversation {
-                                state: ConversationState::Idle {
-                                    recent_conversation,
-                                },
-                                compaction_in_flight: None,
-                                ..conversation
-                            })
+                            recent_conversation
                         }
-                    }
+                    };
+                    Ok(Conversation {
+                        state: ConversationState::Idle {
+                            recent_conversation,
+                        },
+                        compaction_in_flight: None,
+                        ..conversation
+                    })
                 }
                 (current_state, _) => {
                     println!("[compact] {conversation_id} compaction result arrived while busy or untracked; dropping");
@@ -572,6 +554,25 @@ fn maybe_fire_compaction(
     );
     conversation.compaction_in_flight = Some(prefix_len);
     println!("[compact] {conversation_id} firing compaction of {prefix_len} entries");
+}
+
+fn apply_compaction(
+    conversation_id: &ConversationId,
+    recent_conversation: RecentConversation,
+    prefix_len: usize,
+    summary: &str,
+) -> RecentConversation {
+    let mut history = recent_conversation.history();
+    let drop = prefix_len.min(history.len());
+    let tail = history.split_off(drop);
+    let kept = tail.len();
+    let mut compacted = Vec::with_capacity(kept + 1);
+    compacted.push(HistoryEntry::Summary(summary.to_string()));
+    compacted.extend(tail);
+    println!(
+        "[compact] {conversation_id} applied summary — dropped {drop} entries, kept {kept} recent"
+    );
+    RecentConversation::new(recent_conversation.thoughts.clone(), compacted)
 }
 
 fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<ConversationAction>> {
