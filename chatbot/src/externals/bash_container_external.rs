@@ -134,6 +134,50 @@ pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImag
     Ok(MessageImage::Hydrated(image).downscaled())
 }
 
+/// A file pulled verbatim from the sandbox, ready to upload as a chat attachment.
+pub struct PulledFile {
+    pub filename: String,
+    pub bytes: Vec<u8>,
+}
+
+/// Upper bound on a message-pattern attachment. Discord accepts 25 MiB for the bot tier we target,
+/// but we stay well under to keep uploads fast and predictable across platforms.
+pub(crate) const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+
+/// Read a file from the sandbox as raw bytes for delivery to the user (any type, not just images).
+/// Backs the `[[attach:PATH]]` message pattern handled in `message_external`. The filename is the
+/// path's basename, falling back to `attachment` for odd paths.
+pub async fn pull_file(conversation_id: &str, path: &str) -> Result<PulledFile, String> {
+    let name = worker_name(conversation_id);
+    ensure_worker(&name).await?;
+
+    let out = docker(&["exec", &name, "cat", "--", path]).await?;
+    if !out.status.success() {
+        return Err(format!(
+            "could not read '{path}': {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+
+    let bytes = out.stdout;
+    if bytes.is_empty() {
+        return Err(format!("'{path}' is empty — nothing to attach"));
+    }
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err(format!(
+            "'{path}' is {} bytes, over the {MAX_ATTACHMENT_BYTES}-byte attachment limit",
+            bytes.len()
+        ));
+    }
+
+    let filename = path
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("attachment")
+        .to_string();
+    Ok(PulledFile { filename, bytes })
+}
+
 pub async fn read_file(conversation_id: &str, path: &str) -> Result<String, String> {
     let name = worker_name(conversation_id);
     ensure_worker(&name).await?;

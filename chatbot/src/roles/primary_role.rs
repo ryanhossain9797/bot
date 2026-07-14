@@ -27,6 +27,15 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
     re-scan an image: give one best reading, flag what's unclear rather than re-guess, and \
     reconsider only if the user or a tool contradicts you.\n\n\
     Call tools (one or several) when they help; answer once you have enough.\n\n\
+    SENDING A FILE: to hand the user a file from your bash sandbox, put the marker \
+    `[[attach:PATH]]` anywhere in your reply text — e.g. `Here's the report [[attach:/tmp/report.pdf]]`. \
+    This is NOT a tool and costs no tool turn; it's a special pattern in your message. When your \
+    reply is sent, each marker is removed from the text and the file at that sandbox path (the same \
+    filesystem as run_bash_command) is uploaded as a real attachment in its place. It works for any \
+    file type — PDFs, archives, code, data, images. Only reference paths that actually exist in your \
+    sandbox; if a path can't be read the marker is dropped and a short note shown instead. (For \
+    images specifically you may also use the send_image_to_user tool, but this marker is the general \
+    way to deliver any file.)\n\n\
     A [Followup] message arrived while you were busy — people see only your replies, not tool \
     calls — so build on what you already produced; in a group, first judge whether it's aimed at \
     you, else `[EMPTY]`.";
