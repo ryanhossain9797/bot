@@ -49,11 +49,19 @@ impl EventHandler for Handler {
 
         let images = download_images(&message).await;
         let text = filter(&message, self.bot_user_id, &self.bot_name);
+        let attachments = attachment_note(&message);
 
-        if text.is_none() && images.is_empty() {
+        if text.is_none() && images.is_empty() && attachments.is_none() {
             return;
         }
-        let text = text.unwrap_or_default();
+
+        let mut body = text.unwrap_or_default();
+        if let Some(note) = attachments {
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(&note);
+        }
 
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
@@ -64,7 +72,7 @@ impl EventHandler for Handler {
             .clone()
             .unwrap_or_else(|| message.author.name.clone());
 
-        let msg = format!("{}: {text}", identity(&name, author_id));
+        let msg = format!("{}: {body}", identity(&name, author_id));
 
         let bot_identity = identity(&self.bot_name, self.bot_user_id);
 
@@ -110,6 +118,30 @@ async fn download_images(message: &DMessage) -> Vec<MessageImage> {
         }
     }
     images
+}
+
+fn attachment_note(message: &DMessage) -> Option<String> {
+    let lines: Vec<String> = message
+        .attachments
+        .iter()
+        .filter(|attachment| {
+            attachment
+                .content_type
+                .as_deref()
+                .is_none_or(|mime| !mime.starts_with("image/"))
+        })
+        .map(|attachment| {
+            let kind = attachment.content_type.as_deref().unwrap_or("unknown type");
+            format!("- {} ({kind}): {}", attachment.filename, attachment.url)
+        })
+        .collect();
+
+    (!lines.is_empty()).then(|| {
+        format!(
+            "[Attachments on this message — not shown inline; fetch with a tool if you need their contents:\n{}]",
+            lines.join("\n")
+        )
+    })
 }
 
 fn identity(name: &str, id: u64) -> String {
