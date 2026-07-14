@@ -1,13 +1,41 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::{
+    externals::bash_container_external::pull_file,
     types::conversation::{ConversationAction, Platform, ConversationId},
     types::media::MessageImage,
     Env,
 };
+use regex::Regex;
 use serenity::all::{CreateAttachment, CreateMessage};
 
 const DISCORD_MESSAGE_LIMIT: usize = 2000;
+
+/// The special in-message attachment marker: `[[attach:/path/in/sandbox]]`. Not a tool — it's a
+/// pattern the model writes inside its normal reply. At send time each match is removed from the
+/// text and the file at that sandbox path is uploaded as an attachment in its place. The path is
+/// captured non-greedily up to the closing `]]`.
+static ATTACH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\[attach:\s*(.*?)\s*\]\]").expect("ATTACH_RE is a valid regex"));
+
+/// Pull the sandbox paths named by `[[attach:…]]` markers out of `text`, returning the text with
+/// those markers stripped and the list of referenced paths (in order, deduplicated). Whitespace
+/// left where a marker was removed is collapsed so the visible message stays clean.
+fn extract_attach_paths(text: &str) -> (String, Vec<String>) {
+    let mut paths: Vec<String> = Vec::new();
+    for cap in ATTACH_RE.captures_iter(text) {
+        let path = cap[1].trim().to_string();
+        if !path.is_empty() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+    let cleaned = ATTACH_RE.replace_all(text, "");
+    let collapsed = Regex::new(r"[ \t]{2,}")
+        .expect("static whitespace regex is valid")
+        .replace_all(cleaned.trim(), " ")
+        .to_string();
+    (collapsed, paths)
+}
 
 fn split_for_discord(content: &str) -> Vec<String> {
     let mut chunks = Vec::new();
@@ -87,6 +115,7 @@ pub async fn send_message(
     conversation_id: ConversationId,
     outbound: OutboundMessage,
 ) -> ConversationAction {
+    let container_key = conversation_id.to_string();
     let text = compose(&conversation_id.0, outbound.message, &outbound.tool_names);
     match conversation_id.0 {
         Platform::Discord => {
@@ -98,12 +127,29 @@ pub async fn send_message(
                 }
             };
 
-            let files: Vec<CreateAttachment> = outbound
+            // Resolve any `[[attach:PATH]]` markers into real files pulled from the sandbox, and
+            // strip the markers from the visible text. Failures leave a small inline note so the
+            // user isn't silently missing an attachment the reply referred to.
+            let (mut text, attach_paths) = extract_attach_paths(&text);
+            let mut pattern_files: Vec<CreateAttachment> = Vec::new();
+            for path in &attach_paths {
+                match pull_file(&container_key, path).await {
+                    Ok(file) => pattern_files.push(CreateAttachment::bytes(file.bytes, file.filename)),
+                    Err(err) => {
+                        eprintln!("[send] attach '{path}' failed: {err}");
+                        let note = Platform::Discord.subtext(&format!("couldn't attach {path}: {err}"));
+                        text = if text.is_empty() { note } else { format!("{text}\n{note}") };
+                    }
+                }
+            }
+
+            let mut files: Vec<CreateAttachment> = outbound
                 .attachments
                 .iter()
                 .enumerate()
                 .filter_map(|(i, a)| discord_attachment(a, i))
                 .collect();
+            files.extend(pattern_files);
 
             let chunks = split_for_discord(&text);
 
@@ -137,5 +183,43 @@ pub async fn send_message(
             ConversationAction::MessageSent(Ok(()))
         }
         _ => panic!("Telegram not yet implemented"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_attach_paths;
+
+    #[test]
+    fn strips_marker_and_captures_path() {
+        let (text, paths) = extract_attach_paths("Here's the report [[attach:/tmp/report.pdf]] enjoy");
+        assert_eq!(text, "Here's the report enjoy");
+        assert_eq!(paths, vec!["/tmp/report.pdf"]);
+    }
+
+    #[test]
+    fn marker_only_message_becomes_empty_text() {
+        let (text, paths) = extract_attach_paths("[[attach:chart.png]]");
+        assert_eq!(text, "");
+        assert_eq!(paths, vec!["chart.png"]);
+    }
+
+    #[test]
+    fn multiple_markers_dedup_and_preserve_order() {
+        let (text, paths) =
+            extract_attach_paths("a [[attach:/x]] b [[attach:/y]] c [[attach:/x]]");
+        assert_eq!(text, "a b c");
+        assert_eq!(paths, vec!["/x", "/y"]);
+    }
+
+    #[test]
+    fn tolerates_internal_whitespace_and_no_markers() {
+        let (text, paths) = extract_attach_paths("[[attach:  /a b/c.txt  ]]");
+        assert_eq!(paths, vec!["/a b/c.txt"]);
+        assert!(text.is_empty());
+
+        let (plain, none) = extract_attach_paths("just a normal message");
+        assert_eq!(plain, "just a normal message");
+        assert!(none.is_empty());
     }
 }
