@@ -40,9 +40,6 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
                     if result.data.image_for_assistant.is_some() {
                         line.push_str(" [returned an image the assistant viewed — not visible to you]");
                     }
-                    if result.data.image_for_user.is_some() {
-                        line.push_str(" [produced an image shown to the user — not visible to you]");
-                    }
                     lines.push(line);
                 }
                 if let Some(msg) = followup {

@@ -244,24 +244,12 @@ impl LLMInput {
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<ChatMessage> = Vec::new();
                 let mut bytes: Vec<Arc<Vec<u8>>> = Vec::new();
-                let mut delivered: Vec<Arc<Vec<u8>>> = Vec::new();
 
                 for r in results {
                     let mut parts: Vec<String> = Vec::new();
                     let text = if full { &r.data.actual } else { &r.data.simplified };
                     if !text.is_empty() {
                         parts.push(text.clone());
-                    }
-                    if let Some(image) = &r.data.image_for_user {
-                        match image.hydrated_bytes() {
-                            Some(b) => {
-                                parts.push("[The image you produced was delivered to the user as your message — shown below.]".to_string());
-                                delivered.push(b);
-                            }
-                            None => parts.push(
-                                "[An image was delivered to the user as your message earlier in the conversation.]".to_string(),
-                            ),
-                        }
                     }
                     if let Some(image) = &r.data.image_for_assistant {
                         match image.hydrated_bytes() {
@@ -275,12 +263,6 @@ impl LLMInput {
                         }
                     }
                     messages.push(ChatMessage::tool(r.call.id.clone(), parts.join("\n")));
-                }
-
-                if !delivered.is_empty() {
-                    let content = vec![marker.to_string(); delivered.len()].join("\n");
-                    messages.push(ChatMessage::assistant(content));
-                    bytes.extend(delivered);
                 }
 
                 if let Some(msg) = user_msg {
@@ -305,7 +287,6 @@ pub enum ToolType {
     RunBashCommand { command: String },
     ResetBashContainer,
     ViewImage { path: String },
-    SendImageToUser { path: String },
     ReadFile {
         path: String,
         offset: Option<usize>,
@@ -325,7 +306,6 @@ impl ToolType {
             ToolType::VisitUrl { .. } => 90_000,
             ToolType::WebSearch { .. } | ToolType::ResetBashContainer => 60_000,
             ToolType::ViewImage { .. }
-            | ToolType::SendImageToUser { .. }
             | ToolType::ReadFile { .. }
             | ToolType::EditFile { .. } => 30_000,
         };
@@ -506,7 +486,6 @@ pub struct ToolResultData {
     pub actual: String,
     pub simplified: String,
     pub image_for_assistant: Option<MessageImage>,
-    pub image_for_user: Option<MessageImage>,
     pub metadata: HashMap<String, String>,
 }
 
@@ -516,7 +495,6 @@ impl ToolResultData {
             actual,
             simplified,
             image_for_assistant: None,
-            image_for_user: None,
             metadata: HashMap::new(),
         }
     }

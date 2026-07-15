@@ -1,6 +1,6 @@
 use crate::externals::{
     llama_cpp_external::get_llm_decision,
-    message_external::{send_message, Attachment, OutboundMessage},
+    message_external::{send_message, OutboundMessage},
     tool_call_external::execute_tool,
 };
 use crate::types::conversation::{
@@ -333,7 +333,6 @@ fn conversation_transition(
                     OutboundMessage {
                         message: response.message().map(str::to_string),
                         tool_names: announce_tools,
-                        attachments: Vec::new(),
                     },
                     post_send,
                     updated_conversation,
@@ -398,12 +397,6 @@ fn conversation_transition(
             if pending_tools.is_empty() {
                 completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
 
-                let attachments: Vec<Attachment> = completed_tools
-                    .iter()
-                    .filter_map(|(_, data)| data.image_for_user.clone())
-                    .map(Attachment::Image)
-                    .collect();
-
                 let results = completed_tools
                     .into_iter()
                     .map(|(call, data)| ToolResult { call, data })
@@ -418,7 +411,6 @@ fn conversation_transition(
                     OutboundMessage {
                         message: None,
                         tool_names: Vec::new(),
-                        attachments,
                     },
                     PostSend::SendToolResponse {
                         tool_rounds,

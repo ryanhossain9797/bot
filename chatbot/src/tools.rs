@@ -54,7 +54,6 @@ impl ToolKind {
             ToolKind::RunBashCommand => "run_bash_command",
             ToolKind::ResetBashContainer => "reset_bash_container",
             ToolKind::ViewImage => "view_image",
-            ToolKind::SendImageToUser => "send_image_to_user",
             ToolKind::ReadFile => "read_file",
             ToolKind::EditFile => "edit_file",
         }
@@ -97,17 +96,7 @@ impl ToolKind {
                 json!({ "type": "object", "properties": {}, "required": [] }),
             ),
             ToolKind::ViewImage => (
-                "Privately inspect an image yourself — the user does NOT see it. To show or send an image to the user, use send_image_to_user instead. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). Use it to inspect plots, screenshots, or downloaded images before deciding what to do next.",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Path to the image file inside your bash sandbox, e.g. \"/tmp/plot.png\" or \"chart.png\" (relative to the sandbox working directory)." }
-                    },
-                    "required": ["path"]
-                }),
-            ),
-            ToolKind::SendImageToUser => (
-                "Show an image to the user — send an image file from your bash sandbox into this chat so they can see it. This is how you display/share/show an image to the user; use it whenever they ask to see one. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). It goes to the user — they see it in the chat — and you see it too (it counts as a message you sent). Use it to deliver plots, generated images, or processed pictures.",
+                "Privately inspect an image yourself — the user does NOT see it. To show an image to the user, don't use this tool: write the marker `[[attach_image:PATH]]` in your reply instead. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). Use it to inspect plots, screenshots, or downloaded images before deciding what to do next.",
                 json!({
                     "type": "object",
                     "properties": {
@@ -174,9 +163,6 @@ impl ToolType {
             ToolType::ViewImage { path } => {
                 [("path".to_string(), json!(path))].into_iter().collect()
             }
-            ToolType::SendImageToUser { path } => {
-                [("path".to_string(), json!(path))].into_iter().collect()
-            }
             ToolType::ReadFile {
                 path,
                 offset,
@@ -220,9 +206,6 @@ impl ToolType {
             }),
             ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
             ToolKind::ViewImage => Ok(ToolType::ViewImage {
-                path: parse_args::<PathArgs>(name, arguments)?.path,
-            }),
-            ToolKind::SendImageToUser => Ok(ToolType::SendImageToUser {
                 path: parse_args::<PathArgs>(name, arguments)?.path,
             }),
             ToolKind::ReadFile => {
