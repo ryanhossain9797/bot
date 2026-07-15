@@ -364,6 +364,10 @@ async fn run_tool(
     expected_file_hash: Option<String>,
 ) -> Result<ToolResultData, String> {
     match tool_type {
+        ToolType::MetaNoOpExtraTurn => {
+            let note = "You have another turn — continue with the next part of your message now.";
+            Ok(ToolResultData::text(note.to_string(), note.to_string()))
+        }
         ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
         ToolType::RunBashCommand { command } => run_bash(conversation_id, &command).await,
