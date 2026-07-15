@@ -297,6 +297,7 @@ pub enum ToolType {
         old_string: String,
         new_string: String,
     },
+    MetaNoOpExtraTurn,
 }
 
 impl ToolType {
@@ -307,7 +308,8 @@ impl ToolType {
             ToolType::WebSearch { .. } | ToolType::ResetBashContainer => 60_000,
             ToolType::ViewImage { .. }
             | ToolType::ReadFile { .. }
-            | ToolType::EditFile { .. } => 30_000,
+            | ToolType::EditFile { .. }
+            | ToolType::MetaNoOpExtraTurn => 30_000,
         };
         Duration::milliseconds(ms)
     }

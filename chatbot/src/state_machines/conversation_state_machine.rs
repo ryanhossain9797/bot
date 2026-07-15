@@ -312,7 +312,7 @@ fn conversation_transition(
                     response
                         .tool_calls
                         .iter()
-                        .map(|tc| tc.tool_type.wire_name().to_string())
+                        .filter_map(|tc| tc.tool_type.announcement().map(str::to_string))
                         .collect()
                 } else {
                     Vec::new()

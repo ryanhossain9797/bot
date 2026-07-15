@@ -56,6 +56,14 @@ impl ToolKind {
             ToolKind::ViewImage => "view_image",
             ToolKind::ReadFile => "read_file",
             ToolKind::EditFile => "edit_file",
+            ToolKind::MetaNoOpExtraTurn => "meta_no_op_extra_turn",
+        }
+    }
+
+    fn announcement(&self) -> Option<&'static str> {
+        match self {
+            ToolKind::MetaNoOpExtraTurn => None,
+            _ => Some(self.wire_name()),
         }
     }
 
@@ -129,6 +137,10 @@ impl ToolKind {
                     "required": ["path", "old_string", "new_string"]
                 }),
             ),
+            ToolKind::MetaNoOpExtraTurn => (
+                "Give yourself another turn after this reply — use it to say something to the user across multiple steps. Put the first part in this reply's message, call this tool, and you'll be prompted again to continue with the next part. Pointless to call with no message (nothing is sent to the user), and pointless to call alongside other tools (a tool call already earns you another turn).",
+                json!({ "type": "object", "properties": {}, "required": [] }),
+            ),
         };
         ToolDefinition {
             kind: "function",
@@ -148,6 +160,10 @@ impl ToolType {
 
     pub fn wire_name(&self) -> &'static str {
         ToolKind::from(self).wire_name()
+    }
+
+    pub fn announcement(&self) -> Option<&'static str> {
+        ToolKind::from(self).announcement()
     }
 
     pub fn arguments_map(&self) -> Map<String, Value> {
@@ -186,6 +202,7 @@ impl ToolType {
             ]
             .into_iter()
             .collect(),
+            ToolType::MetaNoOpExtraTurn => Map::new(),
         }
     }
 
@@ -224,6 +241,7 @@ impl ToolType {
                     new_string: args.new_string,
                 })
             }
+            ToolKind::MetaNoOpExtraTurn => Ok(ToolType::MetaNoOpExtraTurn),
         }
     }
 }
