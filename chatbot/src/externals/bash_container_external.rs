@@ -134,20 +134,13 @@ pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImag
     Ok(MessageImage::Hydrated(image).downscaled())
 }
 
-/// A file pulled verbatim from the sandbox, ready to upload as a chat attachment.
 pub struct PulledFile {
     pub filename: String,
     pub bytes: Vec<u8>,
 }
 
-/// Upper bound on a message-pattern attachment. Discord accepts 25 MiB for the bot tier we target,
-/// but we stay well under to keep uploads fast and predictable across platforms.
 pub(crate) const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 
-/// Read a file from the sandbox as raw bytes for delivery to the user (any type, not just images).
-/// Backs the `[[attach_file:PATH]]` / `[[attach_image:PATH]]` message patterns handled in
-/// `message_external`. The filename is the
-/// path's basename, falling back to `attachment` for odd paths.
 pub async fn pull_file(conversation_id: &str, path: &str) -> Result<PulledFile, String> {
     let name = worker_name(conversation_id);
     ensure_worker(&name).await?;

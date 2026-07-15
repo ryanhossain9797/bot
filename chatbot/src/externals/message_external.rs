@@ -10,19 +10,10 @@ use serenity::all::{CreateAttachment, CreateMessage};
 
 const DISCORD_MESSAGE_LIMIT: usize = 2000;
 
-/// The special in-message attachment markers: `[[attach_file:/path]]` and `[[attach_image:/path]]`.
-/// Not tools — patterns the model writes inside its normal reply. At send time each match is removed
-/// from the text and the file at that sandbox path is uploaded as an attachment in its place
-/// (Discord renders images inline by extension either way; the two names just signal intent). The
-/// path is captured non-greedily up to the closing `]]`.
 static ATTACH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[\[attach_(?:file|image):\s*(.*?)\s*\]\]").expect("ATTACH_RE is a valid regex")
 });
 
-/// Pull the sandbox paths named by `[[attach_file:…]]` / `[[attach_image:…]]` markers out of
-/// `text`, returning the text with
-/// those markers stripped and the list of referenced paths (in order, deduplicated). Whitespace
-/// left where a marker was removed is collapsed so the visible message stays clean.
 fn extract_attach_paths(text: &str) -> (String, Vec<String>) {
     let mut paths: Vec<String> = Vec::new();
     for cap in ATTACH_RE.captures_iter(text) {
@@ -107,9 +98,6 @@ pub async fn send_message(
                 }
             };
 
-            // Resolve any `[[attach_file:PATH]]` / `[[attach_image:PATH]]` markers into real files
-            // pulled from the sandbox, and strip the markers from the visible text. Failures leave a
-            // small inline note so the user isn't silently missing an attachment the reply referred to.
             let (mut text, attach_paths) = extract_attach_paths(&text);
             let mut files: Vec<CreateAttachment> = Vec::new();
             for path in &attach_paths {
