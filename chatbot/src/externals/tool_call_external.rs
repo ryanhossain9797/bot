@@ -375,18 +375,6 @@ async fn run_tool(
                 actual: note.clone(),
                 simplified: note,
                 image_for_assistant: Some(image),
-                image_for_user: None,
-                metadata: HashMap::new(),
-            })
-        }
-        ToolType::SendImageToUser { path } => {
-            let image = pull_image(conversation_id, &path).await?;
-            let note = format!("Image '{path}' sent to the user — Both you and the user can see it.");
-            Ok(ToolResultData {
-                actual: note.clone(),
-                simplified: note,
-                image_for_assistant: None,
-                image_for_user: Some(image),
                 metadata: HashMap::new(),
             })
         }
@@ -405,7 +393,6 @@ async fn run_tool(
                 simplified: clip_to(&body, SIMPLIFIED_MAX),
                 actual: body,
                 image_for_assistant: None,
-                image_for_user: None,
                 metadata: HashMap::from([("file_hash".to_string(), hash)]),
             })
         }
@@ -437,7 +424,6 @@ async fn run_tool(
                 simplified: clip_to(&body, SIMPLIFIED_MAX),
                 actual: body,
                 image_for_assistant: None,
-                image_for_user: None,
                 metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
             })
         }

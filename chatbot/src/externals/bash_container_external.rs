@@ -145,7 +145,8 @@ pub struct PulledFile {
 pub(crate) const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 
 /// Read a file from the sandbox as raw bytes for delivery to the user (any type, not just images).
-/// Backs the `[[attach:PATH]]` message pattern handled in `message_external`. The filename is the
+/// Backs the `[[attach_file:PATH]]` / `[[attach_image:PATH]]` message patterns handled in
+/// `message_external`. The filename is the
 /// path's basename, falling back to `attachment` for odd paths.
 pub async fn pull_file(conversation_id: &str, path: &str) -> Result<PulledFile, String> {
     let name = worker_name(conversation_id);
