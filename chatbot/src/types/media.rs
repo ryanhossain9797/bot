@@ -47,6 +47,52 @@ impl Image {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Attachment {
+    Image {
+        image: MessageImage,
+        filename: String,
+        url: String,
+    },
+    File {
+        filename: String,
+        content_type: Option<String>,
+        url: String,
+    },
+}
+
+impl Attachment {
+    pub fn downscaled(&self) -> Attachment {
+        match self {
+            Attachment::Image {
+                image,
+                filename,
+                url,
+            } => Attachment::Image {
+                image: image.downscaled(),
+                filename: filename.clone(),
+                url: url.clone(),
+            },
+            Attachment::File { .. } => self.clone(),
+        }
+    }
+
+    pub fn dehydrated(&self) -> Attachment {
+        match self {
+            Attachment::Image {
+                image,
+                filename,
+                url,
+            } => Attachment::Image {
+                image: image.dehydrated(),
+                filename: filename.clone(),
+                url: url.clone(),
+            },
+            Attachment::File { .. } => self.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub enum MessageImage {
     Hydrated(Image),
@@ -110,5 +156,46 @@ mod tests {
 
         let back: MessageImage = serde_json::from_str(&json).unwrap();
         assert!(matches!(back, MessageImage::Dehydrated { byte_size: 5 }));
+    }
+
+    #[test]
+    fn image_attachment_persists_dehydrated_keeping_source() {
+        let attachment = Attachment::Image {
+            image: MessageImage::Hydrated(Image {
+                bytes: Arc::new(vec![1, 2, 3]),
+                mime: "image/png".to_string(),
+            }),
+            filename: "photo.png".to_string(),
+            url: "https://cdn/photo.png".to_string(),
+        };
+        let json = serde_json::to_string(&attachment).unwrap();
+        let back: Attachment = serde_json::from_str(&json).unwrap();
+        match back {
+            Attachment::Image { image, filename, url } => {
+                assert!(matches!(image, MessageImage::Dehydrated { byte_size: 3 }));
+                assert_eq!(filename, "photo.png");
+                assert_eq!(url, "https://cdn/photo.png");
+            }
+            Attachment::File { .. } => panic!("expected image attachment"),
+        }
+    }
+
+    #[test]
+    fn file_attachment_round_trips() {
+        let attachment = Attachment::File {
+            filename: "report.pdf".to_string(),
+            content_type: Some("application/pdf".to_string()),
+            url: "https://cdn/report.pdf".to_string(),
+        };
+        let json = serde_json::to_string(&attachment).unwrap();
+        let back: Attachment = serde_json::from_str(&json).unwrap();
+        match back {
+            Attachment::File { filename, content_type, url } => {
+                assert_eq!(filename, "report.pdf");
+                assert_eq!(content_type.as_deref(), Some("application/pdf"));
+                assert_eq!(url, "https://cdn/report.pdf");
+            }
+            Attachment::Image { .. } => panic!("expected file attachment"),
+        }
     }
 }

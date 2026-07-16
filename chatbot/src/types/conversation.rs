@@ -1,5 +1,5 @@
 use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
-use crate::types::media::MessageImage;
+use crate::types::media::{Attachment, MessageImage};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -140,7 +140,7 @@ pub struct ConversationMessage {
     pub queued: bool,
     pub user_id: String,
     pub name: String,
-    pub images: Vec<MessageImage>,
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ impl ConversationMessage {
 
     pub fn redacted(&self) -> ConversationMessage {
         ConversationMessage {
-            images: self.images.iter().map(MessageImage::dehydrated).collect(),
+            attachments: self.attachments.iter().map(Attachment::dehydrated).collect(),
             ..self.clone()
         }
     }
@@ -182,13 +182,24 @@ impl ConversationMessage {
 
         let mut bytes = Vec::new();
         let mut dehydrated = 0usize;
-        for image in &self.images {
-            match image.hydrated_bytes() {
-                Some(b) => {
-                    parts.push(marker.to_string());
-                    bytes.push(b);
+        for attachment in &self.attachments {
+            match attachment {
+                Attachment::Image { image, filename, url } => match image.hydrated_bytes() {
+                    Some(b) => {
+                        parts.push(format!(
+                            "[attached image {filename} — the image directly below is this file; download it at {url} to work with it in your sandbox]"
+                        ));
+                        parts.push(marker.to_string());
+                        bytes.push(b);
+                    }
+                    None => dehydrated += 1,
+                },
+                Attachment::File { filename, content_type, url } => {
+                    let kind = content_type.as_deref().unwrap_or("unknown type");
+                    parts.push(format!(
+                        "[attached file {filename} ({kind}) — not shown inline; download it at {url} to work with it in your sandbox]"
+                    ));
                 }
-                None => dehydrated += 1,
             }
         }
         if dehydrated > 0 {
@@ -472,7 +483,7 @@ pub enum ConversationAction {
         msg: String,
         user_id: String,
         name: String,
-        images: Vec<MessageImage>,
+        attachments: Vec<Attachment>,
     },
     LLMDecisionResult(Result<LLMResponse, InterruptionReason>),
     MessageSent(Result<(), String>),
