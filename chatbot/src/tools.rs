@@ -28,10 +28,30 @@ struct PathArgs {
 #[derive(Debug, Deserialize)]
 struct ReadFileArgs {
     path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_usize")]
     offset: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_opt_usize")]
     limit: Option<usize>,
+}
+
+fn de_lenient_opt_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr {
+        Num(usize),
+        Str(String),
+    }
+    match Option::<NumOrStr>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(NumOrStr::Num(n)) => Ok(Some(n)),
+        Some(NumOrStr::Str(s)) => match s.trim() {
+            "" => Ok(None),
+            t => t.parse::<usize>().map(Some).map_err(serde::de::Error::custom),
+        },
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,5 +263,38 @@ impl ToolType {
             }
             ToolKind::MetaNoOpExtraTurn => Ok(ToolType::MetaNoOpExtraTurn),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_file_accepts_stringified_numbers() {
+        let bound = ToolType::bind(
+            "read_file",
+            r#"{"path":"/tmp/x.json","offset":"60","limit":"20"}"#,
+        )
+        .expect("stringified numbers should bind");
+        assert!(matches!(
+            bound,
+            ToolType::ReadFile { offset: Some(60), limit: Some(20), .. }
+        ));
+    }
+
+    #[test]
+    fn read_file_accepts_numeric_and_absent() {
+        let numeric = ToolType::bind("read_file", r#"{"path":"/x","offset":5}"#).unwrap();
+        assert!(matches!(
+            numeric,
+            ToolType::ReadFile { offset: Some(5), limit: None, .. }
+        ));
+
+        let absent = ToolType::bind("read_file", r#"{"path":"/x"}"#).unwrap();
+        assert!(matches!(
+            absent,
+            ToolType::ReadFile { offset: None, limit: None, .. }
+        ));
     }
 }
