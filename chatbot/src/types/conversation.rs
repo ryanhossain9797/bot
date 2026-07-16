@@ -184,11 +184,9 @@ impl ConversationMessage {
         let mut dehydrated = 0usize;
         for attachment in &self.attachments {
             match attachment {
-                Attachment::Image { image, filename, url } => match image.hydrated_bytes() {
+                Attachment::Image { image, url, .. } => match image.hydrated_bytes() {
                     Some(b) => {
-                        parts.push(format!(
-                            "[attached image {filename} — the image directly below is this file; download it at {url} to work with it in your sandbox]"
-                        ));
+                        parts.push(format!("url: {url}"));
                         parts.push(marker.to_string());
                         bytes.push(b);
                     }
@@ -196,9 +194,7 @@ impl ConversationMessage {
                 },
                 Attachment::File { filename, content_type, url } => {
                     let kind = content_type.as_deref().unwrap_or("unknown type");
-                    parts.push(format!(
-                        "[attached file {filename} ({kind}) — not shown inline; download it at {url} to work with it in your sandbox]"
-                    ));
+                    parts.push(format!("file {filename} ({kind}) url: {url}"));
                 }
             }
         }
