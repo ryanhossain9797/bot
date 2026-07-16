@@ -6,16 +6,27 @@ use crate::types::conversation::{
     CompactionOutput, ConversationMessage, HistoryEntry, HistoryEntryKind, InterruptionReason,
     LLMInput,
 };
+use crate::types::media::Attachment;
 use crate::types::memory::MemoryManagerAction;
 use crate::Env;
 
 fn render_message(msg: &ConversationMessage) -> String {
     let mut line = format!("{}: {}", msg.name, msg.to_content());
-    if !msg.images.is_empty() {
-        line.push_str(&format!(
-            " [attached {} image(s) — not visible to you]",
-            msg.images.len()
-        ));
+    let images = msg
+        .attachments
+        .iter()
+        .filter(|a| matches!(a, Attachment::Image { .. }))
+        .count();
+    let files = msg
+        .attachments
+        .iter()
+        .filter(|a| matches!(a, Attachment::File { .. }))
+        .count();
+    if images > 0 {
+        line.push_str(&format!(" [attached {images} image(s) — not visible to you]"));
+    }
+    if files > 0 {
+        line.push_str(&format!(" [attached {files} file(s)]"));
     }
     line
 }

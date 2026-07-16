@@ -7,6 +7,7 @@ use crate::types::conversation::{
     latest_file_hash, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
 };
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
+use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
 use crate::{
     types::conversation::{
@@ -268,7 +269,7 @@ fn conversation_transition(
                 msg,
                 user_id,
                 name,
-                images,
+                attachments,
             },
         ) => {
             let mut pending = conversation.pending;
@@ -278,7 +279,7 @@ fn conversation_transition(
                 queued,
                 user_id: user_id.clone(),
                 name: name.clone(),
-                images: images.iter().map(|image| image.downscaled()).collect(),
+                attachments: attachments.iter().map(Attachment::downscaled).collect(),
             });
 
             Ok(Conversation {
@@ -467,7 +468,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
             .map(|m| m.user_id.clone())
             .unwrap_or_default();
         let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
-        let images = drained.iter().flat_map(|m| m.images.clone()).collect();
+        let attachments = drained.iter().flat_map(|m| m.attachments.clone()).collect();
         let text = drained
             .into_iter()
             .map(|m| m.text)
@@ -478,7 +479,7 @@ fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMe
             queued,
             user_id,
             name,
-            images,
+            attachments,
         }
     })
 }

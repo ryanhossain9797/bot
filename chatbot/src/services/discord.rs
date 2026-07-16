@@ -4,7 +4,7 @@ use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 use crate::{
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
-    types::media::{Image, MessageImage},
+    types::media::{Attachment, Image, MessageImage},
 };
 
 pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
@@ -47,21 +47,14 @@ impl EventHandler for Handler {
             return;
         }
 
-        let images = download_images(&message).await;
+        let attachments = collect_attachments(&message).await;
         let text = filter(&message, self.bot_user_id, &self.bot_name);
-        let attachments = attachment_note(&message);
 
-        if text.is_none() && images.is_empty() && attachments.is_none() {
+        if text.is_none() && attachments.is_empty() {
             return;
         }
 
-        let mut body = text.unwrap_or_default();
-        if let Some(note) = attachments {
-            if !body.is_empty() {
-                body.push('\n');
-            }
-            body.push_str(&note);
-        }
+        let body = text.unwrap_or_default();
 
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
@@ -90,58 +83,48 @@ impl EventHandler for Handler {
             msg,
             user_id,
             name,
-            images,
+            attachments,
         };
 
         handle.act_maybe_construct(constructor, action).await;
     }
 }
 
-async fn download_images(message: &DMessage) -> Vec<MessageImage> {
-    let mut images = Vec::new();
+async fn collect_attachments(message: &DMessage) -> Vec<Attachment> {
+    let mut attachments = Vec::new();
     for attachment in &message.attachments {
-        let Some(mime) = attachment.content_type.clone() else {
-            continue;
+        let filename = attachment.filename.clone();
+        let url = attachment.url.clone();
+        let content_type = attachment.content_type.clone();
+        let is_image = content_type
+            .as_deref()
+            .is_some_and(|mime| mime.starts_with("image/"));
+
+        let as_file = || Attachment::File {
+            filename: filename.clone(),
+            content_type: content_type.clone(),
+            url: url.clone(),
         };
-        if !mime.starts_with("image/") {
-            continue;
-        }
-        match attachment.download().await {
-            Ok(bytes) => images.push(MessageImage::Hydrated(Image {
-                bytes: std::sync::Arc::new(bytes),
-                mime,
-            })),
-            Err(err) => eprintln!(
-                "[discord] failed to download image {}: {err}",
-                attachment.filename
-            ),
+
+        match is_image {
+            false => attachments.push(as_file()),
+            true => match attachment.download().await {
+                Ok(bytes) => attachments.push(Attachment::Image {
+                    image: MessageImage::Hydrated(Image {
+                        bytes: std::sync::Arc::new(bytes),
+                        mime: content_type.clone().unwrap_or_default(),
+                    }),
+                    filename: filename.clone(),
+                    url: url.clone(),
+                }),
+                Err(err) => {
+                    eprintln!("[discord] failed to download image {filename}: {err}");
+                    attachments.push(as_file());
+                }
+            },
         }
     }
-    images
-}
-
-fn attachment_note(message: &DMessage) -> Option<String> {
-    let lines: Vec<String> = message
-        .attachments
-        .iter()
-        .filter(|attachment| {
-            attachment
-                .content_type
-                .as_deref()
-                .is_none_or(|mime| !mime.starts_with("image/"))
-        })
-        .map(|attachment| {
-            let kind = attachment.content_type.as_deref().unwrap_or("unknown type");
-            format!("- {} ({kind}): {}", attachment.filename, attachment.url)
-        })
-        .collect();
-
-    (!lines.is_empty()).then(|| {
-        format!(
-            "[Attachments on this message — not shown inline; fetch with a tool if you need their contents:\n{}]",
-            lines.join("\n")
-        )
-    })
+    attachments
 }
 
 fn identity(name: &str, id: u64) -> String {
