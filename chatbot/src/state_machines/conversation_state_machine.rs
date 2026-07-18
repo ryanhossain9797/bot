@@ -202,8 +202,8 @@ fn apply_post_send(
                         note,
                         addressee,
                     } => {
-                        let text = match validate_delay(*delay_seconds) {
-                            Ok(fire_at) => {
+                        let text = validate_delay(*delay_seconds)
+                            .map(|fire_at| {
                                 effects.enqueue_construct::<ReminderForConversationMachine>(
                                     ReminderConstructor {
                                         id: ReminderForConversationId {
@@ -216,9 +216,8 @@ fn apply_post_send(
                                     },
                                 );
                                 reminder_confirmation(fire_at, note)
-                            }
-                            Err(msg) => msg,
-                        };
+                            })
+                            .unwrap_or_else(|msg| msg);
                         effects.enqueue_action::<ConversationMachine>(
                             conversation_id.clone(),
                             ConversationAction::ToolResult {
