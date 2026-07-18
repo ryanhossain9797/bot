@@ -3,12 +3,16 @@ use crate::externals::{
     message_external::{send_message, OutboundMessage},
     tool_call_external::execute_tool,
 };
-use crate::types::conversation::{
-    latest_file_hash, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
-};
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
+use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
+use crate::types::conversation::{
+    latest_file_hash, Pending, SystemMessage, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
+};
 use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
+use crate::types::reminder::{
+    ReminderConstructor, ReminderForConversationId, ReminderId, MAX_REMINDER_SECS,
+};
 use crate::{
     types::conversation::{
         CompactionOutput, Conversation, ConversationAction, ConversationConstructor,
@@ -17,7 +21,7 @@ use crate::{
     },
     Env,
 };
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use re_framework::{Effects, Scheduled, StateMachine};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -124,7 +128,7 @@ fn send_then(
     outbound: OutboundMessage,
     post_send: PostSend,
     recent_conversation: RecentConversation,
-    pending: Vec<ConversationMessage>,
+    pending: Vec<Pending>,
     is_group: bool,
     bot_identity: String,
     compaction_in_flight: bool,
@@ -168,7 +172,7 @@ fn apply_post_send(
     conversation_id: &ConversationId,
     post_send: PostSend,
     recent_conversation: RecentConversation,
-    pending: Vec<ConversationMessage>,
+    pending: Vec<Pending>,
     is_group: bool,
     bot_identity: String,
     compaction_in_flight: bool,
@@ -192,17 +196,52 @@ fn apply_post_send(
             let history = recent_conversation.history();
             let mut pending_tools = HashMap::new();
             for tool_call in tool_calls {
-                let expected_file_hash = match &tool_call.tool_type {
-                    ToolType::EditFile { path, .. } => {
-                        latest_file_hash(&history, path).map(str::to_string)
+                match &tool_call.tool_type {
+                    ToolType::SetReminder {
+                        delay_seconds,
+                        note,
+                        addressee,
+                    } => {
+                        let (maybe_construct, text) = match validate_delay(*delay_seconds) {
+                            Ok(fire_at) => (
+                                Some(ReminderConstructor {
+                                    id: ReminderForConversationId {
+                                        conversation_id: conversation_id.clone(),
+                                        reminder_id: ReminderId::new(),
+                                    },
+                                    addressee: addressee.clone(),
+                                    note: note.clone(),
+                                    fire_at,
+                                }),
+                                reminder_confirmation(fire_at, note),
+                            ),
+                            Err(msg) => (None, msg),
+                        };
+                        if let Some(constructor) = maybe_construct {
+                            effects.enqueue_construct::<ReminderForConversationMachine>(constructor);
+                        }
+                        effects.enqueue_action::<ConversationMachine>(
+                            conversation_id.clone(),
+                            ConversationAction::ToolResult {
+                                id: tool_call.id.clone(),
+                                result: Ok(ToolResultData::text(text.clone(), text)),
+                            },
+                        );
                     }
-                    _ => None,
-                };
-                effects.enqueue_external(execute_tool(
-                    conversation_id.to_string(),
-                    tool_call.clone(),
-                    expected_file_hash,
-                ));
+                    tool_type => {
+                        let expected_file_hash = match tool_type {
+                            ToolType::EditFile { path, .. } => {
+                                latest_file_hash(&history, path).map(str::to_string)
+                            }
+                            _ => None,
+                        };
+                        effects.enqueue_external(execute_tool(
+                            conversation_id.to_string(),
+                            tool_call.clone(),
+                            expected_file_hash,
+                        ));
+                    }
+                }
                 pending_tools.insert(tool_call.id.clone(), tool_call);
             }
 
@@ -274,13 +313,26 @@ fn conversation_transition(
         ) => {
             let mut pending = conversation.pending;
             let queued = !matches!(&user_state, ConversationState::Idle { .. });
-            pending.push(ConversationMessage {
+            pending.push(Pending::Message(ConversationMessage {
                 text: msg.clone(),
                 queued,
                 user_id: user_id.clone(),
                 name: name.clone(),
                 attachments: attachments.iter().map(Attachment::downscaled).collect(),
-            });
+            }));
+
+            Ok(Conversation {
+                pending,
+                state: user_state,
+                ..conversation
+            })
+        }
+        (user_state, ConversationAction::ReminderFired { note, addressee }) => {
+            let mut pending = conversation.pending;
+            pending.push(Pending::System(SystemMessage {
+                note: note.clone(),
+                addressee: addressee.clone(),
+            }));
 
             Ok(Conversation {
                 pending,
@@ -404,7 +456,7 @@ fn conversation_transition(
                     .collect();
 
                 let mut pending = conversation.pending;
-                let followup = take_pending(&mut pending);
+                let followup = take_pending(&mut pending).and_then(followup_message);
 
                 send_then(
                     env,
@@ -459,29 +511,99 @@ fn conversation_transition(
     post_transition(env, conversation_id, state, effects)
 }
 
-fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
-    (!pending.is_empty()).then(|| {
-        let drained = std::mem::take(pending);
-        let queued = drained.iter().any(|m| m.queued);
-        let user_id = drained
-            .last()
-            .map(|m| m.user_id.clone())
-            .unwrap_or_default();
-        let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
-        let attachments = drained.iter().flat_map(|m| m.attachments.clone()).collect();
-        let text = drained
-            .into_iter()
-            .map(|m| m.text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        ConversationMessage {
-            text,
-            queued,
-            user_id,
-            name,
-            attachments,
+fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
+    let drained = std::mem::take(pending);
+    match drained.as_slice() {
+        [] => None,
+        _ if drained.iter().all(|p| matches!(p, Pending::System(_))) => {
+            let batch = drained
+                .into_iter()
+                .filter_map(|p| match p {
+                    Pending::System(s) => Some(s),
+                    Pending::Message(_) => None,
+                })
+                .collect();
+            Some(LLMInput::SystemMessage(batch))
         }
-    })
+        _ => Some(LLMInput::ConversationMessage(merge_pending(drained))),
+    }
+}
+
+fn merge_pending(drained: Vec<Pending>) -> ConversationMessage {
+    let queued = drained
+        .iter()
+        .any(|p| matches!(p, Pending::Message(m) if m.queued));
+    let (user_id, name) = drained
+        .iter()
+        .rev()
+        .find_map(|p| match p {
+            Pending::Message(m) => Some((m.user_id.clone(), m.name.clone())),
+            Pending::System(_) => None,
+        })
+        .unwrap_or_default();
+    let attachments = drained
+        .iter()
+        .filter_map(|p| match p {
+            Pending::Message(m) => Some(m.attachments.clone()),
+            Pending::System(_) => None,
+        })
+        .flatten()
+        .collect();
+    let text = drained
+        .into_iter()
+        .map(|p| match p {
+            Pending::Message(m) => m.text,
+            Pending::System(s) => s.to_content(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    ConversationMessage {
+        text,
+        queued,
+        user_id,
+        name,
+        attachments,
+    }
+}
+
+fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
+    match input {
+        LLMInput::ConversationMessage(m) => Some(m),
+        LLMInput::SystemMessage(batch) => Some(ConversationMessage {
+            text: batch
+                .iter()
+                .map(SystemMessage::to_content)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            queued: false,
+            user_id: String::new(),
+            name: String::new(),
+            attachments: Vec::new(),
+        }),
+        LLMInput::ToolResults(..) => None,
+    }
+}
+
+fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
+    match delay_seconds {
+        d if d <= 0 => Err(format!(
+            "Reminder not set: delay_seconds must be a positive number of seconds in the future (got {d})."
+        )),
+        d if d > MAX_REMINDER_SECS => Err(format!(
+            "Reminder not set: delay_seconds {d} is too far out (max {MAX_REMINDER_SECS}, ~1 year)."
+        )),
+        d => Utc::now()
+            .checked_add_signed(ChronoDuration::seconds(d))
+            .ok_or_else(|| "Reminder not set: the requested time overflows.".to_string()),
+    }
+}
+
+fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
+    format!(
+        "Reminder set — fires around {}. Note: \"{note}\". Tell the user you've set it; you'll be \
+         prompted automatically when it fires. (Reminders are lost on a redeploy.)",
+        fire_at.format("%Y-%m-%d %H:%M:%S UTC")
+    )
 }
 
 fn post_transition(
@@ -499,8 +621,14 @@ fn post_transition(
         _ => return Ok(conversation),
     };
 
-    let Some(msg) = take_pending(&mut conversation.pending) else {
-        maybe_fire_compaction(env, conversation_id, &mut conversation, &recent_conversation, effects);
+    let Some(current_input) = take_pending(&mut conversation.pending) else {
+        maybe_fire_compaction(
+            env,
+            conversation_id,
+            &mut conversation,
+            &recent_conversation,
+            effects,
+        );
         return Ok(conversation);
     };
 
@@ -509,8 +637,6 @@ fn post_transition(
     let compaction_in_flight = conversation.compaction_in_flight;
 
     let history = recent_conversation.history();
-
-    let current_input = LLMInput::ConversationMessage(msg);
 
     effects.enqueue_external(get_llm_decision(
         Arc::clone(env),
@@ -587,7 +713,10 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
         ConversationState::RunningTools { pending_tools, .. } => pending_tools
             .iter()
             .map(|(id, call)| {
-                (id.clone(), conversation.last_transition + call.tool_type.rescue_timeout())
+                (
+                    id.clone(),
+                    conversation.last_transition + call.tool_type.rescue_timeout(),
+                )
             })
             .min_by_key(|(_, at)| *at)
             .map(|(id, at)| Scheduled {
@@ -641,5 +770,69 @@ impl StateMachine for ConversationMachine {
 
     fn name() -> &'static str {
         "ConversationMachine"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::conversation::SystemMessage;
+
+    fn system(addressee: &str, note: &str) -> Pending {
+        Pending::System(SystemMessage {
+            note: note.to_string(),
+            addressee: addressee.to_string(),
+        })
+    }
+
+    fn user(name: &str, text: &str) -> Pending {
+        Pending::Message(ConversationMessage {
+            text: text.to_string(),
+            queued: false,
+            user_id: format!("id_{name}"),
+            name: name.to_string(),
+            attachments: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn validate_delay_rejects_non_positive_and_too_large() {
+        assert!(validate_delay(0).is_err());
+        assert!(validate_delay(-3600).is_err());
+        assert!(validate_delay(MAX_REMINDER_SECS + 1).is_err());
+        assert!(validate_delay(3600).is_ok());
+        assert!(validate_delay(i64::MAX).is_err());
+    }
+
+    #[test]
+    fn take_pending_preserves_per_reminder_identity() {
+        let mut pending = vec![system("Alice", "take meds"), system("Bob", "call mom")];
+        let input = take_pending(&mut pending).expect("drains a batch");
+        let LLMInput::SystemMessage(batch) = &input else {
+            panic!("pure-reminder batch should be a SystemMessage");
+        };
+        assert_eq!(batch.len(), 2);
+
+        let (messages, _) = input.messages_and_media("<marker>", true);
+        let rendered = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("For Alice: take meds"), "got: {rendered}");
+        assert!(rendered.contains("For Bob: call mom"), "got: {rendered}");
+    }
+
+    #[test]
+    fn take_pending_merges_mixed_batch_into_user_turn_keeping_reminder_text() {
+        let mut pending = vec![user("Alice", "hey"), system("Alice", "take meds")];
+        let input = take_pending(&mut pending).expect("drains a batch");
+        let LLMInput::ConversationMessage(msg) = &input else {
+            panic!("mixed batch should merge into a ConversationMessage");
+        };
+        assert!(msg.text.contains("hey"));
+        assert!(msg
+            .text
+            .contains("[Reminder — IMPORTANT] For Alice: take meds"));
     }
 }

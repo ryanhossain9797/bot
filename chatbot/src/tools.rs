@@ -34,6 +34,24 @@ struct ReadFileArgs {
     limit: Option<usize>,
 }
 
+fn de_lenient_number<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + std::str::FromStr,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr<T> {
+        Num(T),
+        Str(String),
+    }
+    match NumOrStr::<T>::deserialize(deserializer)? {
+        NumOrStr::Num(n) => Ok(n),
+        NumOrStr::Str(s) => s.trim().parse::<T>().map_err(serde::de::Error::custom),
+    }
+}
+
 fn de_lenient_opt_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -61,6 +79,14 @@ struct EditFileArgs {
     new_string: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetReminderArgs {
+    #[serde(deserialize_with = "de_lenient_number")]
+    delay_seconds: i64,
+    note: String,
+    addressee: String,
+}
+
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
     serde_json::from_str(arguments)
         .map_err(|e| anyhow::anyhow!("{name} arguments failed to bind: {e} — raw: {arguments}"))
@@ -76,6 +102,7 @@ impl ToolKind {
             ToolKind::ViewImage => "view_image",
             ToolKind::ReadFile => "read_file",
             ToolKind::EditFile => "edit_file",
+            ToolKind::SetReminder => "set_reminder",
             ToolKind::MetaNoOpExtraTurn => "meta_no_op_extra_turn",
         }
     }
@@ -157,6 +184,18 @@ impl ToolKind {
                     "required": ["path", "old_string", "new_string"]
                 }),
             ),
+            ToolKind::SetReminder => (
+                "Set a reminder to message a user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders are lost on a redeploy (they do survive a normal restart).",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "delay_seconds": { "type": "integer", "description": "How far in the future to fire, in seconds from now, e.g. 7200 for two hours. Compute it from the current time shown in the footer." },
+                        "note": { "type": "string", "description": "What to remind the user about, in your own words — this is handed back to you when the reminder fires, e.g. \"take your meds\" or \"the meeting with Alex starts in 10 minutes\"." },
+                        "addressee": { "type": "string", "description": "Who the reminder is for — the display name of the user it should be delivered to, as shown in the \"(id) Name:\" tag. In a one-to-one chat this is that user; in a group, whoever asked for it." }
+                    },
+                    "required": ["delay_seconds", "note", "addressee"]
+                }),
+            ),
             ToolKind::MetaNoOpExtraTurn => (
                 "Give yourself another turn after this reply — use it to say something to the user across multiple steps. Put the first part in this reply's message, call this tool, and you'll be prompted again to continue with the next part. Pointless to call with no message (nothing is sent to the user), and pointless to call alongside other tools (a tool call already earns you another turn).",
                 json!({ "type": "object", "properties": {}, "required": [] }),
@@ -222,6 +261,17 @@ impl ToolType {
             ]
             .into_iter()
             .collect(),
+            ToolType::SetReminder {
+                delay_seconds,
+                note,
+                addressee,
+            } => [
+                ("delay_seconds".to_string(), json!(delay_seconds)),
+                ("note".to_string(), json!(note)),
+                ("addressee".to_string(), json!(addressee)),
+            ]
+            .into_iter()
+            .collect(),
             ToolType::MetaNoOpExtraTurn => Map::new(),
         }
     }
@@ -261,6 +311,14 @@ impl ToolType {
                     new_string: args.new_string,
                 })
             }
+            ToolKind::SetReminder => {
+                let args = parse_args::<SetReminderArgs>(name, arguments)?;
+                Ok(ToolType::SetReminder {
+                    delay_seconds: args.delay_seconds,
+                    note: args.note,
+                    addressee: args.addressee,
+                })
+            }
             ToolKind::MetaNoOpExtraTurn => Ok(ToolType::MetaNoOpExtraTurn),
         }
     }
@@ -295,6 +353,29 @@ mod tests {
         assert!(matches!(
             absent,
             ToolType::ReadFile { offset: None, limit: None, .. }
+        ));
+    }
+
+    #[test]
+    fn set_reminder_accepts_numeric_and_stringified_delay() {
+        let numeric = ToolType::bind(
+            "set_reminder",
+            r#"{"delay_seconds":7200,"note":"take meds","addressee":"Alice"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            numeric,
+            ToolType::SetReminder { delay_seconds: 7200, .. }
+        ));
+
+        let stringified = ToolType::bind(
+            "set_reminder",
+            r#"{"delay_seconds":"7200","note":"take meds","addressee":"Alice"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            stringified,
+            ToolType::SetReminder { delay_seconds: 7200, .. }
         ));
     }
 }

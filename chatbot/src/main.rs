@@ -19,6 +19,7 @@ use tokio::task::JoinSet;
 use crate::roles::{PrimaryRole, UtilityRole};
 use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
+use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 
 #[derive(Clone)]
 pub struct Env {
@@ -67,7 +68,8 @@ async fn main() -> anyhow::Result<!> {
     re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
     re_framework::register::<ConversationMachine>(env.clone());
-    re_framework::register::<MemoryManagerMachine>(env);
+    re_framework::register::<MemoryManagerMachine>(env.clone());
+    re_framework::register::<ReminderForConversationMachine>(env);
     re_framework::start();
 
     tokio::spawn(async {

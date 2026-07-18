@@ -431,6 +431,9 @@ async fn run_tool(
                 metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
             })
         }
+        ToolType::SetReminder { .. } => Err(
+            "set_reminder is handled by the conversation runtime, not the tool executor".to_string(),
+        ),
     }
 }
 

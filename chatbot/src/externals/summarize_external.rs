@@ -41,6 +41,11 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
             HistoryEntryKind::Input(LLMInput::ConversationMessage(msg)) => {
                 lines.push(render_message(msg))
             }
+            HistoryEntryKind::Input(LLMInput::SystemMessage(batch)) => {
+                for sys in batch {
+                    lines.push(format!("Reminder fired for {}: {}", sys.addressee, sys.note));
+                }
+            }
             HistoryEntryKind::Input(LLMInput::ToolResults(results, followup)) => {
                 for result in results {
                     let mut line = format!(

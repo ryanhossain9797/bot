@@ -144,6 +144,18 @@ pub struct ConversationMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMessage {
+    pub note: String,
+    pub addressee: String,
+}
+
+impl SystemMessage {
+    pub fn to_content(&self) -> String {
+        format!("[Reminder — IMPORTANT] For {}: {}", self.addressee, self.note)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConstructor {
     pub id: ConversationId,
     pub is_group: bool,
@@ -210,9 +222,16 @@ impl ConversationMessage {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Pending {
+    Message(ConversationMessage),
+    System(SystemMessage),
+}
+
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
-    pub pending: Vec<ConversationMessage>,
+    pub pending: Vec<Pending>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
     pub is_group: bool,
@@ -224,6 +243,7 @@ pub struct Conversation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
+                SystemMessage(Vec<SystemMessage>),
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
@@ -231,6 +251,7 @@ impl LLMInput {
     pub fn redacted(&self) -> LLMInput {
         match self {
             LLMInput::ConversationMessage(m) => LLMInput::ConversationMessage(m.redacted()),
+            LLMInput::SystemMessage(batch) => LLMInput::SystemMessage(batch.clone()),
             LLMInput::ToolResults(results, user) => LLMInput::ToolResults(
                 results.clone(),
                 user.as_ref().map(ConversationMessage::redacted),
@@ -247,6 +268,14 @@ impl LLMInput {
             LLMInput::ConversationMessage(msg) => {
                 let (content, bytes) = msg.content_and_media(marker);
                 (vec![ChatMessage::user(content)], bytes)
+            }
+            LLMInput::SystemMessage(batch) => {
+                let content = batch
+                    .iter()
+                    .map(SystemMessage::to_content)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (vec![ChatMessage::user(content)], Vec::new())
             }
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<ChatMessage> = Vec::new();
@@ -304,6 +333,11 @@ pub enum ToolType {
         old_string: String,
         new_string: String,
     },
+    SetReminder {
+        delay_seconds: i64,
+        note: String,
+        addressee: String,
+    },
     MetaNoOpExtraTurn,
 }
 
@@ -316,6 +350,7 @@ impl ToolType {
             ToolType::ViewImage { .. }
             | ToolType::ReadFile { .. }
             | ToolType::EditFile { .. }
+            | ToolType::SetReminder { .. }
             | ToolType::MetaNoOpExtraTurn => 30_000,
         };
         Duration::milliseconds(ms)
@@ -488,6 +523,10 @@ pub enum ConversationAction {
         result: Result<ToolResultData, String>,
     },
     CompactionResult(Result<CompactionOutput, InterruptionReason>),
+    ReminderFired {
+        note: String,
+        addressee: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -517,6 +556,7 @@ impl std::fmt::Debug for ConversationAction {
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
             ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),
             ConversationAction::CompactionResult(_) => write!(f, "CompactionResult"),
+            ConversationAction::ReminderFired { .. } => write!(f, "ReminderFired"),
         }
     }
 }
