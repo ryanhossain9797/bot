@@ -55,17 +55,9 @@ pub enum ReminderState {
     Fired,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReminderAction {
     Fire,
-}
-
-impl std::fmt::Debug for ReminderAction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ReminderAction::Fire => write!(f, "Fire"),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -73,7 +65,7 @@ pub struct ReminderConstructor {
     pub id: ReminderForConversationId,
     pub addressee: String,
     pub note: String,
-    pub delay_seconds: i64,
+    pub fire_at: DateTime<Utc>,
 }
 
 impl re_framework::Identified for ReminderConstructor {

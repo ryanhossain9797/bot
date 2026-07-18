@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::Utc;
 use re_framework::{Effects, Scheduled, StateMachine};
 
 use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::types::conversation::ConversationAction;
 use crate::types::reminder::{
-    ReminderAction, ReminderConstructor, ReminderForConversation, ReminderState, MAX_REMINDER_SECS,
+    ReminderAction, ReminderConstructor, ReminderForConversation, ReminderForConversationId,
+    ReminderState,
 };
 use crate::Env;
 
@@ -14,7 +15,7 @@ pub struct ReminderForConversationMachine;
 
 impl StateMachine for ReminderForConversationMachine {
     type State = ReminderForConversation;
-    type Id = crate::types::reminder::ReminderForConversationId;
+    type Id = ReminderForConversationId;
     type Action = ReminderAction;
     type Construction = ReminderConstructor;
     type Env = crate::Env;
@@ -23,18 +24,13 @@ impl StateMachine for ReminderForConversationMachine {
         constructor: ReminderConstructor,
         _effects: &mut Effects<Self>,
     ) -> ReminderForConversation {
-        let created_on = Utc::now();
-        let delay = constructor.delay_seconds.clamp(0, MAX_REMINDER_SECS);
-        let fire_at = created_on
-            .checked_add_signed(ChronoDuration::seconds(delay))
-            .unwrap_or(created_on);
         ReminderForConversation {
             state: ReminderState::Pending,
             conversation_id: constructor.id.conversation_id,
             addressee: constructor.addressee,
             note: constructor.note,
-            created_on,
-            fire_at,
+            created_on: Utc::now(),
+            fire_at: constructor.fire_at,
         }
     }
 

@@ -211,7 +211,7 @@ fn apply_post_send(
                                     },
                                     addressee: addressee.clone(),
                                     note: note.clone(),
-                                    delay_seconds: *delay_seconds,
+                                    fire_at,
                                 }),
                                 reminder_confirmation(fire_at, note),
                             ),
