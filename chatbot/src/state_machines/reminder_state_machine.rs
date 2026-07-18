@@ -31,8 +31,7 @@ impl StateMachine for ReminderForConversationMachine {
         ReminderForConversation {
             state: ReminderState::Pending,
             conversation_id: constructor.id.conversation_id,
-            user_id: constructor.user_id,
-            name: constructor.name,
+            addressee: constructor.addressee,
             note: constructor.note,
             created_on,
             fire_at,
@@ -52,8 +51,7 @@ impl StateMachine for ReminderForConversationMachine {
                     state.conversation_id.clone(),
                     ConversationAction::ReminderFired {
                         note: state.note.clone(),
-                        user_id: state.user_id.clone(),
-                        name: state.name.clone(),
+                        addressee: state.addressee.clone(),
                     },
                 );
                 ReminderState::Fired

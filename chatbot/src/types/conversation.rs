@@ -146,17 +146,12 @@ pub struct ConversationMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMessage {
     pub note: String,
-    pub user_id: String,
-    pub name: String,
+    pub addressee: String,
 }
 
 impl SystemMessage {
-                pub fn to_content(&self) -> String {
-        if self.name.is_empty() {
-            format!("[Reminder — IMPORTANT] {}", self.note)
-        } else {
-            format!("[Reminder — IMPORTANT] For {}: {}", self.name, self.note)
-        }
+    pub fn to_content(&self) -> String {
+        format!("[Reminder — IMPORTANT] For {}: {}", self.addressee, self.note)
     }
 }
 
@@ -341,6 +336,7 @@ pub enum ToolType {
     SetReminder {
         delay_seconds: i64,
         note: String,
+        addressee: String,
     },
     MetaNoOpExtraTurn,
 }
@@ -542,8 +538,7 @@ pub enum ConversationAction {
     CompactionResult(Result<CompactionOutput, InterruptionReason>),
     ReminderFired {
         note: String,
-        user_id: String,
-        name: String,
+        addressee: String,
     },
 }
 

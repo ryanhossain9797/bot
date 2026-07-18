@@ -42,9 +42,8 @@ impl re_framework::EntityId for ReminderForConversationId {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReminderForConversation {
     pub state: ReminderState,
-        pub conversation_id: ConversationId,
-            pub user_id: String,
-    pub name: String,
+    pub conversation_id: ConversationId,
+    pub addressee: String,
     pub note: String,
     pub created_on: DateTime<Utc>,
     pub fire_at: DateTime<Utc>,
@@ -72,8 +71,7 @@ impl std::fmt::Debug for ReminderAction {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReminderConstructor {
     pub id: ReminderForConversationId,
-    pub user_id: String,
-    pub name: String,
+    pub addressee: String,
     pub note: String,
     pub delay_seconds: i64,
 }

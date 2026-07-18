@@ -84,6 +84,7 @@ struct SetReminderArgs {
     #[serde(deserialize_with = "de_lenient_number")]
     delay_seconds: i64,
     note: String,
+    addressee: String,
 }
 
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
@@ -184,14 +185,15 @@ impl ToolKind {
                 }),
             ),
             ToolKind::SetReminder => (
-                "Set a reminder to message the user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders are lost on a redeploy (they do survive a normal restart).",
+                "Set a reminder to message a user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders are lost on a redeploy (they do survive a normal restart).",
                 json!({
                     "type": "object",
                     "properties": {
                         "delay_seconds": { "type": "integer", "description": "How far in the future to fire, in seconds from now, e.g. 7200 for two hours. Compute it from the current time shown in the footer." },
-                        "note": { "type": "string", "description": "What to remind the user about, in your own words — this is handed back to you when the reminder fires, e.g. \"take your meds\" or \"the meeting with Alex starts in 10 minutes\"." }
+                        "note": { "type": "string", "description": "What to remind the user about, in your own words — this is handed back to you when the reminder fires, e.g. \"take your meds\" or \"the meeting with Alex starts in 10 minutes\"." },
+                        "addressee": { "type": "string", "description": "Who the reminder is for — the display name of the user it should be delivered to, as shown in the \"(id) Name:\" tag. In a one-to-one chat this is that user; in a group, whoever asked for it." }
                     },
-                    "required": ["delay_seconds", "note"]
+                    "required": ["delay_seconds", "note", "addressee"]
                 }),
             ),
             ToolKind::MetaNoOpExtraTurn => (
@@ -262,9 +264,11 @@ impl ToolType {
             ToolType::SetReminder {
                 delay_seconds,
                 note,
+                addressee,
             } => [
                 ("delay_seconds".to_string(), json!(delay_seconds)),
                 ("note".to_string(), json!(note)),
+                ("addressee".to_string(), json!(addressee)),
             ]
             .into_iter()
             .collect(),
@@ -312,6 +316,7 @@ impl ToolType {
                 Ok(ToolType::SetReminder {
                     delay_seconds: args.delay_seconds,
                     note: args.note,
+                    addressee: args.addressee,
                 })
             }
             ToolKind::MetaNoOpExtraTurn => Ok(ToolType::MetaNoOpExtraTurn),
@@ -353,16 +358,21 @@ mod tests {
 
     #[test]
     fn set_reminder_accepts_numeric_and_stringified_delay() {
-        let numeric =
-            ToolType::bind("set_reminder", r#"{"delay_seconds":7200,"note":"take meds"}"#).unwrap();
+        let numeric = ToolType::bind(
+            "set_reminder",
+            r#"{"delay_seconds":7200,"note":"take meds","addressee":"Alice"}"#,
+        )
+        .unwrap();
         assert!(matches!(
             numeric,
             ToolType::SetReminder { delay_seconds: 7200, .. }
         ));
 
-        let stringified =
-            ToolType::bind("set_reminder", r#"{"delay_seconds":"7200","note":"take meds"}"#)
-                .unwrap();
+        let stringified = ToolType::bind(
+            "set_reminder",
+            r#"{"delay_seconds":"7200","note":"take meds","addressee":"Alice"}"#,
+        )
+        .unwrap();
         assert!(matches!(
             stringified,
             ToolType::SetReminder { delay_seconds: 7200, .. }

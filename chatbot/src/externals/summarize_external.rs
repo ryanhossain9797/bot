@@ -43,12 +43,7 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
             }
             HistoryEntryKind::Input(LLMInput::SystemMessage(batch)) => {
                 for sys in batch {
-                    let who = if sys.name.is_empty() {
-                        "the user"
-                    } else {
-                        &sys.name
-                    };
-                    lines.push(format!("Reminder fired for {who}: {}", sys.note));
+                    lines.push(format!("Reminder fired for {}: {}", sys.addressee, sys.note));
                 }
             }
             HistoryEntryKind::Input(LLMInput::ToolResults(results, followup)) => {

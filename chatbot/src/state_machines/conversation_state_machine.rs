@@ -4,8 +4,8 @@ use crate::externals::{
     tool_call_external::execute_tool,
 };
 use crate::types::conversation::{
-    latest_file_hash, Pending, SystemMessage, ToolCall, ToolDispatch, ToolResult, ToolResultData,
-    ToolType, MAX_TOOL_ROUNDS,
+    latest_file_hash, Pending, SystemMessage, ToolDispatch, ToolResult, ToolResultData, ToolType,
+    MAX_TOOL_ROUNDS,
 };
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
@@ -195,19 +195,18 @@ fn apply_post_send(
             tool_calls,
         } => {
             let history = recent_conversation.history();
-            let (requester_id, requester_name) = requester_identity(&recent_conversation);
             let mut pending_tools = HashMap::new();
-            let mut completed_tools: Vec<(ToolCall, ToolResultData)> = Vec::new();
             for tool_call in tool_calls {
                 if matches!(tool_call.tool_type.dispatch(), ToolDispatch::Runtime) {
                     let ToolType::SetReminder {
                         delay_seconds,
                         note,
+                        addressee,
                     } = &tool_call.tool_type
                     else {
                         continue;
                     };
-                    let result = match validate_delay(*delay_seconds) {
+                    let text = match validate_delay(*delay_seconds) {
                         Ok(fire_at) => {
                             effects.enqueue_construct::<ReminderForConversationMachine>(
                                 ReminderConstructor {
@@ -215,8 +214,7 @@ fn apply_post_send(
                                         conversation_id: conversation_id.clone(),
                                         reminder_id: ReminderId::new(),
                                     },
-                                    user_id: requester_id.clone(),
-                                    name: requester_name.clone(),
+                                    addressee: addressee.clone(),
                                     note: note.clone(),
                                     delay_seconds: *delay_seconds,
                                 },
@@ -225,7 +223,14 @@ fn apply_post_send(
                         }
                         Err(msg) => msg,
                     };
-                    completed_tools.push((tool_call, ToolResultData::text(result.clone(), result)));
+                    effects.enqueue_action::<ConversationMachine>(
+                        conversation_id.clone(),
+                        ConversationAction::ToolResult {
+                            id: tool_call.id.clone(),
+                            result: Ok(ToolResultData::text(text.clone(), text)),
+                        },
+                    );
+                    pending_tools.insert(tool_call.id.clone(), tool_call);
                     continue;
                 }
 
@@ -243,34 +248,19 @@ fn apply_post_send(
                 pending_tools.insert(tool_call.id.clone(), tool_call);
             }
 
-            if pending_tools.is_empty() {
-                finish_tool_round(
-                    env,
-                    conversation_id,
+            Ok(Conversation {
+                state: ConversationState::RunningTools {
                     recent_conversation,
-                    tool_rounds + 1,
-                    completed_tools,
-                    pending,
-                    is_group,
-                    bot_identity,
-                    compaction_in_flight,
-                    effects,
-                )
-            } else {
-                Ok(Conversation {
-                    state: ConversationState::RunningTools {
-                        recent_conversation,
-                        tool_rounds: tool_rounds + 1,
-                        pending_tools,
-                        completed_tools,
-                    },
-                    last_transition: Utc::now(),
-                    pending,
-                    is_group,
-                    bot_identity,
-                    compaction_in_flight,
-                })
-            }
+                    tool_rounds: tool_rounds + 1,
+                    pending_tools,
+                    completed_tools: Vec::new(),
+                },
+                last_transition: Utc::now(),
+                pending,
+                is_group,
+                bot_identity,
+                compaction_in_flight,
+            })
         }
         PostSend::SendToolResponse {
             tool_rounds,
@@ -342,17 +332,12 @@ fn conversation_transition(
         }
         (
             user_state,
-            ConversationAction::ReminderFired {
-                note,
-                user_id,
-                name,
-            },
+            ConversationAction::ReminderFired { note, addressee },
         ) => {
             let mut pending = conversation.pending;
             pending.push(Pending::System(SystemMessage {
                 note: note.clone(),
-                user_id: user_id.clone(),
-                name: name.clone(),
+                addressee: addressee.clone(),
             }));
 
             Ok(Conversation {
@@ -469,13 +454,30 @@ fn conversation_transition(
             }
 
             if pending_tools.is_empty() {
-                finish_tool_round(
+                completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
+
+                let results = completed_tools
+                    .into_iter()
+                    .map(|(call, data)| ToolResult { call, data })
+                    .collect();
+
+                let mut pending = conversation.pending;
+                let followup = take_pending(&mut pending).and_then(followup_message);
+
+                send_then(
                     env,
                     conversation_id,
+                    OutboundMessage {
+                        message: None,
+                        tool_names: Vec::new(),
+                    },
+                    PostSend::SendToolResponse {
+                        tool_rounds,
+                        results,
+                        followup,
+                    },
                     recent_conversation,
-                    tool_rounds,
-                    completed_tools,
-                    conversation.pending,
+                    pending,
                     conversation.is_group,
                     conversation.bot_identity.clone(),
                     conversation.compaction_in_flight,
@@ -586,30 +588,6 @@ fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
     }
 }
 
-fn input_identity(input: &LLMInput) -> Option<(String, String)> {
-    match input {
-        LLMInput::ConversationMessage(m) => Some((m.user_id.clone(), m.name.clone())),
-        LLMInput::SystemMessage(batch) => batch
-            .last()
-            .map(|s| (s.user_id.clone(), s.name.clone())),
-        LLMInput::ToolResults(_, followup) => {
-            followup.as_ref().map(|m| (m.user_id.clone(), m.name.clone()))
-        }
-    }
-}
-
-fn requester_identity(recent: &RecentConversation) -> (String, String) {
-    recent
-        .history()
-        .iter()
-        .rev()
-        .find_map(|entry| match &entry.kind {
-            HistoryEntryKind::Input(input) => input_identity(input),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
 fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
     if delay_seconds <= 0 {
         return Err(format!(
@@ -631,47 +609,6 @@ fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
         "Reminder set — fires around {}. Note: \"{note}\". Tell the user you've set it; you'll be \
          prompted automatically when it fires. (Reminders are lost on a redeploy.)",
         fire_at.format("%Y-%m-%d %H:%M:%S UTC")
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn finish_tool_round(
-    env: &Arc<Env>,
-    conversation_id: &ConversationId,
-    recent_conversation: RecentConversation,
-    tool_rounds: usize,
-    mut completed_tools: Vec<(ToolCall, ToolResultData)>,
-    mut pending: Vec<Pending>,
-    is_group: bool,
-    bot_identity: String,
-    compaction_in_flight: bool,
-    effects: &mut ConversationEffects,
-) -> ConversationTransitionResult {
-    completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
-    let results = completed_tools
-        .into_iter()
-        .map(|(call, data)| ToolResult { call, data })
-        .collect();
-    let followup = take_pending(&mut pending).and_then(followup_message);
-
-    send_then(
-        env,
-        conversation_id,
-        OutboundMessage {
-            message: None,
-            tool_names: Vec::new(),
-        },
-        PostSend::SendToolResponse {
-            tool_rounds,
-            results,
-            followup,
-        },
-        recent_conversation,
-        pending,
-        is_group,
-        bot_identity,
-        compaction_in_flight,
-        effects,
     )
 }
 
@@ -838,11 +775,10 @@ mod tests {
     use super::*;
     use crate::types::conversation::SystemMessage;
 
-    fn system(name: &str, note: &str) -> Pending {
+    fn system(addressee: &str, note: &str) -> Pending {
         Pending::System(SystemMessage {
             note: note.to_string(),
-            user_id: format!("id_{name}"),
-            name: name.to_string(),
+            addressee: addressee.to_string(),
         })
     }
 
