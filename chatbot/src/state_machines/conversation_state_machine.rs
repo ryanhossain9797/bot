@@ -516,22 +516,24 @@ fn conversation_transition(
 }
 
 fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
-    if pending.is_empty() {
-        return None;
-    }
     let drained = std::mem::take(pending);
-
-    if drained.iter().all(|p| matches!(p, Pending::System(_))) {
-        let batch = drained
-            .into_iter()
-            .filter_map(|p| match p {
-                Pending::System(s) => Some(s),
-                Pending::Message(_) => None,
-            })
-            .collect();
-        return Some(LLMInput::SystemMessage(batch));
+    match drained.as_slice() {
+        [] => None,
+        _ if drained.iter().all(|p| matches!(p, Pending::System(_))) => {
+            let batch = drained
+                .into_iter()
+                .filter_map(|p| match p {
+                    Pending::System(s) => Some(s),
+                    Pending::Message(_) => None,
+                })
+                .collect();
+            Some(LLMInput::SystemMessage(batch))
+        }
+        _ => Some(LLMInput::ConversationMessage(merge_pending(drained))),
     }
+}
 
+fn merge_pending(drained: Vec<Pending>) -> ConversationMessage {
     let queued = drained
         .iter()
         .any(|p| matches!(p, Pending::Message(m) if m.queued));
@@ -559,13 +561,13 @@ fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Some(LLMInput::ConversationMessage(ConversationMessage {
+    ConversationMessage {
         text,
         queued,
         user_id,
         name,
         attachments,
-    }))
+    }
 }
 
 fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
@@ -587,19 +589,17 @@ fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
 }
 
 fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
-    if delay_seconds <= 0 {
-        return Err(format!(
-            "Reminder not set: delay_seconds must be a positive number of seconds in the future (got {delay_seconds})."
-        ));
+    match delay_seconds {
+        d if d <= 0 => Err(format!(
+            "Reminder not set: delay_seconds must be a positive number of seconds in the future (got {d})."
+        )),
+        d if d > MAX_REMINDER_SECS => Err(format!(
+            "Reminder not set: delay_seconds {d} is too far out (max {MAX_REMINDER_SECS}, ~1 year)."
+        )),
+        d => Utc::now()
+            .checked_add_signed(ChronoDuration::seconds(d))
+            .ok_or_else(|| "Reminder not set: the requested time overflows.".to_string()),
     }
-    if delay_seconds > MAX_REMINDER_SECS {
-        return Err(format!(
-            "Reminder not set: delay_seconds {delay_seconds} is too far out (max {MAX_REMINDER_SECS}, ~1 year)."
-        ));
-    }
-    Utc::now()
-        .checked_add_signed(ChronoDuration::seconds(delay_seconds))
-        .ok_or_else(|| "Reminder not set: the requested time overflows.".to_string())
 }
 
 fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
