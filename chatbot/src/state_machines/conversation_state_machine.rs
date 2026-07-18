@@ -3,12 +3,12 @@ use crate::externals::{
     message_external::{send_message, OutboundMessage},
     tool_call_external::execute_tool,
 };
+use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
+use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::conversation::{
     latest_file_hash, Pending, SystemMessage, ToolDispatch, ToolResult, ToolResultData, ToolType,
     MAX_TOOL_ROUNDS,
 };
-use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
-use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
 use crate::types::reminder::{
@@ -197,54 +197,55 @@ fn apply_post_send(
             let history = recent_conversation.history();
             let mut pending_tools = HashMap::new();
             for tool_call in tool_calls {
-                if matches!(tool_call.tool_type.dispatch(), ToolDispatch::Runtime) {
-                    let ToolType::SetReminder {
-                        delay_seconds,
-                        note,
-                        addressee,
-                    } = &tool_call.tool_type
-                    else {
-                        continue;
-                    };
-                    let text = match validate_delay(*delay_seconds) {
-                        Ok(fire_at) => {
-                            effects.enqueue_construct::<ReminderForConversationMachine>(
-                                ReminderConstructor {
-                                    id: ReminderForConversationId {
-                                        conversation_id: conversation_id.clone(),
-                                        reminder_id: ReminderId::new(),
+                match tool_call.tool_type.dispatch() {
+                    ToolDispatch::Runtime => {
+                        let ToolType::SetReminder {
+                            delay_seconds,
+                            note,
+                            addressee,
+                        } = &tool_call.tool_type
+                        else {
+                            continue;
+                        };
+                        let text = match validate_delay(*delay_seconds) {
+                            Ok(fire_at) => {
+                                effects.enqueue_construct::<ReminderForConversationMachine>(
+                                    ReminderConstructor {
+                                        id: ReminderForConversationId {
+                                            conversation_id: conversation_id.clone(),
+                                            reminder_id: ReminderId::new(),
+                                        },
+                                        addressee: addressee.clone(),
+                                        note: note.clone(),
+                                        delay_seconds: *delay_seconds,
                                     },
-                                    addressee: addressee.clone(),
-                                    note: note.clone(),
-                                    delay_seconds: *delay_seconds,
-                                },
-                            );
-                            reminder_confirmation(fire_at, note)
-                        }
-                        Err(msg) => msg,
-                    };
-                    effects.enqueue_action::<ConversationMachine>(
-                        conversation_id.clone(),
-                        ConversationAction::ToolResult {
-                            id: tool_call.id.clone(),
-                            result: Ok(ToolResultData::text(text.clone(), text)),
-                        },
-                    );
-                    pending_tools.insert(tool_call.id.clone(), tool_call);
-                    continue;
-                }
-
-                let expected_file_hash = match &tool_call.tool_type {
-                    ToolType::EditFile { path, .. } => {
-                        latest_file_hash(&history, path).map(str::to_string)
+                                );
+                                reminder_confirmation(fire_at, note)
+                            }
+                            Err(msg) => msg,
+                        };
+                        effects.enqueue_action::<ConversationMachine>(
+                            conversation_id.clone(),
+                            ConversationAction::ToolResult {
+                                id: tool_call.id.clone(),
+                                result: Ok(ToolResultData::text(text.clone(), text)),
+                            },
+                        );
                     }
-                    _ => None,
-                };
-                effects.enqueue_external(execute_tool(
-                    conversation_id.to_string(),
-                    tool_call.clone(),
-                    expected_file_hash,
-                ));
+                    ToolDispatch::Executor => {
+                        let expected_file_hash = match &tool_call.tool_type {
+                            ToolType::EditFile { path, .. } => {
+                                latest_file_hash(&history, path).map(str::to_string)
+                            }
+                            _ => None,
+                        };
+                        effects.enqueue_external(execute_tool(
+                            conversation_id.to_string(),
+                            tool_call.clone(),
+                            expected_file_hash,
+                        ));
+                    }
+                }
                 pending_tools.insert(tool_call.id.clone(), tool_call);
             }
 
@@ -330,10 +331,7 @@ fn conversation_transition(
                 ..conversation
             })
         }
-        (
-            user_state,
-            ConversationAction::ReminderFired { note, addressee },
-        ) => {
+        (user_state, ConversationAction::ReminderFired { note, addressee }) => {
             let mut pending = conversation.pending;
             pending.push(Pending::System(SystemMessage {
                 note: note.clone(),
@@ -628,7 +626,13 @@ fn post_transition(
     };
 
     let Some(current_input) = take_pending(&mut conversation.pending) else {
-        maybe_fire_compaction(env, conversation_id, &mut conversation, &recent_conversation, effects);
+        maybe_fire_compaction(
+            env,
+            conversation_id,
+            &mut conversation,
+            &recent_conversation,
+            effects,
+        );
         return Ok(conversation);
     };
 
@@ -713,7 +717,10 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
         ConversationState::RunningTools { pending_tools, .. } => pending_tools
             .iter()
             .map(|(id, call)| {
-                (id.clone(), conversation.last_transition + call.tool_type.rescue_timeout())
+                (
+                    id.clone(),
+                    conversation.last_transition + call.tool_type.rescue_timeout(),
+                )
             })
             .min_by_key(|(_, at)| *at)
             .map(|(id, at)| Scheduled {
@@ -828,6 +835,8 @@ mod tests {
             panic!("mixed batch should merge into a ConversationMessage");
         };
         assert!(msg.text.contains("hey"));
-        assert!(msg.text.contains("[Reminder — IMPORTANT] For Alice: take meds"));
+        assert!(msg
+            .text
+            .contains("[Reminder — IMPORTANT] For Alice: take meds"));
     }
 }
