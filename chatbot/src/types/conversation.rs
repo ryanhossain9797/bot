@@ -143,10 +143,6 @@ pub struct ConversationMessage {
     pub attachments: Vec<Attachment>,
 }
 
-/// A non-user input into the conversation — currently only a fired reminder.
-/// Kept separate from `ConversationMessage` so history/summarize can treat it
-/// distinctly and the model does not "reply to" a fake user. Carries the target
-/// user's identity so a reminder that fires in a group chat names who it is for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemMessage {
     pub note: String,
@@ -155,10 +151,7 @@ pub struct SystemMessage {
 }
 
 impl SystemMessage {
-    /// Rendered as a tagged, high-importance turn addressed to the user. Falls
-    /// back to an unaddressed form when the requester's name is unknown (e.g. a
-    /// reminder set on a tool-result turn whose user message was compacted away).
-    pub fn to_content(&self) -> String {
+                pub fn to_content(&self) -> String {
         if self.name.is_empty() {
             format!("[Reminder — IMPORTANT] {}", self.note)
         } else {
@@ -234,9 +227,6 @@ impl ConversationMessage {
     }
 }
 
-/// A queued input awaiting drain into an `LLMInput`. Tool results never queue
-/// (they enter via `PostSend::SendToolResponse`, not `pending`), so the queue
-/// only ever holds message-like inputs — `LLMInput` minus `ToolResults`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Pending {
     Message(ConversationMessage),
@@ -258,10 +248,7 @@ pub struct Conversation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
-    /// One or more reminders that fired together (a batch drained from the
-    /// pending queue). Each is rendered individually so per-reminder identity is
-    /// preserved — merging into one would misattribute in a group chat.
-    SystemMessage(Vec<SystemMessage>),
+                SystemMessage(Vec<SystemMessage>),
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
@@ -358,10 +345,6 @@ pub enum ToolType {
     MetaNoOpExtraTurn,
 }
 
-/// Where a tool call is executed. Most tools run as an async external via
-/// `execute_tool`; a few need `Effects` (e.g. to spawn an entity) and are handled
-/// inside the `ConversationMachine` transition instead. Single source of truth
-/// for that split so the executor and the transition can't disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolDispatch {
     Executor,

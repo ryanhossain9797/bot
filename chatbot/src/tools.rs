@@ -34,8 +34,6 @@ struct ReadFileArgs {
     limit: Option<usize>,
 }
 
-/// Models routinely stringify numbers ("60" instead of 60). Accept either a
-/// native number or a numeric string for a required field.
 fn de_lenient_number<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -54,8 +52,6 @@ where
     }
 }
 
-/// Optional variant of [`de_lenient_number`]; an absent field or empty string
-/// becomes `None`.
 fn de_lenient_opt_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
 where
     D: serde::Deserializer<'de>,

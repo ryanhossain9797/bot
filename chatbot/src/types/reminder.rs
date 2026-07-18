@@ -4,9 +4,6 @@ use std::fmt::Display;
 
 use crate::types::conversation::ConversationId;
 
-/// Upper bound on how far out a reminder may be scheduled (~1 year). Bounds the
-/// requested delay well below any chrono arithmetic overflow, so computing
-/// `fire_at` can never panic.
 pub const MAX_REMINDER_SECS: i64 = 366 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,9 +27,6 @@ impl Display for ReminderId {
     }
 }
 
-/// Compound id so a conversation can hold multiple concurrent reminders (the
-/// memory manager, keyed by bare `ConversationId`, is one-per-conversation and
-/// does not work here).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReminderForConversationId {
     pub conversation_id: ConversationId,
@@ -48,11 +42,8 @@ impl re_framework::EntityId for ReminderForConversationId {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ReminderForConversation {
     pub state: ReminderState,
-    /// Where the fired reminder is delivered back to.
-    pub conversation_id: ConversationId,
-    /// Who set the reminder / who it is for (named in the fired turn — matters
-    /// in a group chat).
-    pub user_id: String,
+        pub conversation_id: ConversationId,
+            pub user_id: String,
     pub name: String,
     pub note: String,
     pub created_on: DateTime<Utc>,

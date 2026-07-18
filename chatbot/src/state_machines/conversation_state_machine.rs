@@ -195,22 +195,16 @@ fn apply_post_send(
             tool_calls,
         } => {
             let history = recent_conversation.history();
-            // A reminder is dispatched here, not via execute_tool: creating the
-            // entity needs Effects. It resolves immediately with a synthetic
-            // confirmation so the round can complete and the bot can tell the user.
             let (requester_id, requester_name) = requester_identity(&recent_conversation);
             let mut pending_tools = HashMap::new();
             let mut completed_tools: Vec<(ToolCall, ToolResultData)> = Vec::new();
             for tool_call in tool_calls {
-                // Runtime-dispatched tools (currently only set_reminder) are
-                // handled here — they need Effects and never go to execute_tool.
                 if matches!(tool_call.tool_type.dispatch(), ToolDispatch::Runtime) {
                     let ToolType::SetReminder {
                         delay_seconds,
                         note,
                     } = &tool_call.tool_type
                     else {
-                        // dispatch() only routes SetReminder here today.
                         continue;
                     };
                     let result = match validate_delay(*delay_seconds) {
@@ -250,7 +244,6 @@ fn apply_post_send(
             }
 
             if pending_tools.is_empty() {
-                // Nothing real to await (reminders only) — the round is already done.
                 finish_tool_round(
                     env,
                     conversation_id,
@@ -355,8 +348,6 @@ fn conversation_transition(
                 name,
             },
         ) => {
-            // Enters the pending queue exactly like a user message; drained into an
-            // LLMInput::SystemMessage when the machine next reaches Idle.
             let mut pending = conversation.pending;
             pending.push(Pending::System(SystemMessage {
                 note: note.clone(),
@@ -524,19 +515,12 @@ fn conversation_transition(
     post_transition(env, conversation_id, state, effects)
 }
 
-/// Drain the whole pending queue in arrival order into a single turn, the same
-/// way user messages have always been merged. A batch of only reminders stays a
-/// `System` turn (the common case — a reminder firing while Idle drains alone);
-/// any other batch merges into one `Message`, folding reminder notes in as their
-/// already-tagged, high-importance text.
 fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
     if pending.is_empty() {
         return None;
     }
     let drained = std::mem::take(pending);
 
-    // A pure-reminder batch stays a system turn, each reminder rendered
-    // individually (preserving per-reminder identity in a group chat).
     if drained.iter().all(|p| matches!(p, Pending::System(_))) {
         let batch = drained
             .into_iter()
@@ -548,9 +532,6 @@ fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
         return Some(LLMInput::SystemMessage(batch));
     }
 
-    // Mixed / user batch: merge into one user turn as before. Any reminder in the
-    // batch contributes its already-tagged content (which includes "For {name}"),
-    // so identity survives the merge here too.
     let queued = drained
         .iter()
         .any(|p| matches!(p, Pending::Message(m) if m.queued));
@@ -587,13 +568,6 @@ fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
     }))
 }
 
-/// Flatten a drained input into the tool-round followup slot, which bundles
-/// late-arriving input with tool results as `Option<ConversationMessage>`.
-///
-/// NOTE: this is the one place a fired reminder does *not* stay a system turn — a
-/// reminder that lands while tools are running is rendered as a user turn here.
-/// Per-reminder identity is still preserved (it's carried in the tagged text),
-/// but the representation diverges from the Idle-drain path. See #210 followup.
 fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
     match input {
         LLMInput::ConversationMessage(m) => Some(m),
@@ -608,13 +582,10 @@ fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
             name: String::new(),
             attachments: Vec::new(),
         }),
-        // take_pending never yields ToolResults (they don't queue).
         LLMInput::ToolResults(..) => None,
     }
 }
 
-/// Identity of whoever's input drove this turn — used to name the target user on
-/// a reminder set during it. Falls back through history for a tool-result turn.
 fn input_identity(input: &LLMInput) -> Option<(String, String)> {
     match input {
         LLMInput::ConversationMessage(m) => Some((m.user_id.clone(), m.name.clone())),
@@ -639,9 +610,6 @@ fn requester_identity(recent: &RecentConversation) -> (String, String) {
         .unwrap_or_default()
 }
 
-/// Validate a model-supplied delay before scheduling. Returns the computed
-/// `fire_at`, or an error string handed back as the tool result. Bounding the
-/// range keeps the chrono arithmetic (here and in the entity) from overflow.
 fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
     if delay_seconds <= 0 {
         return Err(format!(
@@ -658,8 +626,6 @@ fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
         .ok_or_else(|| "Reminder not set: the requested time overflows.".to_string())
 }
 
-/// Confirmation handed back to the model as the reminder tool's (synthetic)
-/// result, so it can tell the user it's set.
 fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
     format!(
         "Reminder set — fires around {}. Note: \"{note}\". Tell the user you've set it; you'll be \
@@ -668,9 +634,6 @@ fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
     )
 }
 
-/// Complete a tool round: order the results, drain any late-arriving input as the
-/// followup, and hand the batch back to the model. Shared by the normal
-/// all-tools-returned path and the reminders-only immediate-completion path.
 #[allow(clippy::too_many_arguments)]
 fn finish_tool_round(
     env: &Arc<Env>,
@@ -899,13 +862,11 @@ mod tests {
         assert!(validate_delay(-3600).is_err());
         assert!(validate_delay(MAX_REMINDER_SECS + 1).is_err());
         assert!(validate_delay(3600).is_ok());
-        // A value that would overflow chrono is rejected, not panicked.
         assert!(validate_delay(i64::MAX).is_err());
     }
 
     #[test]
     fn take_pending_preserves_per_reminder_identity() {
-        // Two reminders firing together must not be attributed to one user.
         let mut pending = vec![system("Alice", "take meds"), system("Bob", "call mom")];
         let input = take_pending(&mut pending).expect("drains a batch");
         let LLMInput::SystemMessage(batch) = &input else {

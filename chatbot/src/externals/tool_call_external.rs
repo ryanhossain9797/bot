@@ -431,10 +431,6 @@ async fn run_tool(
                 metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
             })
         }
-        // Runtime-dispatched tools (ToolType::dispatch() == Runtime) are handled
-        // inside the ConversationMachine transition and never reach the executor.
-        // This arm exists only for match exhaustiveness; reaching it means a
-        // dispatch()/execute_tool disagreement.
         ToolType::SetReminder { .. } => Err(
             "set_reminder is handled by the conversation runtime, not the tool executor".to_string(),
         ),

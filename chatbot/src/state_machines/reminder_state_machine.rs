@@ -10,10 +10,6 @@ use crate::types::reminder::{
 };
 use crate::Env;
 
-/// A one-shot durable timer scoped to a conversation. Set by the `set_reminder`
-/// tool, it schedules a single `Fire` at `fire_at`; when that fires it delivers a
-/// system message back into the conversation and moves to a terminal `Fired`
-/// state. Modeled on `MemoryManagerMachine`.
 pub struct ReminderForConversationMachine;
 
 impl StateMachine for ReminderForConversationMachine {
@@ -28,8 +24,6 @@ impl StateMachine for ReminderForConversationMachine {
         _effects: &mut Effects<Self>,
     ) -> ReminderForConversation {
         let created_on = Utc::now();
-        // Defensive: dispatch already validates the range, but clamp here too so
-        // constructing the Duration / adding it can never overflow-panic.
         let delay = constructor.delay_seconds.clamp(0, MAX_REMINDER_SECS);
         let fire_at = created_on
             .checked_add_signed(ChronoDuration::seconds(delay))
