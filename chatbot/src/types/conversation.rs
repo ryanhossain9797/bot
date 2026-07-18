@@ -341,20 +341,7 @@ pub enum ToolType {
     MetaNoOpExtraTurn,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolDispatch {
-    Executor,
-    Runtime,
-}
-
 impl ToolType {
-    pub fn dispatch(&self) -> ToolDispatch {
-        match self {
-            ToolType::SetReminder { .. } => ToolDispatch::Runtime,
-            _ => ToolDispatch::Executor,
-        }
-    }
-
     pub fn rescue_timeout(&self) -> Duration {
         let ms = match self {
             ToolType::RunBashCommand { .. } => 300_000,

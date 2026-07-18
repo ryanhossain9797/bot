@@ -6,8 +6,7 @@ use crate::externals::{
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::conversation::{
-    latest_file_hash, Pending, SystemMessage, ToolDispatch, ToolResult, ToolResultData, ToolType,
-    MAX_TOOL_ROUNDS,
+    latest_file_hash, Pending, SystemMessage, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
 };
 use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
@@ -197,16 +196,12 @@ fn apply_post_send(
             let history = recent_conversation.history();
             let mut pending_tools = HashMap::new();
             for tool_call in tool_calls {
-                match tool_call.tool_type.dispatch() {
-                    ToolDispatch::Runtime => {
-                        let ToolType::SetReminder {
-                            delay_seconds,
-                            note,
-                            addressee,
-                        } = &tool_call.tool_type
-                        else {
-                            continue;
-                        };
+                match &tool_call.tool_type {
+                    ToolType::SetReminder {
+                        delay_seconds,
+                        note,
+                        addressee,
+                    } => {
                         let text = match validate_delay(*delay_seconds) {
                             Ok(fire_at) => {
                                 effects.enqueue_construct::<ReminderForConversationMachine>(
@@ -232,8 +227,8 @@ fn apply_post_send(
                             },
                         );
                     }
-                    ToolDispatch::Executor => {
-                        let expected_file_hash = match &tool_call.tool_type {
+                    tool_type => {
+                        let expected_file_hash = match tool_type {
                             ToolType::EditFile { path, .. } => {
                                 latest_file_hash(&history, path).map(str::to_string)
                             }
