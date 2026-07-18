@@ -143,6 +143,24 @@ pub struct ConversationMessage {
     pub attachments: Vec<Attachment>,
 }
 
+/// A non-user input into the conversation — currently only a fired reminder.
+/// Kept separate from `ConversationMessage` so history/summarize can treat it
+/// distinctly and the model does not "reply to" a fake user. Carries the target
+/// user's identity so a reminder that fires in a group chat names who it is for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemMessage {
+    pub note: String,
+    pub user_id: String,
+    pub name: String,
+}
+
+impl SystemMessage {
+    /// Rendered as a tagged, high-importance turn addressed to the user.
+    pub fn to_content(&self) -> String {
+        format!("[Reminder — IMPORTANT] For {}: {}", self.name, self.note)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationConstructor {
     pub id: ConversationId,
@@ -210,9 +228,43 @@ impl ConversationMessage {
     }
 }
 
+/// A queued input awaiting drain into an `LLMInput`. Tool results never queue
+/// (they enter via `PostSend::SendToolResponse`, not `pending`), so the queue
+/// only ever holds message-like inputs — `LLMInput` minus `ToolResults`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Pending {
+    Message(ConversationMessage),
+    System(SystemMessage),
+}
+
+impl Pending {
+    pub fn into_llm_input(self) -> LLMInput {
+        match self {
+            Pending::Message(m) => LLMInput::ConversationMessage(m),
+            Pending::System(s) => LLMInput::SystemMessage(s),
+        }
+    }
+
+    /// Flatten to a `ConversationMessage` for the tool-round followup slot, which
+    /// bundles late-arriving input with tool results. A reminder contributes its
+    /// already-tagged content as the message text.
+    pub fn into_message(self) -> ConversationMessage {
+        match self {
+            Pending::Message(m) => m,
+            Pending::System(s) => ConversationMessage {
+                text: s.to_content(),
+                queued: false,
+                user_id: s.user_id,
+                name: s.name,
+                attachments: Vec::new(),
+            },
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
-    pub pending: Vec<ConversationMessage>,
+    pub pending: Vec<Pending>,
     pub state: ConversationState,
     pub last_transition: DateTime<Utc>,
     pub is_group: bool,
@@ -224,6 +276,7 @@ pub struct Conversation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
+    SystemMessage(SystemMessage),
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
@@ -231,6 +284,7 @@ impl LLMInput {
     pub fn redacted(&self) -> LLMInput {
         match self {
             LLMInput::ConversationMessage(m) => LLMInput::ConversationMessage(m.redacted()),
+            LLMInput::SystemMessage(s) => LLMInput::SystemMessage(s.clone()),
             LLMInput::ToolResults(results, user) => LLMInput::ToolResults(
                 results.clone(),
                 user.as_ref().map(ConversationMessage::redacted),
@@ -247,6 +301,9 @@ impl LLMInput {
             LLMInput::ConversationMessage(msg) => {
                 let (content, bytes) = msg.content_and_media(marker);
                 (vec![ChatMessage::user(content)], bytes)
+            }
+            LLMInput::SystemMessage(sys) => {
+                (vec![ChatMessage::user(sys.to_content())], Vec::new())
             }
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<ChatMessage> = Vec::new();
@@ -304,6 +361,10 @@ pub enum ToolType {
         old_string: String,
         new_string: String,
     },
+    SetReminder {
+        delay_seconds: i64,
+        note: String,
+    },
     MetaNoOpExtraTurn,
 }
 
@@ -316,6 +377,7 @@ impl ToolType {
             ToolType::ViewImage { .. }
             | ToolType::ReadFile { .. }
             | ToolType::EditFile { .. }
+            | ToolType::SetReminder { .. }
             | ToolType::MetaNoOpExtraTurn => 30_000,
         };
         Duration::milliseconds(ms)
@@ -488,6 +550,11 @@ pub enum ConversationAction {
         result: Result<ToolResultData, String>,
     },
     CompactionResult(Result<CompactionOutput, InterruptionReason>),
+    ReminderFired {
+        note: String,
+        user_id: String,
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -517,6 +584,7 @@ impl std::fmt::Debug for ConversationAction {
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
             ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),
             ConversationAction::CompactionResult(_) => write!(f, "CompactionResult"),
+            ConversationAction::ReminderFired { .. } => write!(f, "ReminderFired"),
         }
     }
 }

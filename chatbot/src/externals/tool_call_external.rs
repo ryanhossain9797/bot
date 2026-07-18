@@ -431,6 +431,11 @@ async fn run_tool(
                 metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
             })
         }
+        // Dispatched from the ConversationMachine transition (it needs Effects to
+        // spawn the reminder entity), never routed through execute_tool.
+        ToolType::SetReminder { .. } => Err(
+            "set_reminder is handled by the conversation runtime, not the tool executor".to_string(),
+        ),
     }
 }
 

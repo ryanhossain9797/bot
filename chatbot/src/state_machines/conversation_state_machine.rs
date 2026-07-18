@@ -4,11 +4,14 @@ use crate::externals::{
     tool_call_external::execute_tool,
 };
 use crate::types::conversation::{
-    latest_file_hash, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
+    latest_file_hash, Pending, SystemMessage, ToolCall, ToolResult, ToolResultData, ToolType,
+    MAX_TOOL_ROUNDS,
 };
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
+use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
+use crate::types::reminder::{ReminderConstructor, ReminderForConversationId, ReminderId};
 use crate::{
     types::conversation::{
         CompactionOutput, Conversation, ConversationAction, ConversationConstructor,
@@ -124,7 +127,7 @@ fn send_then(
     outbound: OutboundMessage,
     post_send: PostSend,
     recent_conversation: RecentConversation,
-    pending: Vec<ConversationMessage>,
+    pending: Vec<Pending>,
     is_group: bool,
     bot_identity: String,
     compaction_in_flight: bool,
@@ -168,7 +171,7 @@ fn apply_post_send(
     conversation_id: &ConversationId,
     post_send: PostSend,
     recent_conversation: RecentConversation,
-    pending: Vec<ConversationMessage>,
+    pending: Vec<Pending>,
     is_group: bool,
     bot_identity: String,
     compaction_in_flight: bool,
@@ -190,8 +193,34 @@ fn apply_post_send(
             tool_calls,
         } => {
             let history = recent_conversation.history();
+            // A reminder is dispatched here, not via execute_tool: creating the
+            // entity needs Effects. It resolves immediately with a synthetic
+            // confirmation so the round can complete and the bot can tell the user.
+            let (requester_id, requester_name) = requester_identity(&recent_conversation);
             let mut pending_tools = HashMap::new();
+            let mut completed_tools: Vec<(ToolCall, ToolResultData)> = Vec::new();
             for tool_call in tool_calls {
+                if let ToolType::SetReminder {
+                    delay_seconds,
+                    note,
+                } = &tool_call.tool_type
+                {
+                    effects.enqueue_construct::<ReminderForConversationMachine>(ReminderConstructor {
+                        id: ReminderForConversationId {
+                            conversation_id: conversation_id.clone(),
+                            reminder_id: ReminderId::new(),
+                        },
+                        user_id: requester_id.clone(),
+                        name: requester_name.clone(),
+                        note: note.clone(),
+                        delay_seconds: *delay_seconds,
+                    });
+                    let confirmation = reminder_confirmation(*delay_seconds, note);
+                    completed_tools
+                        .push((tool_call, ToolResultData::text(confirmation.clone(), confirmation)));
+                    continue;
+                }
+
                 let expected_file_hash = match &tool_call.tool_type {
                     ToolType::EditFile { path, .. } => {
                         latest_file_hash(&history, path).map(str::to_string)
@@ -206,19 +235,35 @@ fn apply_post_send(
                 pending_tools.insert(tool_call.id.clone(), tool_call);
             }
 
-            Ok(Conversation {
-                state: ConversationState::RunningTools {
+            if pending_tools.is_empty() {
+                // Nothing real to await (reminders only) — the round is already done.
+                finish_tool_round(
+                    env,
+                    conversation_id,
                     recent_conversation,
-                    tool_rounds: tool_rounds + 1,
-                    pending_tools,
-                    completed_tools: Vec::new(),
-                },
-                last_transition: Utc::now(),
-                pending,
-                is_group,
-                bot_identity,
-                compaction_in_flight,
-            })
+                    tool_rounds + 1,
+                    completed_tools,
+                    pending,
+                    is_group,
+                    bot_identity,
+                    compaction_in_flight,
+                    effects,
+                )
+            } else {
+                Ok(Conversation {
+                    state: ConversationState::RunningTools {
+                        recent_conversation,
+                        tool_rounds: tool_rounds + 1,
+                        pending_tools,
+                        completed_tools,
+                    },
+                    last_transition: Utc::now(),
+                    pending,
+                    is_group,
+                    bot_identity,
+                    compaction_in_flight,
+                })
+            }
         }
         PostSend::SendToolResponse {
             tool_rounds,
@@ -274,13 +319,36 @@ fn conversation_transition(
         ) => {
             let mut pending = conversation.pending;
             let queued = !matches!(&user_state, ConversationState::Idle { .. });
-            pending.push(ConversationMessage {
+            pending.push(Pending::Message(ConversationMessage {
                 text: msg.clone(),
                 queued,
                 user_id: user_id.clone(),
                 name: name.clone(),
                 attachments: attachments.iter().map(Attachment::downscaled).collect(),
-            });
+            }));
+
+            Ok(Conversation {
+                pending,
+                state: user_state,
+                ..conversation
+            })
+        }
+        (
+            user_state,
+            ConversationAction::ReminderFired {
+                note,
+                user_id,
+                name,
+            },
+        ) => {
+            // Enters the pending queue exactly like a user message; drained into an
+            // LLMInput::SystemMessage when the machine next reaches Idle.
+            let mut pending = conversation.pending;
+            pending.push(Pending::System(SystemMessage {
+                note: note.clone(),
+                user_id: user_id.clone(),
+                name: name.clone(),
+            }));
 
             Ok(Conversation {
                 pending,
@@ -396,30 +464,13 @@ fn conversation_transition(
             }
 
             if pending_tools.is_empty() {
-                completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
-
-                let results = completed_tools
-                    .into_iter()
-                    .map(|(call, data)| ToolResult { call, data })
-                    .collect();
-
-                let mut pending = conversation.pending;
-                let followup = take_pending(&mut pending);
-
-                send_then(
+                finish_tool_round(
                     env,
                     conversation_id,
-                    OutboundMessage {
-                        message: None,
-                        tool_names: Vec::new(),
-                    },
-                    PostSend::SendToolResponse {
-                        tool_rounds,
-                        results,
-                        followup,
-                    },
                     recent_conversation,
-                    pending,
+                    tool_rounds,
+                    completed_tools,
+                    conversation.pending,
                     conversation.is_group,
                     conversation.bot_identity.clone(),
                     conversation.compaction_in_flight,
@@ -459,29 +510,148 @@ fn conversation_transition(
     post_transition(env, conversation_id, state, effects)
 }
 
-fn take_pending(pending: &mut Vec<ConversationMessage>) -> Option<ConversationMessage> {
-    (!pending.is_empty()).then(|| {
-        let drained = std::mem::take(pending);
-        let queued = drained.iter().any(|m| m.queued);
-        let user_id = drained
-            .last()
-            .map(|m| m.user_id.clone())
-            .unwrap_or_default();
-        let name = drained.last().map(|m| m.name.clone()).unwrap_or_default();
-        let attachments = drained.iter().flat_map(|m| m.attachments.clone()).collect();
-        let text = drained
-            .into_iter()
-            .map(|m| m.text)
-            .collect::<Vec<_>>()
-            .join("\n");
-        ConversationMessage {
-            text,
-            queued,
-            user_id,
-            name,
-            attachments,
+/// Drain the whole pending queue in arrival order into a single turn, the same
+/// way user messages have always been merged. A batch of only reminders stays a
+/// `System` turn (the common case — a reminder firing while Idle drains alone);
+/// any other batch merges into one `Message`, folding reminder notes in as their
+/// already-tagged, high-importance text.
+fn take_pending(pending: &mut Vec<Pending>) -> Option<Pending> {
+    if pending.is_empty() {
+        return None;
+    }
+    let drained = std::mem::take(pending);
+
+    if drained.iter().all(|p| matches!(p, Pending::System(_))) {
+        let mut merged: Option<SystemMessage> = None;
+        for p in drained {
+            let Pending::System(s) = p else { continue };
+            merged = Some(match merged {
+                None => s,
+                Some(mut acc) => {
+                    acc.note.push('\n');
+                    acc.note.push_str(&s.note);
+                    acc.user_id = s.user_id;
+                    acc.name = s.name;
+                    acc
+                }
+            });
         }
-    })
+        return merged.map(Pending::System);
+    }
+
+    let queued = drained
+        .iter()
+        .any(|p| matches!(p, Pending::Message(m) if m.queued));
+    let (user_id, name) = drained
+        .iter()
+        .rev()
+        .find_map(|p| match p {
+            Pending::Message(m) => Some((m.user_id.clone(), m.name.clone())),
+            Pending::System(_) => None,
+        })
+        .unwrap_or_default();
+    let attachments = drained
+        .iter()
+        .filter_map(|p| match p {
+            Pending::Message(m) => Some(m.attachments.clone()),
+            Pending::System(_) => None,
+        })
+        .flatten()
+        .collect();
+    let text = drained
+        .into_iter()
+        .map(|p| match p {
+            Pending::Message(m) => m.text,
+            Pending::System(s) => s.to_content(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(Pending::Message(ConversationMessage {
+        text,
+        queued,
+        user_id,
+        name,
+        attachments,
+    }))
+}
+
+/// Identity of whoever's input drove this turn — used to name the target user on
+/// a reminder set during it. Falls back through history for a tool-result turn.
+fn input_identity(input: &LLMInput) -> Option<(String, String)> {
+    match input {
+        LLMInput::ConversationMessage(m) => Some((m.user_id.clone(), m.name.clone())),
+        LLMInput::SystemMessage(s) => Some((s.user_id.clone(), s.name.clone())),
+        LLMInput::ToolResults(_, followup) => {
+            followup.as_ref().map(|m| (m.user_id.clone(), m.name.clone()))
+        }
+    }
+}
+
+fn requester_identity(recent: &RecentConversation) -> (String, String) {
+    recent
+        .history()
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.kind {
+            HistoryEntryKind::Input(input) => input_identity(input),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Approximate confirmation handed back to the model as the reminder tool's
+/// (synthetic) result, so it can tell the user it's set.
+fn reminder_confirmation(delay_seconds: i64, note: &str) -> String {
+    let fire_at = Utc::now() + ChronoDuration::seconds(delay_seconds);
+    format!(
+        "Reminder set — fires in {delay_seconds}s (~{}). Note: \"{note}\". Tell the user you've set it; \
+         you'll be prompted automatically when it fires. Reminders do not survive a bot restart.",
+        fire_at.format("%Y-%m-%d %H:%M:%S UTC")
+    )
+}
+
+/// Complete a tool round: order the results, drain any late-arriving input as the
+/// followup, and hand the batch back to the model. Shared by the normal
+/// all-tools-returned path and the reminders-only immediate-completion path.
+#[allow(clippy::too_many_arguments)]
+fn finish_tool_round(
+    env: &Arc<Env>,
+    conversation_id: &ConversationId,
+    recent_conversation: RecentConversation,
+    tool_rounds: usize,
+    mut completed_tools: Vec<(ToolCall, ToolResultData)>,
+    mut pending: Vec<Pending>,
+    is_group: bool,
+    bot_identity: String,
+    compaction_in_flight: bool,
+    effects: &mut ConversationEffects,
+) -> ConversationTransitionResult {
+    completed_tools.sort_by(|(a, _), (b, _)| a.id.cmp(&b.id));
+    let results = completed_tools
+        .into_iter()
+        .map(|(call, data)| ToolResult { call, data })
+        .collect();
+    let followup = take_pending(&mut pending).map(Pending::into_message);
+
+    send_then(
+        env,
+        conversation_id,
+        OutboundMessage {
+            message: None,
+            tool_names: Vec::new(),
+        },
+        PostSend::SendToolResponse {
+            tool_rounds,
+            results,
+            followup,
+        },
+        recent_conversation,
+        pending,
+        is_group,
+        bot_identity,
+        compaction_in_flight,
+        effects,
+    )
 }
 
 fn post_transition(
@@ -499,7 +669,7 @@ fn post_transition(
         _ => return Ok(conversation),
     };
 
-    let Some(msg) = take_pending(&mut conversation.pending) else {
+    let Some(drained) = take_pending(&mut conversation.pending) else {
         maybe_fire_compaction(env, conversation_id, &mut conversation, &recent_conversation, effects);
         return Ok(conversation);
     };
@@ -510,7 +680,7 @@ fn post_transition(
 
     let history = recent_conversation.history();
 
-    let current_input = LLMInput::ConversationMessage(msg);
+    let current_input = drained.into_llm_input();
 
     effects.enqueue_external(get_llm_decision(
         Arc::clone(env),
