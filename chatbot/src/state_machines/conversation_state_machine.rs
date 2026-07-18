@@ -202,22 +202,24 @@ fn apply_post_send(
                         note,
                         addressee,
                     } => {
-                        let text = validate_delay(*delay_seconds)
-                            .map(|fire_at| {
-                                effects.enqueue_construct::<ReminderForConversationMachine>(
-                                    ReminderConstructor {
-                                        id: ReminderForConversationId {
-                                            conversation_id: conversation_id.clone(),
-                                            reminder_id: ReminderId::new(),
-                                        },
-                                        addressee: addressee.clone(),
-                                        note: note.clone(),
-                                        delay_seconds: *delay_seconds,
+                        let (maybe_construct, text) = match validate_delay(*delay_seconds) {
+                            Ok(fire_at) => (
+                                Some(ReminderConstructor {
+                                    id: ReminderForConversationId {
+                                        conversation_id: conversation_id.clone(),
+                                        reminder_id: ReminderId::new(),
                                     },
-                                );
-                                reminder_confirmation(fire_at, note)
-                            })
-                            .unwrap_or_else(|msg| msg);
+                                    addressee: addressee.clone(),
+                                    note: note.clone(),
+                                    delay_seconds: *delay_seconds,
+                                }),
+                                reminder_confirmation(fire_at, note),
+                            ),
+                            Err(msg) => (None, msg),
+                        };
+                        if let Some(constructor) = maybe_construct {
+                            effects.enqueue_construct::<ReminderForConversationMachine>(constructor);
+                        }
                         effects.enqueue_action::<ConversationMachine>(
                             conversation_id.clone(),
                             ConversationAction::ToolResult {
