@@ -4,14 +4,16 @@ use crate::externals::{
     tool_call_external::execute_tool,
 };
 use crate::types::conversation::{
-    latest_file_hash, Pending, SystemMessage, ToolCall, ToolResult, ToolResultData, ToolType,
-    MAX_TOOL_ROUNDS,
+    latest_file_hash, Pending, SystemMessage, ToolCall, ToolDispatch, ToolResult, ToolResultData,
+    ToolType, MAX_TOOL_ROUNDS,
 };
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
-use crate::types::reminder::{ReminderConstructor, ReminderForConversationId, ReminderId};
+use crate::types::reminder::{
+    ReminderConstructor, ReminderForConversationId, ReminderId, MAX_REMINDER_SECS,
+};
 use crate::{
     types::conversation::{
         CompactionOutput, Conversation, ConversationAction, ConversationConstructor,
@@ -20,7 +22,7 @@ use crate::{
     },
     Env,
 };
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use re_framework::{Effects, Scheduled, StateMachine};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -200,24 +202,36 @@ fn apply_post_send(
             let mut pending_tools = HashMap::new();
             let mut completed_tools: Vec<(ToolCall, ToolResultData)> = Vec::new();
             for tool_call in tool_calls {
-                if let ToolType::SetReminder {
-                    delay_seconds,
-                    note,
-                } = &tool_call.tool_type
-                {
-                    effects.enqueue_construct::<ReminderForConversationMachine>(ReminderConstructor {
-                        id: ReminderForConversationId {
-                            conversation_id: conversation_id.clone(),
-                            reminder_id: ReminderId::new(),
-                        },
-                        user_id: requester_id.clone(),
-                        name: requester_name.clone(),
-                        note: note.clone(),
-                        delay_seconds: *delay_seconds,
-                    });
-                    let confirmation = reminder_confirmation(*delay_seconds, note);
-                    completed_tools
-                        .push((tool_call, ToolResultData::text(confirmation.clone(), confirmation)));
+                // Runtime-dispatched tools (currently only set_reminder) are
+                // handled here — they need Effects and never go to execute_tool.
+                if matches!(tool_call.tool_type.dispatch(), ToolDispatch::Runtime) {
+                    let ToolType::SetReminder {
+                        delay_seconds,
+                        note,
+                    } = &tool_call.tool_type
+                    else {
+                        // dispatch() only routes SetReminder here today.
+                        continue;
+                    };
+                    let result = match validate_delay(*delay_seconds) {
+                        Ok(fire_at) => {
+                            effects.enqueue_construct::<ReminderForConversationMachine>(
+                                ReminderConstructor {
+                                    id: ReminderForConversationId {
+                                        conversation_id: conversation_id.clone(),
+                                        reminder_id: ReminderId::new(),
+                                    },
+                                    user_id: requester_id.clone(),
+                                    name: requester_name.clone(),
+                                    note: note.clone(),
+                                    delay_seconds: *delay_seconds,
+                                },
+                            );
+                            reminder_confirmation(fire_at, note)
+                        }
+                        Err(msg) => msg,
+                    };
+                    completed_tools.push((tool_call, ToolResultData::text(result.clone(), result)));
                     continue;
                 }
 
@@ -515,30 +529,28 @@ fn conversation_transition(
 /// `System` turn (the common case — a reminder firing while Idle drains alone);
 /// any other batch merges into one `Message`, folding reminder notes in as their
 /// already-tagged, high-importance text.
-fn take_pending(pending: &mut Vec<Pending>) -> Option<Pending> {
+fn take_pending(pending: &mut Vec<Pending>) -> Option<LLMInput> {
     if pending.is_empty() {
         return None;
     }
     let drained = std::mem::take(pending);
 
+    // A pure-reminder batch stays a system turn, each reminder rendered
+    // individually (preserving per-reminder identity in a group chat).
     if drained.iter().all(|p| matches!(p, Pending::System(_))) {
-        let mut merged: Option<SystemMessage> = None;
-        for p in drained {
-            let Pending::System(s) = p else { continue };
-            merged = Some(match merged {
-                None => s,
-                Some(mut acc) => {
-                    acc.note.push('\n');
-                    acc.note.push_str(&s.note);
-                    acc.user_id = s.user_id;
-                    acc.name = s.name;
-                    acc
-                }
-            });
-        }
-        return merged.map(Pending::System);
+        let batch = drained
+            .into_iter()
+            .filter_map(|p| match p {
+                Pending::System(s) => Some(s),
+                Pending::Message(_) => None,
+            })
+            .collect();
+        return Some(LLMInput::SystemMessage(batch));
     }
 
+    // Mixed / user batch: merge into one user turn as before. Any reminder in the
+    // batch contributes its already-tagged content (which includes "For {name}"),
+    // so identity survives the merge here too.
     let queued = drained
         .iter()
         .any(|p| matches!(p, Pending::Message(m) if m.queued));
@@ -566,7 +578,7 @@ fn take_pending(pending: &mut Vec<Pending>) -> Option<Pending> {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Some(Pending::Message(ConversationMessage {
+    Some(LLMInput::ConversationMessage(ConversationMessage {
         text,
         queued,
         user_id,
@@ -575,12 +587,40 @@ fn take_pending(pending: &mut Vec<Pending>) -> Option<Pending> {
     }))
 }
 
+/// Flatten a drained input into the tool-round followup slot, which bundles
+/// late-arriving input with tool results as `Option<ConversationMessage>`.
+///
+/// NOTE: this is the one place a fired reminder does *not* stay a system turn — a
+/// reminder that lands while tools are running is rendered as a user turn here.
+/// Per-reminder identity is still preserved (it's carried in the tagged text),
+/// but the representation diverges from the Idle-drain path. See #210 followup.
+fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
+    match input {
+        LLMInput::ConversationMessage(m) => Some(m),
+        LLMInput::SystemMessage(batch) => Some(ConversationMessage {
+            text: batch
+                .iter()
+                .map(SystemMessage::to_content)
+                .collect::<Vec<_>>()
+                .join("\n"),
+            queued: false,
+            user_id: String::new(),
+            name: String::new(),
+            attachments: Vec::new(),
+        }),
+        // take_pending never yields ToolResults (they don't queue).
+        LLMInput::ToolResults(..) => None,
+    }
+}
+
 /// Identity of whoever's input drove this turn — used to name the target user on
 /// a reminder set during it. Falls back through history for a tool-result turn.
 fn input_identity(input: &LLMInput) -> Option<(String, String)> {
     match input {
         LLMInput::ConversationMessage(m) => Some((m.user_id.clone(), m.name.clone())),
-        LLMInput::SystemMessage(s) => Some((s.user_id.clone(), s.name.clone())),
+        LLMInput::SystemMessage(batch) => batch
+            .last()
+            .map(|s| (s.user_id.clone(), s.name.clone())),
         LLMInput::ToolResults(_, followup) => {
             followup.as_ref().map(|m| (m.user_id.clone(), m.name.clone()))
         }
@@ -599,13 +639,31 @@ fn requester_identity(recent: &RecentConversation) -> (String, String) {
         .unwrap_or_default()
 }
 
-/// Approximate confirmation handed back to the model as the reminder tool's
-/// (synthetic) result, so it can tell the user it's set.
-fn reminder_confirmation(delay_seconds: i64, note: &str) -> String {
-    let fire_at = Utc::now() + ChronoDuration::seconds(delay_seconds);
+/// Validate a model-supplied delay before scheduling. Returns the computed
+/// `fire_at`, or an error string handed back as the tool result. Bounding the
+/// range keeps the chrono arithmetic (here and in the entity) from overflow.
+fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
+    if delay_seconds <= 0 {
+        return Err(format!(
+            "Reminder not set: delay_seconds must be a positive number of seconds in the future (got {delay_seconds})."
+        ));
+    }
+    if delay_seconds > MAX_REMINDER_SECS {
+        return Err(format!(
+            "Reminder not set: delay_seconds {delay_seconds} is too far out (max {MAX_REMINDER_SECS}, ~1 year)."
+        ));
+    }
+    Utc::now()
+        .checked_add_signed(ChronoDuration::seconds(delay_seconds))
+        .ok_or_else(|| "Reminder not set: the requested time overflows.".to_string())
+}
+
+/// Confirmation handed back to the model as the reminder tool's (synthetic)
+/// result, so it can tell the user it's set.
+fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
     format!(
-        "Reminder set — fires in {delay_seconds}s (~{}). Note: \"{note}\". Tell the user you've set it; \
-         you'll be prompted automatically when it fires. Reminders do not survive a bot restart.",
+        "Reminder set — fires around {}. Note: \"{note}\". Tell the user you've set it; you'll be \
+         prompted automatically when it fires. (Reminders are lost on a redeploy.)",
         fire_at.format("%Y-%m-%d %H:%M:%S UTC")
     )
 }
@@ -631,7 +689,7 @@ fn finish_tool_round(
         .into_iter()
         .map(|(call, data)| ToolResult { call, data })
         .collect();
-    let followup = take_pending(&mut pending).map(Pending::into_message);
+    let followup = take_pending(&mut pending).and_then(followup_message);
 
     send_then(
         env,
@@ -669,7 +727,7 @@ fn post_transition(
         _ => return Ok(conversation),
     };
 
-    let Some(drained) = take_pending(&mut conversation.pending) else {
+    let Some(current_input) = take_pending(&mut conversation.pending) else {
         maybe_fire_compaction(env, conversation_id, &mut conversation, &recent_conversation, effects);
         return Ok(conversation);
     };
@@ -679,8 +737,6 @@ fn post_transition(
     let compaction_in_flight = conversation.compaction_in_flight;
 
     let history = recent_conversation.history();
-
-    let current_input = drained.into_llm_input();
 
     effects.enqueue_external(get_llm_decision(
         Arc::clone(env),
@@ -811,5 +867,70 @@ impl StateMachine for ConversationMachine {
 
     fn name() -> &'static str {
         "ConversationMachine"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::conversation::SystemMessage;
+
+    fn system(name: &str, note: &str) -> Pending {
+        Pending::System(SystemMessage {
+            note: note.to_string(),
+            user_id: format!("id_{name}"),
+            name: name.to_string(),
+        })
+    }
+
+    fn user(name: &str, text: &str) -> Pending {
+        Pending::Message(ConversationMessage {
+            text: text.to_string(),
+            queued: false,
+            user_id: format!("id_{name}"),
+            name: name.to_string(),
+            attachments: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn validate_delay_rejects_non_positive_and_too_large() {
+        assert!(validate_delay(0).is_err());
+        assert!(validate_delay(-3600).is_err());
+        assert!(validate_delay(MAX_REMINDER_SECS + 1).is_err());
+        assert!(validate_delay(3600).is_ok());
+        // A value that would overflow chrono is rejected, not panicked.
+        assert!(validate_delay(i64::MAX).is_err());
+    }
+
+    #[test]
+    fn take_pending_preserves_per_reminder_identity() {
+        // Two reminders firing together must not be attributed to one user.
+        let mut pending = vec![system("Alice", "take meds"), system("Bob", "call mom")];
+        let input = take_pending(&mut pending).expect("drains a batch");
+        let LLMInput::SystemMessage(batch) = &input else {
+            panic!("pure-reminder batch should be a SystemMessage");
+        };
+        assert_eq!(batch.len(), 2);
+
+        let (messages, _) = input.messages_and_media("<marker>", true);
+        let rendered = messages
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("For Alice: take meds"), "got: {rendered}");
+        assert!(rendered.contains("For Bob: call mom"), "got: {rendered}");
+    }
+
+    #[test]
+    fn take_pending_merges_mixed_batch_into_user_turn_keeping_reminder_text() {
+        let mut pending = vec![user("Alice", "hey"), system("Alice", "take meds")];
+        let input = take_pending(&mut pending).expect("drains a batch");
+        let LLMInput::ConversationMessage(msg) = &input else {
+            panic!("mixed batch should merge into a ConversationMessage");
+        };
+        assert!(msg.text.contains("hey"));
+        assert!(msg.text.contains("[Reminder — IMPORTANT] For Alice: take meds"));
     }
 }

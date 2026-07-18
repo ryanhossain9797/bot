@@ -34,6 +34,28 @@ struct ReadFileArgs {
     limit: Option<usize>,
 }
 
+/// Models routinely stringify numbers ("60" instead of 60). Accept either a
+/// native number or a numeric string for a required field.
+fn de_lenient_number<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de> + std::str::FromStr,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr<T> {
+        Num(T),
+        Str(String),
+    }
+    match NumOrStr::<T>::deserialize(deserializer)? {
+        NumOrStr::Num(n) => Ok(n),
+        NumOrStr::Str(s) => s.trim().parse::<T>().map_err(serde::de::Error::custom),
+    }
+}
+
+/// Optional variant of [`de_lenient_number`]; an absent field or empty string
+/// becomes `None`.
 fn de_lenient_opt_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -63,28 +85,9 @@ struct EditFileArgs {
 
 #[derive(Debug, Deserialize)]
 struct SetReminderArgs {
-    #[serde(deserialize_with = "de_lenient_i64")]
+    #[serde(deserialize_with = "de_lenient_number")]
     delay_seconds: i64,
     note: String,
-}
-
-fn de_lenient_i64<'de, D>(deserializer: D) -> Result<i64, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr {
-        Num(i64),
-        Str(String),
-    }
-    match NumOrStr::deserialize(deserializer)? {
-        NumOrStr::Num(n) => Ok(n),
-        NumOrStr::Str(s) => s
-            .trim()
-            .parse::<i64>()
-            .map_err(serde::de::Error::custom),
-    }
 }
 
 fn parse_args<T: serde::de::DeserializeOwned>(name: &str, arguments: &str) -> anyhow::Result<T> {
@@ -185,7 +188,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::SetReminder => (
-                "Set a reminder to message the user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders do not currently survive a bot restart.",
+                "Set a reminder to message the user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders are lost on a redeploy (they do survive a normal restart).",
                 json!({
                     "type": "object",
                     "properties": {

@@ -155,9 +155,15 @@ pub struct SystemMessage {
 }
 
 impl SystemMessage {
-    /// Rendered as a tagged, high-importance turn addressed to the user.
+    /// Rendered as a tagged, high-importance turn addressed to the user. Falls
+    /// back to an unaddressed form when the requester's name is unknown (e.g. a
+    /// reminder set on a tool-result turn whose user message was compacted away).
     pub fn to_content(&self) -> String {
-        format!("[Reminder — IMPORTANT] For {}: {}", self.name, self.note)
+        if self.name.is_empty() {
+            format!("[Reminder — IMPORTANT] {}", self.note)
+        } else {
+            format!("[Reminder — IMPORTANT] For {}: {}", self.name, self.note)
+        }
     }
 }
 
@@ -237,30 +243,6 @@ pub enum Pending {
     System(SystemMessage),
 }
 
-impl Pending {
-    pub fn into_llm_input(self) -> LLMInput {
-        match self {
-            Pending::Message(m) => LLMInput::ConversationMessage(m),
-            Pending::System(s) => LLMInput::SystemMessage(s),
-        }
-    }
-
-    /// Flatten to a `ConversationMessage` for the tool-round followup slot, which
-    /// bundles late-arriving input with tool results. A reminder contributes its
-    /// already-tagged content as the message text.
-    pub fn into_message(self) -> ConversationMessage {
-        match self {
-            Pending::Message(m) => m,
-            Pending::System(s) => ConversationMessage {
-                text: s.to_content(),
-                queued: false,
-                user_id: s.user_id,
-                name: s.name,
-                attachments: Vec::new(),
-            },
-        }
-    }
-}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
@@ -276,7 +258,10 @@ pub struct Conversation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
-    SystemMessage(SystemMessage),
+    /// One or more reminders that fired together (a batch drained from the
+    /// pending queue). Each is rendered individually so per-reminder identity is
+    /// preserved — merging into one would misattribute in a group chat.
+    SystemMessage(Vec<SystemMessage>),
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
@@ -284,7 +269,7 @@ impl LLMInput {
     pub fn redacted(&self) -> LLMInput {
         match self {
             LLMInput::ConversationMessage(m) => LLMInput::ConversationMessage(m.redacted()),
-            LLMInput::SystemMessage(s) => LLMInput::SystemMessage(s.clone()),
+            LLMInput::SystemMessage(batch) => LLMInput::SystemMessage(batch.clone()),
             LLMInput::ToolResults(results, user) => LLMInput::ToolResults(
                 results.clone(),
                 user.as_ref().map(ConversationMessage::redacted),
@@ -302,8 +287,13 @@ impl LLMInput {
                 let (content, bytes) = msg.content_and_media(marker);
                 (vec![ChatMessage::user(content)], bytes)
             }
-            LLMInput::SystemMessage(sys) => {
-                (vec![ChatMessage::user(sys.to_content())], Vec::new())
+            LLMInput::SystemMessage(batch) => {
+                let content = batch
+                    .iter()
+                    .map(SystemMessage::to_content)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (vec![ChatMessage::user(content)], Vec::new())
             }
             LLMInput::ToolResults(results, user_msg) => {
                 let mut messages: Vec<ChatMessage> = Vec::new();
@@ -368,7 +358,24 @@ pub enum ToolType {
     MetaNoOpExtraTurn,
 }
 
+/// Where a tool call is executed. Most tools run as an async external via
+/// `execute_tool`; a few need `Effects` (e.g. to spawn an entity) and are handled
+/// inside the `ConversationMachine` transition instead. Single source of truth
+/// for that split so the executor and the transition can't disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolDispatch {
+    Executor,
+    Runtime,
+}
+
 impl ToolType {
+    pub fn dispatch(&self) -> ToolDispatch {
+        match self {
+            ToolType::SetReminder { .. } => ToolDispatch::Runtime,
+            _ => ToolDispatch::Executor,
+        }
+    }
+
     pub fn rescue_timeout(&self) -> Duration {
         let ms = match self {
             ToolType::RunBashCommand { .. } => 300_000,

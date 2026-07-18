@@ -4,12 +4,23 @@ use std::fmt::Display;
 
 use crate::types::conversation::ConversationId;
 
+/// Upper bound on how far out a reminder may be scheduled (~1 year). Bounds the
+/// requested delay well below any chrono arithmetic overflow, so computing
+/// `fire_at` can never panic.
+pub const MAX_REMINDER_SECS: i64 = 366 * 24 * 60 * 60;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReminderId(uuid::Uuid);
 
 impl ReminderId {
     pub fn new() -> Self {
         ReminderId(uuid::Uuid::new_v4())
+    }
+}
+
+impl Default for ReminderId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

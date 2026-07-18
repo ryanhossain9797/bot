@@ -6,7 +6,7 @@ use re_framework::{Effects, Scheduled, StateMachine};
 use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::types::conversation::ConversationAction;
 use crate::types::reminder::{
-    ReminderAction, ReminderConstructor, ReminderForConversation, ReminderState,
+    ReminderAction, ReminderConstructor, ReminderForConversation, ReminderState, MAX_REMINDER_SECS,
 };
 use crate::Env;
 
@@ -28,7 +28,12 @@ impl StateMachine for ReminderForConversationMachine {
         _effects: &mut Effects<Self>,
     ) -> ReminderForConversation {
         let created_on = Utc::now();
-        let fire_at = created_on + ChronoDuration::seconds(constructor.delay_seconds);
+        // Defensive: dispatch already validates the range, but clamp here too so
+        // constructing the Duration / adding it can never overflow-panic.
+        let delay = constructor.delay_seconds.clamp(0, MAX_REMINDER_SECS);
+        let fire_at = created_on
+            .checked_add_signed(ChronoDuration::seconds(delay))
+            .unwrap_or(created_on);
         ReminderForConversation {
             state: ReminderState::Pending,
             conversation_id: constructor.id.conversation_id,
