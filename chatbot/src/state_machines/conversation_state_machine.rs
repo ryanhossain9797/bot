@@ -220,22 +220,10 @@ fn apply_post_send(
                         if let Some(constructor) = maybe_construct {
                             effects.enqueue_construct::<ReminderForConversationMachine>(constructor);
                         }
-                        effects.enqueue_action::<ConversationMachine>(
-                            conversation_id.clone(),
-                            ConversationAction::ToolResult {
-                                id: tool_call.id.clone(),
-                                result: Ok(ToolResultData::text(text.clone(), text)),
-                            },
-                        );
+                        enqueue_self_result(effects, conversation_id, &tool_call.id, text);
                     }
                     ToolType::MetaMalformed { report } => {
-                        effects.enqueue_action::<ConversationMachine>(
-                            conversation_id.clone(),
-                            ConversationAction::ToolResult {
-                                id: tool_call.id.clone(),
-                                result: Ok(ToolResultData::text(report.clone(), report.clone())),
-                            },
-                        );
+                        enqueue_self_result(effects, conversation_id, &tool_call.id, report.clone());
                     }
                     tool_type => {
                         let expected_file_hash = match tool_type {
@@ -358,13 +346,8 @@ fn conversation_transition(
             ConversationAction::LLMDecisionResult(res),
         ) => match res {
             Ok(response) => {
-                let recorded_input = if REDACT_HISTORY_IMAGES {
-                    current_input.redacted()
-                } else {
-                    current_input
-                };
                 let mut updated_history = history;
-                updated_history.push(HistoryEntry::input(recorded_input));
+                updated_history.push(record_input(current_input));
                 updated_history.push(HistoryEntry::output(response.clone()));
 
                 let updated_conversation =
@@ -406,13 +389,8 @@ fn conversation_transition(
                 )
             }
             Err(reason) => {
-                let recorded_input = if REDACT_HISTORY_IMAGES {
-                    current_input.redacted()
-                } else {
-                    current_input
-                };
                 let mut history = history;
-                history.push(HistoryEntry::input(recorded_input));
+                history.push(record_input(current_input));
                 history.push(HistoryEntry::interrupted(reason.clone()));
                 Ok(Conversation {
                     state: ConversationState::Idle {
@@ -619,6 +597,30 @@ fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
          prompted automatically when it fires. (Reminders are lost on a redeploy.)",
         fire_at.format("%Y-%m-%d %H:%M:%S UTC")
     )
+}
+
+fn record_input(current_input: LLMInput) -> HistoryEntry {
+    let input = if REDACT_HISTORY_IMAGES {
+        current_input.redacted()
+    } else {
+        current_input
+    };
+    HistoryEntry::input(input)
+}
+
+fn enqueue_self_result(
+    effects: &mut ConversationEffects,
+    conversation_id: &ConversationId,
+    tool_call_id: &str,
+    text: String,
+) {
+    effects.enqueue_action::<ConversationMachine>(
+        conversation_id.clone(),
+        ConversationAction::ToolResult {
+            id: tool_call_id.to_string(),
+            result: Ok(ToolResultData::text(text.clone(), text)),
+        },
+    );
 }
 
 fn post_transition(

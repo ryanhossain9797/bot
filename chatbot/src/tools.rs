@@ -34,18 +34,19 @@ struct ReadFileArgs {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NumOrStr<T> {
+    Num(T),
+    Str(String),
+}
+
 fn de_lenient_number<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de> + std::str::FromStr,
     <T as std::str::FromStr>::Err: std::fmt::Display,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr<T> {
-        Num(T),
-        Str(String),
-    }
     match NumOrStr::<T>::deserialize(deserializer)? {
         NumOrStr::Num(n) => Ok(n),
         NumOrStr::Str(s) => s.trim().parse::<T>().map_err(serde::de::Error::custom),
@@ -56,13 +57,7 @@ fn de_lenient_opt_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Err
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr {
-        Num(usize),
-        Str(String),
-    }
-    match Option::<NumOrStr>::deserialize(deserializer)? {
+    match Option::<NumOrStr<usize>>::deserialize(deserializer)? {
         None => Ok(None),
         Some(NumOrStr::Num(n)) => Ok(Some(n)),
         Some(NumOrStr::Str(s)) => match s.trim() {
