@@ -7,9 +7,10 @@ use std::time::{Duration, Instant};
 const BATCH: i64 = 50;
 const MAX_PAGES: i64 = 20;
 const OUTBOX_GRACE_MS: i64 = 60_000;
-const TIMER_GRACE_MS: i64 = 120_000;
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
-const MAX_INTERVAL: Duration = Duration::from_secs(240);
+const MAX_INTERVAL: Duration = Duration::from_secs(30);
+const LOOK_AHEAD_MARGIN: Duration = Duration::from_secs(30);
+const TIMER_LOOK_AHEAD_MS: i64 = (MAX_INTERVAL.as_secs() + LOOK_AHEAD_MARGIN.as_secs()) as i64 * 1000;
 const REWAKE_SUPPRESS: Duration = Duration::from_secs(60);
 const WAKE_STAGGER: Duration = Duration::from_millis(25);
 
@@ -19,10 +20,10 @@ pub fn start() {
 
 async fn sweeper_loop() {
     let mut recently_woken: HashMap<(String, String), Instant> = HashMap::new();
-    sweep_once((0, 0), &mut recently_woken).await;
+    sweep_once((0, TIMER_LOOK_AHEAD_MS), &mut recently_woken).await;
     let mut interval = MIN_INTERVAL;
     loop {
-        let woke = sweep_once((OUTBOX_GRACE_MS, TIMER_GRACE_MS), &mut recently_woken).await;
+        let woke = sweep_once((OUTBOX_GRACE_MS, TIMER_LOOK_AHEAD_MS), &mut recently_woken).await;
         interval = if woke == 0 { (interval * 2).min(MAX_INTERVAL) } else { MIN_INTERVAL };
         tokio::time::sleep(interval).await;
     }
@@ -57,7 +58,7 @@ where
 }
 
 async fn sweep_once(
-    (outbox_grace_ms, timer_grace_ms): (i64, i64),
+    (outbox_grace_ms, timer_look_ahead_ms): (i64, i64),
     recently_woken: &mut HashMap<(String, String), Instant>,
 ) -> usize {
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -65,8 +66,8 @@ async fn sweep_once(
         store().stalled_outbox_senders(now_ms - outbox_grace_ms, BATCH, offset)
     })
     .await;
-    let due = paged("due-timers", |offset| {
-        store().due_timers(now_ms - timer_grace_ms, BATCH, offset)
+    let due = paged("coming-due-timers", |offset| {
+        store().due_timers(now_ms + timer_look_ahead_ms, BATCH, offset)
     })
     .await;
 
@@ -95,7 +96,7 @@ async fn sweep_once(
         }
     }
     if woke > 0 {
-        println!("[sweep] woke {woke} entities with stalled outbox rows or due timers");
+        println!("[sweep] woke {woke} entities with stalled outbox rows or coming-due timers");
     }
     woke
 }
