@@ -434,6 +434,10 @@ async fn run_tool(
         ToolType::SetReminder { .. } => Err(
             "set_reminder is handled by the conversation runtime, not the tool executor".to_string(),
         ),
+        ToolType::MetaMalformed { .. } => Err(
+            "meta_malformed_tool_call is handled by the conversation runtime, not the tool executor"
+                .to_string(),
+        ),
     }
 }
 

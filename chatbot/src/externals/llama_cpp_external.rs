@@ -12,6 +12,20 @@ use llama_cpp_2::mtmd::mtmd_default_marker;
 
 use std::sync::Arc;
 
+fn malformed_report(name: &str, error: &anyhow::Error) -> String {
+    let mut report = format!(
+        "That tool call was rejected and did NOT run: {error}. Re-check the tool name and its \
+         arguments against the tools available to you, then call it again."
+    );
+    if name.contains("attach") {
+        report.push_str(
+            " (Sending a file or image to the user is NOT a tool — instead put the marker \
+             [[attach_file:PATH]] or [[attach_image:PATH]] in your reply text.)",
+        );
+    }
+    report
+}
+
 fn budget_note(tool_rounds: usize, max_tool_rounds: usize) -> Option<String> {
     if max_tool_rounds == 0 {
         None
@@ -180,19 +194,26 @@ async fn get_response_from_llm(
 
     let thoughts = parsed.reasoning;
     let content = parsed.content;
-    let tool_calls = parsed
+    let tool_calls: Vec<ToolCall> = parsed
         .tool_calls
         .iter()
         .enumerate()
         .map(|(i, call)| {
-            ToolType::bind(&call.name, &call.arguments)
-                .map(|tool_type| ToolCall { id: format!("call_{i}"), tool_type })
-                .map_err(|e| {
+            let id = format!("call_{i}");
+            match ToolType::bind(&call.name, &call.arguments) {
+                Ok(tool_type) => ToolCall { id, tool_type },
+                Err(e) => {
                     eprintln!("[llm] tool call did not parse: {e:#}");
-                    InterruptionReason::MalformedToolCall
-                })
+                    ToolCall {
+                        id,
+                        tool_type: ToolType::MetaMalformed {
+                            report: malformed_report(&call.name, &e),
+                        },
+                    }
+                }
+            }
         })
-        .collect::<Result<Vec<_>, InterruptionReason>>()?;
+        .collect();
 
     let explicit_empty = content.eq_ignore_ascii_case("[EMPTY]");
     let reply = if !content.is_empty() && !explicit_empty {
@@ -252,5 +273,26 @@ pub async fn get_llm_decision(
     match llama_cpp_result {
         Ok(llama_cpp_response) => ConversationAction::LLMDecisionResult(Ok(llama_cpp_response)),
         Err(reason) => ConversationAction::LLMDecisionResult(Err(reason)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::malformed_report;
+
+    #[test]
+    fn malformed_report_names_the_error_and_adds_attach_hint() {
+        let unknown = anyhow::anyhow!("model called an unknown tool: attach_file");
+        let report = malformed_report("attach_file", &unknown);
+        assert!(report.contains("did NOT run"));
+        assert!(report.contains("attach_file"));
+        assert!(report.contains("[[attach_file:PATH]]"));
+
+        let bad_args =
+            anyhow::anyhow!("set_reminder arguments failed to bind: missing field delay_seconds");
+        let report = malformed_report("set_reminder", &bad_args);
+        assert!(report.contains("did NOT run"));
+        assert!(report.contains("missing field delay_seconds"));
+        assert!(!report.contains("[[attach_file"));
     }
 }

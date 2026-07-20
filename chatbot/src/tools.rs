@@ -104,14 +104,19 @@ impl ToolKind {
             ToolKind::EditFile => "edit_file",
             ToolKind::SetReminder => "set_reminder",
             ToolKind::MetaNoOpExtraTurn => "meta_no_op_extra_turn",
+            ToolKind::MetaMalformed => "meta_malformed_tool_call",
         }
     }
 
     fn announcement(&self) -> Option<&'static str> {
         match self {
-            ToolKind::MetaNoOpExtraTurn => None,
+            ToolKind::MetaNoOpExtraTurn | ToolKind::MetaMalformed => None,
             _ => Some(self.wire_name()),
         }
+    }
+
+    fn advertised(&self) -> bool {
+        !matches!(self, ToolKind::MetaMalformed)
     }
 
     fn definition(&self) -> ToolDefinition {
@@ -200,6 +205,10 @@ impl ToolKind {
                 "Give yourself another turn after this reply — use it to say something to the user across multiple steps. Put the first part in this reply's message, call this tool, and you'll be prompted again to continue with the next part. Pointless to call with no message (nothing is sent to the user), and pointless to call alongside other tools (a tool call already earns you another turn).",
                 json!({ "type": "object", "properties": {}, "required": [] }),
             ),
+            ToolKind::MetaMalformed => (
+                "Internal — not callable. Synthesized when one of your tool calls could not be parsed, to hand the error back to you.",
+                json!({ "type": "object", "properties": {}, "required": [] }),
+            ),
         };
         ToolDefinition {
             kind: "function",
@@ -214,7 +223,10 @@ impl ToolKind {
 
 impl ToolType {
     pub fn tool_definitions() -> Vec<ToolDefinition> {
-        ToolKind::iter().map(|k| k.definition()).collect()
+        ToolKind::iter()
+            .filter(ToolKind::advertised)
+            .map(|k| k.definition())
+            .collect()
     }
 
     pub fn wire_name(&self) -> &'static str {
@@ -273,6 +285,7 @@ impl ToolType {
             .into_iter()
             .collect(),
             ToolType::MetaNoOpExtraTurn => Map::new(),
+            ToolType::MetaMalformed { .. } => Map::new(),
         }
     }
 
@@ -320,6 +333,10 @@ impl ToolType {
                 })
             }
             ToolKind::MetaNoOpExtraTurn => Ok(ToolType::MetaNoOpExtraTurn),
+            ToolKind::MetaMalformed => Ok(ToolType::MetaMalformed {
+                report: "meta_malformed_tool_call is internal and cannot be called directly."
+                    .to_string(),
+            }),
         }
     }
 }
@@ -327,6 +344,24 @@ impl ToolType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meta_malformed_is_internal_not_advertised() {
+        let names: Vec<&str> = ToolType::tool_definitions()
+            .iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(
+            !names.contains(&"meta_malformed_tool_call"),
+            "internal tool must not be advertised to the model"
+        );
+        assert!(names.contains(&"set_reminder"));
+        assert_eq!(ToolType::MetaMalformed { report: String::new() }.announcement(), None);
+        assert!(
+            ToolType::bind("attach_file", r#"{"path":"/x"}"#).is_err(),
+            "unknown tool must error at bind (the llm layer turns this into MetaMalformed)"
+        );
+    }
 
     #[test]
     fn read_file_accepts_stringified_numbers() {

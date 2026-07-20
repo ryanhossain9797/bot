@@ -339,6 +339,9 @@ pub enum ToolType {
         addressee: String,
     },
     MetaNoOpExtraTurn,
+    MetaMalformed {
+        report: String,
+    },
 }
 
 impl ToolType {
@@ -351,7 +354,8 @@ impl ToolType {
             | ToolType::ReadFile { .. }
             | ToolType::EditFile { .. }
             | ToolType::SetReminder { .. }
-            | ToolType::MetaNoOpExtraTurn => 30_000,
+            | ToolType::MetaNoOpExtraTurn
+            | ToolType::MetaMalformed { .. } => 30_000,
         };
         Duration::milliseconds(ms)
     }

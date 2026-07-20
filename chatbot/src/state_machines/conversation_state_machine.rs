@@ -228,6 +228,15 @@ fn apply_post_send(
                             },
                         );
                     }
+                    ToolType::MetaMalformed { report } => {
+                        effects.enqueue_action::<ConversationMachine>(
+                            conversation_id.clone(),
+                            ConversationAction::ToolResult {
+                                id: tool_call.id.clone(),
+                                result: Ok(ToolResultData::text(report.clone(), report.clone())),
+                            },
+                        );
+                    }
                     tool_type => {
                         let expected_file_hash = match tool_type {
                             ToolType::EditFile { path, .. } => {
