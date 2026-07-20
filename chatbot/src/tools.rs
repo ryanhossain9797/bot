@@ -34,18 +34,19 @@ struct ReadFileArgs {
     limit: Option<usize>,
 }
 
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum NumOrStr<T> {
+    Num(T),
+    Str(String),
+}
+
 fn de_lenient_number<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: serde::Deserialize<'de> + std::str::FromStr,
     <T as std::str::FromStr>::Err: std::fmt::Display,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr<T> {
-        Num(T),
-        Str(String),
-    }
     match NumOrStr::<T>::deserialize(deserializer)? {
         NumOrStr::Num(n) => Ok(n),
         NumOrStr::Str(s) => s.trim().parse::<T>().map_err(serde::de::Error::custom),
@@ -56,13 +57,7 @@ fn de_lenient_opt_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Err
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum NumOrStr {
-        Num(usize),
-        Str(String),
-    }
-    match Option::<NumOrStr>::deserialize(deserializer)? {
+    match Option::<NumOrStr<usize>>::deserialize(deserializer)? {
         None => Ok(None),
         Some(NumOrStr::Num(n)) => Ok(Some(n)),
         Some(NumOrStr::Str(s)) => match s.trim() {
@@ -104,17 +99,18 @@ impl ToolKind {
             ToolKind::EditFile => "edit_file",
             ToolKind::SetReminder => "set_reminder",
             ToolKind::MetaNoOpExtraTurn => "meta_no_op_extra_turn",
+            ToolKind::MetaMalformed => "meta_malformed_tool_call",
         }
     }
 
     fn announcement(&self) -> Option<&'static str> {
         match self {
-            ToolKind::MetaNoOpExtraTurn => None,
+            ToolKind::MetaNoOpExtraTurn | ToolKind::MetaMalformed => None,
             _ => Some(self.wire_name()),
         }
     }
 
-    fn definition(&self) -> ToolDefinition {
+    fn definition(&self) -> Option<ToolDefinition> {
         let (description, parameters): (&'static str, Value) = match self {
             ToolKind::WebSearch => (
                 "Search the web — ONE focused topic per query; search one fact at a time, never pile attributes into a single query. Snippets only, usually not enough for specifics (dates, numbers, names, quotes) — open the best result with visit_url and read it before answering. For several facts, fire several single-topic searches in the same turn (parallel is fine).",
@@ -200,21 +196,22 @@ impl ToolKind {
                 "Give yourself another turn after this reply — use it to say something to the user across multiple steps. Put the first part in this reply's message, call this tool, and you'll be prompted again to continue with the next part. Pointless to call with no message (nothing is sent to the user), and pointless to call alongside other tools (a tool call already earns you another turn).",
                 json!({ "type": "object", "properties": {}, "required": [] }),
             ),
+            ToolKind::MetaMalformed => return None,
         };
-        ToolDefinition {
+        Some(ToolDefinition {
             kind: "function",
             function: ToolDefFunction {
                 name: self.wire_name(),
                 description,
                 parameters,
             },
-        }
+        })
     }
 }
 
 impl ToolType {
     pub fn tool_definitions() -> Vec<ToolDefinition> {
-        ToolKind::iter().map(|k| k.definition()).collect()
+        ToolKind::iter().filter_map(|k| k.definition()).collect()
     }
 
     pub fn wire_name(&self) -> &'static str {
@@ -273,6 +270,7 @@ impl ToolType {
             .into_iter()
             .collect(),
             ToolType::MetaNoOpExtraTurn => Map::new(),
+            ToolType::MetaMalformed { .. } => Map::new(),
         }
     }
 
@@ -320,6 +318,10 @@ impl ToolType {
                 })
             }
             ToolKind::MetaNoOpExtraTurn => Ok(ToolType::MetaNoOpExtraTurn),
+            ToolKind::MetaMalformed => Ok(ToolType::MetaMalformed {
+                report: "meta_malformed_tool_call is internal and cannot be called directly."
+                    .to_string(),
+            }),
         }
     }
 }
@@ -327,6 +329,24 @@ impl ToolType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meta_malformed_is_internal_not_advertised() {
+        let names: Vec<&str> = ToolType::tool_definitions()
+            .iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(
+            !names.contains(&"meta_malformed_tool_call"),
+            "internal tool must not be advertised to the model"
+        );
+        assert!(names.contains(&"set_reminder"));
+        assert_eq!(ToolType::MetaMalformed { report: String::new() }.announcement(), None);
+        assert!(
+            ToolType::bind("attach_file", r#"{"path":"/x"}"#).is_err(),
+            "unknown tool must error at bind (the llm layer turns this into MetaMalformed)"
+        );
+    }
 
     #[test]
     fn read_file_accepts_stringified_numbers() {
