@@ -406,7 +406,13 @@ fn conversation_transition(
                 )
             }
             Err(reason) => {
+                let recorded_input = if REDACT_HISTORY_IMAGES {
+                    current_input.redacted()
+                } else {
+                    current_input
+                };
                 let mut history = history;
+                history.push(HistoryEntry::input(recorded_input));
                 history.push(HistoryEntry::interrupted(reason.clone()));
                 Ok(Conversation {
                     state: ConversationState::Idle {
