@@ -115,11 +115,7 @@ impl ToolKind {
         }
     }
 
-    fn advertised(&self) -> bool {
-        !matches!(self, ToolKind::MetaMalformed)
-    }
-
-    fn definition(&self) -> ToolDefinition {
+    fn definition(&self) -> Option<ToolDefinition> {
         let (description, parameters): (&'static str, Value) = match self {
             ToolKind::WebSearch => (
                 "Search the web — ONE focused topic per query; search one fact at a time, never pile attributes into a single query. Snippets only, usually not enough for specifics (dates, numbers, names, quotes) — open the best result with visit_url and read it before answering. For several facts, fire several single-topic searches in the same turn (parallel is fine).",
@@ -205,28 +201,22 @@ impl ToolKind {
                 "Give yourself another turn after this reply — use it to say something to the user across multiple steps. Put the first part in this reply's message, call this tool, and you'll be prompted again to continue with the next part. Pointless to call with no message (nothing is sent to the user), and pointless to call alongside other tools (a tool call already earns you another turn).",
                 json!({ "type": "object", "properties": {}, "required": [] }),
             ),
-            ToolKind::MetaMalformed => (
-                "Internal — not callable. Synthesized when one of your tool calls could not be parsed, to hand the error back to you.",
-                json!({ "type": "object", "properties": {}, "required": [] }),
-            ),
+            ToolKind::MetaMalformed => return None,
         };
-        ToolDefinition {
+        Some(ToolDefinition {
             kind: "function",
             function: ToolDefFunction {
                 name: self.wire_name(),
                 description,
                 parameters,
             },
-        }
+        })
     }
 }
 
 impl ToolType {
     pub fn tool_definitions() -> Vec<ToolDefinition> {
-        ToolKind::iter()
-            .filter(ToolKind::advertised)
-            .map(|k| k.definition())
-            .collect()
+        ToolKind::iter().filter_map(|k| k.definition()).collect()
     }
 
     pub fn wire_name(&self) -> &'static str {
