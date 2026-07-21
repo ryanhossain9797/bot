@@ -208,7 +208,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::UseSkill => (
-                "Consult your skill library — short reference guides for specific tasks (e.g. converting document formats). Call it with NO arguments to list every available skill by name. Call it with a skill's name to read that skill's full contents, and follow them before attempting the task it covers. Check here first when a task looks like it might have a skill.",
+                "Consult your skill library — short reference guides for specific tasks (e.g. converting document formats). Call it with NO arguments to list the available skills by name; call it with a skill's name to read that skill in full and follow it. You can't tell what's there without looking, so before a non-trivial or specialized task it's worth a quick listing to see if a skill applies.",
                 json!({
                     "type": "object",
                     "properties": {
