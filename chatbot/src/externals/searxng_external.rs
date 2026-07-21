@@ -12,13 +12,13 @@ const SEARXNG_PORT_MAP: &str = "8080:8080";
 static BRINGUP: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn is_self_hosted() -> bool {
-    match reqwest::Url::parse(SEARXNG_URL.trim()).ok().and_then(|u| u.host_str().map(str::to_owned)) {
-        Some(host) => matches!(
-            host.as_str(),
-            "localhost" | "127.0.0.1" | "0.0.0.0" | "::1" | "[::1]"
-        ),
-        None => false,
-    }
+    reqwest::Url::parse(SEARXNG_URL.trim())
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| matches!(h, "localhost" | "127.0.0.1" | "0.0.0.0" | "::1" | "[::1]"))
+        })
+        .unwrap_or(false)
 }
 
 async fn is_unhealthy(name: &str) -> bool {
@@ -28,7 +28,7 @@ async fn is_unhealthy(name: &str) -> bool {
     }
 }
 
-pub(crate) async fn ensure_searxng_image() -> Result<(), String> {
+async fn ensure_searxng_image() -> Result<(), String> {
     ensure_image(SEARXNG_IMAGE, SEARXNG_BUILD_CONTEXT).await
 }
 

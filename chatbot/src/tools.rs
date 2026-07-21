@@ -295,6 +295,11 @@ impl ToolType {
             ]
             .into_iter()
             .collect(),
+            ToolType::UseSkill { skill } => skill
+                .as_ref()
+                .map(|s| ("skill".to_string(), json!(s)))
+                .into_iter()
+                .collect(),
             ToolType::SetReminder {
                 delay_seconds,
                 note,
@@ -306,11 +311,6 @@ impl ToolType {
             ]
             .into_iter()
             .collect(),
-            ToolType::UseSkill { skill } => skill
-                .as_ref()
-                .map(|s| ("skill".to_string(), json!(s)))
-                .into_iter()
-                .collect(),
             ToolType::MetaNoOpExtraTurn => Map::new(),
             ToolType::MetaMalformed { .. } => Map::new(),
         }
