@@ -1,7 +1,14 @@
 # Document Conversion
 
 ## MOBI to EPUB
-Use `mobi` library: `pip install mobi` then `mobi.extract("file.mobi")`. Handles conversion in one step. More reliable than calibre's `ebook-convert`.
+Use the `mobi` library's `extract()` function — one step, more reliable than calibre's `ebook-convert`. `pip install mobi`, then:
+```python
+import mobi
+tempdir, filepath = mobi.extract("book.mobi")
+# extract() returns (tempdir, filepath); filepath is the unpacked EPUB inside tempdir
+import shutil
+shutil.copy(filepath, "book.epub")
+```
 
 ## PDF to Text
 `pip install PyMuPDF` (fast, general) or `pip install pdfplumber` (better for tables).
