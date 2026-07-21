@@ -21,6 +21,8 @@ use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 
+pub const BOT_NAME: &str = "A2";
+
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
@@ -78,6 +80,15 @@ async fn main() -> anyhow::Result<!> {
             Err(e) => eprintln!(
                 "[startup] bash sandbox image prebuild failed: {e} (will retry on first use)"
             ),
+        }
+    });
+
+    tokio::spawn(async {
+        match externals::searxng_external::ensure_searxng().await {
+            Ok(()) => println!("[startup] searxng ready"),
+            Err(e) => {
+                eprintln!("[startup] searxng bring-up failed: {e} (will retry on first search)")
+            }
         }
     });
 

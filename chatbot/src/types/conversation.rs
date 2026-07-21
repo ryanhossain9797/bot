@@ -333,6 +333,9 @@ pub enum ToolType {
         old_string: String,
         new_string: String,
     },
+    UseSkill {
+        skill: Option<String>,
+    },
     SetReminder {
         delay_seconds: i64,
         note: String,
@@ -353,6 +356,7 @@ impl ToolType {
             ToolType::ViewImage { .. }
             | ToolType::ReadFile { .. }
             | ToolType::EditFile { .. }
+            | ToolType::UseSkill { .. }
             | ToolType::SetReminder { .. }
             | ToolType::MetaNoOpExtraTurn
             | ToolType::MetaMalformed { .. } => 30_000,

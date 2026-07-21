@@ -1,3 +1,4 @@
+use crate::externals::container::{docker, ensure_image, is_running, revive_if_present};
 use crate::types::conversation::ToolResultData;
 use crate::types::media::{Image, MessageImage};
 use std::process::Stdio;
@@ -16,53 +17,15 @@ fn worker_name(conversation_id: &str) -> String {
     format!("botwork-{safe}")
 }
 
-async fn docker(args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("docker")
-        .args(args)
-        .output()
-        .await
-        .map_err(|e| format!("failed to invoke docker: {e}"))
-}
-
-async fn is_running(name: &str) -> bool {
-    match docker(&["inspect", "-f", "{{.State.Running}}", name]).await {
-        Ok(out) => out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true",
-        Err(_) => false,
-    }
-}
-
 async fn ensure_worker(name: &str) -> Result<(), String> {
-    match docker(&["inspect", "-f", "{{.State.Running}}", name]).await {
-        Ok(out) if out.status.success() => {
-            if String::from_utf8_lossy(&out.stdout).trim() == "true" {
-                return Ok(());
-            }
-            if docker(&["start", name]).await.map(|o| o.status.success()).unwrap_or(false) {
-                return Ok(());
-            }
-            let _ = docker(&["rm", "-f", name]).await;
-        }
-        _ => {}
+    if revive_if_present(name).await {
+        return Ok(());
     }
     spawn_worker(name).await
 }
 
 pub(crate) async fn ensure_worker_image() -> Result<(), String> {
-    let present = docker(&["image", "inspect", WORKER_IMAGE])
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if present {
-        return Ok(());
-    }
-    let out = docker(&["build", "-t", WORKER_IMAGE, WORKER_BUILD_CONTEXT]).await?;
-    if !out.status.success() {
-        return Err(format!(
-            "could not build sandbox image: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    Ok(())
+    ensure_image(WORKER_IMAGE, WORKER_BUILD_CONTEXT).await
 }
 
 async fn spawn_worker(name: &str) -> Result<(), String> {

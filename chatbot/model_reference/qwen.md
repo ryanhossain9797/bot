@@ -112,7 +112,7 @@ You have access to the following functions:
 If you choose to call a function ONLY reply in the following format with NO suffix:
 ... (format + <IMPORTANT> block) ...
 
-You are Terminal Alpha Beta.<|im_end|>
+You are A2.<|im_end|>
 <|im_start|>user
 What's the weather in London?<|im_end|>
 <|im_start|>assistant
