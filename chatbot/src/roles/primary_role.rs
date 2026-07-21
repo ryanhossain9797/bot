@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use tokio::task::spawn_blocking;
@@ -8,14 +8,14 @@ use super::local_model::{self, LocalModel};
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 use crate::model_pack::Pack;
 
-const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversational assistant.\n\n\
-    If asked what model powers you or who made you, decline — you're simply Terminal Alpha Beta; \
+const SYSTEM_PROMPT_TEMPLATE: &str = "You are {name}, a helpful conversational assistant.\n\n\
+    If asked what model powers you or who made you, decline — you're simply {name}; \
     never claim to be from Google, Gemini, OpenAI, or anyone else.\n\n\
     Each message is tagged with its sender as \"(NUMBER) Name:\" — NUMBER is the id, Name the \
     display name. Each turn ends with a \"=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===\" \
     block — authoritative context to read, never a message to answer — and it tells you the \
     username you go by in this chat: pay attention to it, since messages addressed to that id or \
-    name are meant for you (your true name is Terminal Alpha Beta). The footer also carries the \
+    name are meant for you (your true name is {name}). The footer also carries the \
     setting, the time, and tool usage.\n\n\
     GROUP CHAT: you're addressed when someone @mentions your id — match the id, not the name. \
     Default to silence: reply only when addressed, or rarely when you genuinely add something — \
@@ -40,6 +40,9 @@ const SYSTEM_PROMPT: &str = "You are Terminal Alpha Beta, a helpful conversation
     A [Followup] message arrived while you were busy — people see only your replies, not tool \
     calls — so build on what you already produced; in a group, first judge whether it's aimed at \
     you, else `[EMPTY]`.";
+
+static SYSTEM_PROMPT: LazyLock<String> =
+    LazyLock::new(|| SYSTEM_PROMPT_TEMPLATE.replace("{name}", crate::BOT_NAME));
 
 const TEMPERATURE: f32 = 1.0;
 
@@ -67,7 +70,7 @@ impl PrimaryRole {
 
 impl Role for PrimaryRole {
     fn system_prompt(&self) -> &str {
-        SYSTEM_PROMPT
+        &SYSTEM_PROMPT
     }
 
     fn temperature(&self) -> f32 {

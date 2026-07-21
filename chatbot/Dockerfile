@@ -40,5 +40,9 @@ COPY --from=builder /app/commit.txt /app/commit.txt
 
 COPY chatbot/Dockerfile.worker /app/worker/Dockerfile
 
+COPY chatbot/searxng/ /app/searxng/
+
+COPY chatbot/skills/ /app/skills/
+
 
 CMD ["/app/chatbot"]

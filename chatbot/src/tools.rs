@@ -75,6 +75,32 @@ struct EditFileArgs {
 }
 
 #[derive(Debug, Deserialize)]
+struct UseSkillArgs {
+    #[serde(default)]
+    skill: Option<String>,
+}
+
+fn normalize_skill_name(raw: &str) -> Option<String> {
+    let unquoted = raw
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+        .trim();
+    let base = unquoted.strip_suffix(".md").unwrap_or(unquoted).trim();
+    (!base.is_empty()).then(|| base.to_string())
+}
+
+fn parse_use_skill(arguments: &str) -> Option<String> {
+    let raw = arguments.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<UseSkillArgs>(raw) {
+        Ok(args) => args.skill.as_deref().and_then(normalize_skill_name),
+        Err(_) => normalize_skill_name(raw),
+    }
+}
+
+#[derive(Debug, Deserialize)]
 struct SetReminderArgs {
     #[serde(deserialize_with = "de_lenient_number")]
     delay_seconds: i64,
@@ -97,6 +123,7 @@ impl ToolKind {
             ToolKind::ViewImage => "view_image",
             ToolKind::ReadFile => "read_file",
             ToolKind::EditFile => "edit_file",
+            ToolKind::UseSkill => "use_skill",
             ToolKind::SetReminder => "set_reminder",
             ToolKind::MetaNoOpExtraTurn => "meta_no_op_extra_turn",
             ToolKind::MetaMalformed => "meta_malformed_tool_call",
@@ -180,6 +207,16 @@ impl ToolKind {
                     "required": ["path", "old_string", "new_string"]
                 }),
             ),
+            ToolKind::UseSkill => (
+                "Consult your skill library — short reference guides for specific tasks (e.g. converting document formats). Call it with NO arguments to list the available skills by name; call it with a skill's name to read that skill in full and follow it. You can't tell what's there without looking, so before a non-trivial or specialized task it's worth a quick listing to see if a skill applies.",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "skill": { "type": "string", "description": "The name of the skill to read, exactly as shown in the no-argument listing, e.g. \"document_conversion\". The .md extension, surrounding quotes, and extra spaces are all optional. Omit this field entirely to list all available skills instead of reading one." }
+                    },
+                    "required": []
+                }),
+            ),
             ToolKind::SetReminder => (
                 "Set a reminder to message a user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders are lost on a redeploy (they do survive a normal restart).",
                 json!({
@@ -258,6 +295,11 @@ impl ToolType {
             ]
             .into_iter()
             .collect(),
+            ToolType::UseSkill { skill } => skill
+                .as_ref()
+                .map(|s| ("skill".to_string(), json!(s)))
+                .into_iter()
+                .collect(),
             ToolType::SetReminder {
                 delay_seconds,
                 note,
@@ -309,6 +351,9 @@ impl ToolType {
                     new_string: args.new_string,
                 })
             }
+            ToolKind::UseSkill => Ok(ToolType::UseSkill {
+                skill: parse_use_skill(arguments),
+            }),
             ToolKind::SetReminder => {
                 let args = parse_args::<SetReminderArgs>(name, arguments)?;
                 Ok(ToolType::SetReminder {
@@ -374,6 +419,37 @@ mod tests {
             absent,
             ToolType::ReadFile { offset: None, limit: None, .. }
         ));
+    }
+
+    #[test]
+    fn use_skill_lists_when_no_argument() {
+        for args in ["", "{}", r#"{"skill":""}"#, r#"{"skill":"   "}"#, r#"{"skill":null}"#] {
+            assert!(
+                matches!(ToolType::bind("use_skill", args), Ok(ToolType::UseSkill { skill: None })),
+                "args {args:?} should list (skill: None)"
+            );
+        }
+    }
+
+    #[test]
+    fn use_skill_parses_leniently() {
+        let expected = "document_conversion";
+        for raw in [
+            "document_conversion",
+            "document_conversion.md",
+            "  document_conversion  ",
+            "\"document_conversion\"",
+            "'document_conversion.md'",
+            "  \"document_conversion.md\" ",
+        ] {
+            let args = serde_json::json!({ "skill": raw }).to_string();
+            match ToolType::bind("use_skill", &args) {
+                Ok(ToolType::UseSkill { skill: Some(name) }) => {
+                    assert_eq!(name, expected, "raw {raw:?} should normalize to {expected}")
+                }
+                other => panic!("raw {raw:?} did not parse: {other:?}"),
+            }
+        }
     }
 
     #[test]

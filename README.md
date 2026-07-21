@@ -21,7 +21,7 @@ bot/
 ├── chatbot/                      # Main Discord chatbot application
 │   ├── src/
 │   │   ├── roles/                # The render → infer → parse pipeline behind a Role trait
-│   │   │   ├── primary_role.rs   #   PrimaryRole — the "Terminal Alpha Beta" persona
+│   │   │   ├── primary_role.rs   #   PrimaryRole — the "A2" persona
 │   │   │   ├── local_model.rs    #   Loaded GGUF model + the llama.cpp decode loop
 │   │   │   ├── render.rs         #   Prompt assembly (minijinja over the pack's chat template)
 │   │   │   └── parsers/          #   Per-family output parsers (e.g. qwen.rs), picked by name
@@ -170,9 +170,8 @@ HTTP call.
 
 ### Prerequisites
 
-- Docker (with a GPU runtime; the Justfile targets an AMD/ROCm host)
+- Docker (with a GPU runtime; the Justfile targets an AMD/ROCm host). The container mounts the Docker socket and self-manages its `web_search` SearxNG instance and bash sandbox as sibling containers.
 - A Discord bot token
-- A SearxNG instance for `web_search` (JSON format enabled)
 - A model pack under `chatbot/models/` (GGUF weights + mmproj + template + `manifest.toml`)
 
 ### Configuration

@@ -54,6 +54,10 @@ const MAX_SEARCH_RESULTS: usize = 8;
 const SIMPLIFIED_SEARCH_RESULTS: usize = 3;
 
 async fn fetch_web_search(query: &str) -> anyhow::Result<ToolResultData> {
+    if let Err(e) = crate::externals::searxng_external::ensure_searxng().await {
+        eprintln!("[searxng] ensure failed (querying anyway): {e}");
+    }
+
     let search_url = format!(
         "{}/search?q={}&format=json",
         SEARXNG_URL.trim_end_matches('/'),
@@ -431,6 +435,18 @@ async fn run_tool(
                 metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
             })
         }
+        ToolType::UseSkill { skill } => match skill {
+            None => {
+                let list = crate::externals::skill_external::list_skills().await?;
+                Ok(ToolResultData::text(list.clone(), list))
+            }
+            Some(name) => {
+                let content = crate::externals::skill_external::read_skill(&name).await?;
+                let body = clip_to(&content, ACTUAL_MAX);
+                let simplified = clip_to(&body, SIMPLIFIED_MAX);
+                Ok(ToolResultData::text(body, simplified))
+            }
+        },
         ToolType::SetReminder { .. } => Err(
             "set_reminder is handled by the conversation runtime, not the tool executor".to_string(),
         ),

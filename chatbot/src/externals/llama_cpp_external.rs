@@ -62,10 +62,11 @@ fn session_footer(
         "DIRECT MESSAGE (one-to-one with the user), not a group chat- every message is meant for you, there is no one else."
     };
     let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+    let bot_name = crate::BOT_NAME;
 
     let mut lines = vec![
         "=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===".to_string(),
-        format!("Your username in this conversation: {bot_identity}. Respond to both this name and Terminal Alpha Beta"),
+        format!("Your username in this conversation: {bot_identity}. Respond to both this name and {bot_name}"),
         format!("Setting: {setting}"),
         format!("Current time: {now}"),
         platform.formatting_note().to_string(),
@@ -86,7 +87,7 @@ fn session_footer(
 
     if is_group {
         lines.push(
-            "Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise your whole reply must be the literal token [EMPTY] (exactly those seven characters with square brackets, nothing else — never (empty), empty, or any variant). Match the @mention id, not the name. You are Terminal Alpha Beta.".to_string(),
+            format!("Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise your whole reply must be the literal token [EMPTY] (exactly those seven characters with square brackets, nothing else — never (empty), empty, or any variant). Match the @mention id, not the name. You are {bot_name}."),
         );
     }
 
