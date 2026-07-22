@@ -11,12 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash coreutils ca-certificates curl wget git jq file unzip zip procps \
     python3 python3-pip python3-venv \
     imagemagick fonts-dejavu fonts-liberation \
-    pandoc \
+    pandoc tesseract-ocr tesseract-ocr-eng \
     nodejs npm \
     libgbm1 libnss3 libatk-bridge2.0-0 libxcomposite1 libcups2 libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir numpy pandas matplotlib pillow requests pypandoc
+RUN pip install --no-cache-dir numpy pandas matplotlib pillow requests pypandoc pytesseract
 
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/share/dotnet \

@@ -9,7 +9,7 @@ use strum::{EnumDiscriminants, EnumIter};
 
 pub const MAX_SEARCH_DESCRIPTION_LENGTH: usize = 2000;
 
-pub const MAX_TOOL_ROUNDS: usize = 10;
+pub const MAX_TOOL_ROUNDS: usize = 30;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Platform {
