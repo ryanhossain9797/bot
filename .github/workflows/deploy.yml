@@ -1,0 +1,16 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: deploy on merge to main
+        run: /home/zireael9797/deploy/cd-deploy.sh
