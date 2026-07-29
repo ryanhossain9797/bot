@@ -1,9 +1,31 @@
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 
 use crate::chat_format::{ToolDefFunction, ToolDefinition};
 use crate::types::conversation::{ToolKind, ToolType};
+
+fn git_note() -> Option<String> {
+    use crate::configuration::git;
+    if git::SSH_KEY_PATH.is_empty() {
+        return None;
+    }
+    let who = git::NAME;
+    Some(if git::GH_TOKEN.is_empty() {
+        format!(" You also have your own authenticated GitHub account in this sandbox — git over SSH as {who}. You can clone private repos, commit, and push directly; your git identity is already configured, so don't reconfigure it. (The gh CLI/API isn't set up yet — open PRs via the web or ask the user; run `ssh -T git@github.com` to see which account you are.)")
+    } else {
+        format!(" You also have your own authenticated GitHub account in this sandbox — git over SSH plus the `gh` CLI, as {who}. You can clone private repos, commit, push, and open PRs with `gh` directly; your git identity is already configured, so don't reconfigure it.")
+    })
+}
+
+static RUN_BASH_DESC: LazyLock<String> = LazyLock::new(|| {
+    let base = "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.";
+    match git_note() {
+        Some(note) => format!("{base}{note}"),
+        None => base.to_string(),
+    }
+});
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
@@ -160,7 +182,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::RunBashCommand => (
-                "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.",
+                RUN_BASH_DESC.as_str(),
                 json!({
                     "type": "object",
                     "properties": {

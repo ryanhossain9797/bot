@@ -39,7 +39,7 @@ struct GitAuth {
 
 fn git_auth() -> Option<GitAuth> {
     use crate::configuration::git;
-    (!git::SSH_KEY_PATH.is_empty() && !git::GH_TOKEN.is_empty()).then_some(GitAuth {
+    (!git::SSH_KEY_PATH.is_empty()).then_some(GitAuth {
         key_path: git::SSH_KEY_PATH,
         token: git::GH_TOKEN,
         name: git::NAME,
@@ -49,17 +49,17 @@ fn git_auth() -> Option<GitAuth> {
 
 impl GitAuth {
     fn run_env(&self) -> Vec<String> {
-        [
-            format!("GH_TOKEN={}", self.token),
+        let mut env = vec![
             format!("GIT_AUTHOR_NAME={}", self.name),
             format!("GIT_AUTHOR_EMAIL={}", self.email),
             format!("GIT_COMMITTER_NAME={}", self.name),
             format!("GIT_COMMITTER_EMAIL={}", self.email),
             format!("GIT_SSH_COMMAND=ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -i {KEY_DEST}"),
-        ]
-        .into_iter()
-        .flat_map(|e| ["-e".to_string(), e])
-        .collect()
+        ];
+        if !self.token.is_empty() {
+            env.push(format!("GH_TOKEN={}", self.token));
+        }
+        env.into_iter().flat_map(|e| ["-e".to_string(), e]).collect()
     }
 }
 
@@ -72,7 +72,9 @@ async fn configure_git_auth(name: &str, g: &GitAuth) -> Result<(), String> {
     docker_ok(&["exec", name, "chmod", "600", KEY_DEST]).await?;
     docker_ok(&["exec", name, "git", "config", "--global", "user.name", g.name]).await?;
     docker_ok(&["exec", name, "git", "config", "--global", "user.email", g.email]).await?;
-    let _ = docker(&["exec", name, "gh", "auth", "setup-git"]).await;
+    if !g.token.is_empty() {
+        let _ = docker(&["exec", name, "gh", "auth", "setup-git"]).await;
+    }
     Ok(())
 }
 
