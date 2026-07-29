@@ -9,6 +9,15 @@ pub(crate) async fn docker(args: &[&str]) -> Result<Output, String> {
         .map_err(|e| format!("failed to invoke docker: {e}"))
 }
 
+pub(crate) async fn docker_ok(args: &[&str]) -> Result<(), String> {
+    let out = docker(args).await?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+    }
+}
+
 pub(crate) async fn is_running(name: &str) -> bool {
     match docker(&["inspect", "-f", "{{.State.Running}}", name]).await {
         Ok(out) => out.status.success() && String::from_utf8_lossy(&out.stdout).trim() == "true",

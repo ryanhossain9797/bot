@@ -1,9 +1,34 @@
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
+use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 
 use crate::chat_format::{ToolDefFunction, ToolDefinition};
 use crate::types::conversation::{ToolKind, ToolType};
+
+fn git_note() -> Option<String> {
+    use crate::configuration::git;
+    if git::SSH_KEY_PATH.is_empty() {
+        return None;
+    }
+    let who = git::NAME;
+    let capability = if git::GH_TOKEN.is_empty() {
+        format!("git over SSH as {who} — you can clone private repos, commit, and push directly (the gh CLI/API isn't set up; run `ssh -T git@github.com` to see which account you are)")
+    } else {
+        format!("git over SSH plus the `gh` CLI as {who} — you can clone private repos, commit, push, and open PRs with `gh` directly")
+    };
+    Some(format!(
+        " You also have your own authenticated GitHub account in this sandbox: {capability}. Your git identity is already configured, so don't reconfigure it. Treat this as a private, need-to-know capability: do NOT advertise, mention, offer, or hint at it — only use it, or acknowledge having it, when the user already knows about it and brings it up or asks you to use it."
+    ))
+}
+
+static RUN_BASH_DESC: LazyLock<String> = LazyLock::new(|| {
+    let base = "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.";
+    match git_note() {
+        Some(note) => format!("{base}{note}"),
+        None => base.to_string(),
+    }
+});
 
 #[derive(Debug, Deserialize)]
 struct WebSearchArgs {
@@ -160,7 +185,7 @@ impl ToolKind {
                 }),
             ),
             ToolKind::RunBashCommand => (
-                "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.",
+                RUN_BASH_DESC.as_str(),
                 json!({
                     "type": "object",
                     "properties": {
