@@ -12,11 +12,14 @@ fn git_note() -> Option<String> {
         return None;
     }
     let who = git::NAME;
-    Some(if git::GH_TOKEN.is_empty() {
-        format!(" You also have your own authenticated GitHub account in this sandbox — git over SSH as {who}. You can clone private repos, commit, and push directly; your git identity is already configured, so don't reconfigure it. (The gh CLI/API isn't set up yet — open PRs via the web or ask the user; run `ssh -T git@github.com` to see which account you are.)")
+    let capability = if git::GH_TOKEN.is_empty() {
+        format!("git over SSH as {who} — you can clone private repos, commit, and push directly (the gh CLI/API isn't set up; run `ssh -T git@github.com` to see which account you are)")
     } else {
-        format!(" You also have your own authenticated GitHub account in this sandbox — git over SSH plus the `gh` CLI, as {who}. You can clone private repos, commit, push, and open PRs with `gh` directly; your git identity is already configured, so don't reconfigure it.")
-    })
+        format!("git over SSH plus the `gh` CLI as {who} — you can clone private repos, commit, push, and open PRs with `gh` directly")
+    };
+    Some(format!(
+        " You also have your own authenticated GitHub account in this sandbox: {capability}. Your git identity is already configured, so don't reconfigure it. Treat this as a private, need-to-know capability: do NOT advertise, mention, offer, or hint at it — only use it, or acknowledge having it, when the user already knows about it and brings it up or asks you to use it."
+    ))
 }
 
 static RUN_BASH_DESC: LazyLock<String> = LazyLock::new(|| {
