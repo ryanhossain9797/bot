@@ -14,3 +14,9 @@ pub mod debug {
 pub mod features {
     pub const ANNOUNCE_TOOL_USE: bool = true;
 }
+pub mod git {
+    pub const SSH_KEY_PATH: &str = "";
+    pub const GH_TOKEN: &str = "";
+    pub const NAME: &str = "";
+    pub const EMAIL: &str = "";
+}

@@ -1,4 +1,4 @@
-use crate::externals::container::{docker, ensure_image, is_running, revive_if_present};
+use crate::externals::container::{docker, docker_ok, ensure_image, is_running, revive_if_present};
 use crate::types::conversation::ToolResultData;
 use crate::types::media::{Image, MessageImage};
 use std::process::Stdio;
@@ -28,25 +28,86 @@ pub(crate) async fn ensure_worker_image() -> Result<(), String> {
     ensure_image(WORKER_IMAGE, WORKER_BUILD_CONTEXT).await
 }
 
+const KEY_DEST: &str = "/root/.ssh/id_ed25519";
+
+struct GitAuth {
+    key_path: &'static str,
+    token: &'static str,
+    name: &'static str,
+    email: &'static str,
+}
+
+fn git_auth() -> Option<GitAuth> {
+    use crate::configuration::git;
+    (!git::SSH_KEY_PATH.is_empty() && !git::GH_TOKEN.is_empty()).then_some(GitAuth {
+        key_path: git::SSH_KEY_PATH,
+        token: git::GH_TOKEN,
+        name: git::NAME,
+        email: git::EMAIL,
+    })
+}
+
+impl GitAuth {
+    fn run_env(&self) -> Vec<String> {
+        [
+            format!("GH_TOKEN={}", self.token),
+            format!("GIT_AUTHOR_NAME={}", self.name),
+            format!("GIT_AUTHOR_EMAIL={}", self.email),
+            format!("GIT_COMMITTER_NAME={}", self.name),
+            format!("GIT_COMMITTER_EMAIL={}", self.email),
+            format!("GIT_SSH_COMMAND=ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -i {KEY_DEST}"),
+        ]
+        .into_iter()
+        .flat_map(|e| ["-e".to_string(), e])
+        .collect()
+    }
+}
+
+async fn configure_git_auth(name: &str, g: &GitAuth) -> Result<(), String> {
+    let key_into = format!("{name}:{KEY_DEST}");
+    docker_ok(&["exec", name, "mkdir", "-p", "/root/.ssh"]).await?;
+    docker_ok(&["exec", name, "chmod", "700", "/root/.ssh"]).await?;
+    docker_ok(&["cp", g.key_path, &key_into]).await?;
+    docker_ok(&["exec", name, "chown", "root:root", KEY_DEST]).await?;
+    docker_ok(&["exec", name, "chmod", "600", KEY_DEST]).await?;
+    docker_ok(&["exec", name, "git", "config", "--global", "user.name", g.name]).await?;
+    docker_ok(&["exec", name, "git", "config", "--global", "user.email", g.email]).await?;
+    let _ = docker(&["exec", name, "gh", "auth", "setup-git"]).await;
+    Ok(())
+}
+
 async fn spawn_worker(name: &str) -> Result<(), String> {
     ensure_worker_image().await?;
-    let out = docker(&[
+    let git = git_auth();
+
+    let mut args: Vec<String> = [
         "run", "-d", "--name", name,
         "--memory", "1g", "--cpus", "2", "--pids-limit", "512",
         "--security-opt", "no-new-privileges",
-        WORKER_IMAGE, "sleep", "infinity",
-    ])
-    .await?;
-    if out.status.success() {
-        return Ok(());
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    if let Some(g) = &git {
+        args.extend(g.run_env());
     }
-    if is_running(name).await {
-        return Ok(());
+    args.extend([WORKER_IMAGE, "sleep", "infinity"].into_iter().map(str::to_string));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+
+    let out = docker(&arg_refs).await?;
+    if !out.status.success() && !is_running(name).await {
+        return Err(format!(
+            "could not start sandbox: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
-    Err(format!(
-        "could not start sandbox: {}",
-        String::from_utf8_lossy(&out.stderr).trim()
-    ))
+
+    if let Some(g) = &git {
+        if let Err(e) = configure_git_auth(name, g).await {
+            eprintln!("[worker] git auth setup failed for {name} (sandbox usable, unauthenticated): {e}");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) const ACTUAL_MAX: usize = 20_000;
