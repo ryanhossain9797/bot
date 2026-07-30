@@ -16,7 +16,7 @@ pub mod features {
 }
 pub mod git {
     pub const SSH_KEY_PATH: &str = "";
-    pub const GH_TOKEN: &str = "";
+    pub const GH_TOKEN_PATH: &str = "";
     pub const NAME: &str = "";
     pub const EMAIL: &str = "";
 }
