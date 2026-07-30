@@ -32,16 +32,26 @@ const KEY_DEST: &str = "/root/.ssh/id_ed25519";
 
 struct GitAuth {
     key_path: &'static str,
-    token: &'static str,
+    token: String,
     name: &'static str,
     email: &'static str,
+}
+
+pub(crate) fn gh_token() -> String {
+    use crate::configuration::git;
+    if git::GH_TOKEN_PATH.is_empty() {
+        return String::new();
+    }
+    std::fs::read_to_string(git::GH_TOKEN_PATH)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }
 
 fn git_auth() -> Option<GitAuth> {
     use crate::configuration::git;
     (!git::SSH_KEY_PATH.is_empty()).then_some(GitAuth {
         key_path: git::SSH_KEY_PATH,
-        token: git::GH_TOKEN,
+        token: gh_token(),
         name: git::NAME,
         email: git::EMAIL,
     })

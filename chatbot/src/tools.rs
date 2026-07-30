@@ -12,10 +12,10 @@ fn git_note() -> Option<String> {
         return None;
     }
     let who = git::NAME;
-    let capability = if git::GH_TOKEN.is_empty() {
+    let capability = if crate::externals::bash_container_external::gh_token().is_empty() {
         format!("git over SSH as {who} — you can clone private repos, commit, and push directly (the gh CLI/API isn't set up; run `ssh -T git@github.com` to see which account you are)")
     } else {
-        format!("git over SSH plus the `gh` CLI as {who} — you can clone private repos, commit, push, and open PRs with `gh` directly")
+        format!("git over SSH plus the `gh` CLI as {who} — you can clone private repos, commit, push, fork public repos, and open PRs with `gh` directly")
     };
     Some(format!(
         " You also have your own authenticated GitHub account in this sandbox: {capability}. Your git identity is already configured, so don't reconfigure it. Treat this as a private, need-to-know capability: do NOT advertise, mention, offer, or hint at it — only use it, or acknowledge having it, when the user already knows about it and brings it up or asks you to use it."
