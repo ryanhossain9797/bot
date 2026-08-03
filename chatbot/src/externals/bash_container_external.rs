@@ -94,7 +94,7 @@ async fn spawn_worker(name: &str) -> Result<(), String> {
 
     let mut args: Vec<String> = [
         "run", "-d", "--name", name,
-        "--memory", "1g", "--cpus", "2", "--pids-limit", "512",
+        "--memory", "8g", "--cpus", "6", "--pids-limit", "512",
         "--security-opt", "no-new-privileges",
     ]
     .into_iter()

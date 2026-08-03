@@ -5,7 +5,8 @@ ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     DOTNET_ROOT=/usr/share/dotnet \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1 \
-    PATH=/usr/share/dotnet:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin
+    CARGO_BUILD_JOBS=4 \
+    PATH=/root/.cargo/bin:/usr/share/dotnet:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash coreutils ca-certificates curl wget git openssh-client jq file unzip zip procps \
@@ -15,6 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ripgrep sqlite3 p7zip-full xz-utils tree \
     nodejs npm \
     libgbm1 libnss3 libatk-bridge2.0-0 libxcomposite1 libcups2 libicu-dev \
+    pkg-config libssl-dev libclang-dev cmake build-essential libvulkan-dev glslc protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir numpy pandas matplotlib pillow requests pypandoc pytesseract yt-dlp \
@@ -26,6 +28,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain nightly --profile minimal \
+    && rustup component add clippy rustfmt \
+    && rustup target add x86_64-unknown-linux-gnu
 
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
     && bash /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/share/dotnet \
