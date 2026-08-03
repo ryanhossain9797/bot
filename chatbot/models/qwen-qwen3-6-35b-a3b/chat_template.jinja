@@ -78,6 +78,9 @@
 {%- if ns.multi_step_tool %}
     {%- set ns.last_query_index = 0 %}
 {%- endif %}
+{%- if ns.last_query_index < (messages | length) - 10 %}
+    {%- set ns.last_query_index = (messages | length) - 10 %}
+{%- endif %}
 {%- for message in messages %}
     {%- set content = render_content(message.content, true)|trim %}
     {%- if message.role == "system" %}
