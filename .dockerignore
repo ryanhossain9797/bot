@@ -16,7 +16,6 @@ Thumbs.db
 !models/README.md
 
 models/
-**/*.gguf
 
 flycheck0/
 
