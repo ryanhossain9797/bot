@@ -394,6 +394,8 @@ async fn insert_outbox_rows(
     outbox: &[OutboxDraft],
 ) -> anyhow::Result<()> {
     for (offset, draft) in outbox.iter().enumerate() {
+        let ts = jiff::Timestamp::now();
+        let created_at = ts.as_second() * 1_000 + ts.subsec_millisecond() as i64;
         conn.execute(
             "INSERT INTO outbox (sender_machine, sender_id, seq, sender_generation, sender_id_json, target_machine, target_id_json, action, kind, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -407,7 +409,7 @@ async fn insert_outbox_rows(
                 draft.target_id_json.as_str(),
                 draft.payload_json.as_str(),
                 draft.kind.as_str(),
-                chrono::Utc::now().timestamp_millis(),
+                created_at,
             ),
         )
         .await

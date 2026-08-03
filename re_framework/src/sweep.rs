@@ -61,7 +61,8 @@ async fn sweep_once(
     (outbox_grace_ms, timer_look_ahead_ms): (i64, i64),
     recently_woken: &mut HashMap<(String, String), Instant>,
 ) -> usize {
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now = jiff::Timestamp::now();
+    let now_ms = now.as_second() * 1_000 + now.subsec_millisecond() as i64;
     let stalled = paged("stalled-outbox", |offset| {
         store().stalled_outbox_senders(now_ms - outbox_grace_ms, BATCH, offset)
     })

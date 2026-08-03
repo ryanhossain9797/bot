@@ -1,5 +1,4 @@
 use crate::{handle, register, Effects, EntityId, Identified, Scheduled, StateMachine};
-use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
@@ -37,7 +36,7 @@ struct CounterMachine;
 #[derive(Clone, Serialize, Deserialize)]
 struct CounterState {
     total: i64,
-    tick_at: Option<DateTime<Utc>>,
+    tick_at: Option<StdDuration>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,7 +69,7 @@ impl StateMachine for CounterMachine {
     fn construct(init: CounterInit, _effects: &mut Effects<Self>) -> CounterState {
         CounterState {
             total: init.start,
-            tick_at: Some(Utc::now() + Duration::milliseconds(50)),
+            tick_at: Some(StdDuration::from_millis(50)),
         }
     }
 

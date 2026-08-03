@@ -1,11 +1,12 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
 use crate::store::{new_generation, store, CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite};
-use chrono::Utc;
 use dashmap::DashMap;
+use jiff::Timestamp;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 
 enum Envelope<A> {
@@ -437,11 +438,14 @@ async fn run_entity<SM: StateMachine>(
         let envelope = match SM::schedule(&state) {
             None => rx.recv().await,
             Some(scheduled) => {
-                let delay = (scheduled.at - Utc::now())
-                    .to_std()
-                    .unwrap_or(std::time::Duration::ZERO);
+                let d = Timestamp::now().duration_until(scheduled.at);
+                let until = if d.is_positive() {
+                    Duration::from_millis(d.as_millis() as u64)
+                } else {
+                    Duration::ZERO
+                };
 
-                tokio::time::timeout(delay, rx.recv())
+                tokio::time::timeout(until, rx.recv())
                     .await
                     .unwrap_or_else(|_e| Some(Envelope::Act(scheduled.action)))
             }
@@ -534,7 +538,7 @@ async fn run_entity<SM: StateMachine>(
 }
 
 fn tick_deadline<SM: StateMachine>(state: &SM::State) -> Option<i64> {
-    SM::schedule(state).map(|scheduled| scheduled.at.timestamp_millis())
+    SM::schedule(state).map(|scheduled| scheduled.at.as_millisecond())
 }
 
 fn rows_from_drafts(generation: i64, first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec<OutboxRow> {
@@ -643,7 +647,7 @@ async fn ack_with_retry(
 fn log_transition<SM: StateMachine>(label: &str) {
     println!(
         "TRANSITION AT {} - StateMachine: {} - {}",
-        Utc::now(),
+        jiff::Timestamp::now(),
         SM::name(),
         label
     );

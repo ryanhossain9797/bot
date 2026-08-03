@@ -7,7 +7,7 @@ use crate::{
     },
     Env,
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use llama_cpp_2::mtmd::mtmd_default_marker;
 
 use std::sync::Arc;
@@ -61,7 +61,7 @@ fn session_footer(
     } else {
         "DIRECT MESSAGE (one-to-one with the user), not a group chat- every message is meant for you, there is no one else."
     };
-    let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+    let now = Timestamp::now().to_string();
     let bot_name = crate::BOT_NAME;
 
     let mut lines = vec![

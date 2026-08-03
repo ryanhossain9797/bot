@@ -37,7 +37,8 @@ pub(crate) struct OutboxDraft {
 
 pub(crate) fn new_generation() -> i64 {
     static NEXT: OnceLock<std::sync::atomic::AtomicI64> = OnceLock::new();
-    NEXT.get_or_init(|| std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp_micros()))
+    let now = jiff::Timestamp::now();
+    NEXT.get_or_init(|| std::sync::atomic::AtomicI64::new(now.as_second() * 1_000_000 + now.subsec_millisecond() as i64 * 1_000))
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -241,7 +242,7 @@ pub(crate) mod contract {
             pending.iter().map(|r| (r.seq, r.kind, r.payload_json.as_str())).collect::<Vec<_>>(),
             vec![(0, RowKind::Act, "\"a1\""), (1, RowKind::Construct, "\"a2\"")]
         );
-        let far_future = chrono::Utc::now().timestamp_millis() + 3_600_000;
+        let far_future = jiff::Timestamp::now().as_second() * 1_000 + jiff::Timestamp::now().subsec_millisecond() as i64 + 3_600_000;
         assert_eq!(
             store.stalled_outbox_senders(far_future, 10, 0).await.expect("stalled"),
             vec![("TestMachine".to_string(), "\"e1\"".to_string())]

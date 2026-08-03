@@ -1,4 +1,5 @@
 use crate::effects::Effects;
+use jiff::Timestamp;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
@@ -12,8 +13,10 @@ pub trait Identified {
     fn get_id(&self) -> &Self::Id;
 }
 
+/// A scheduled action with an absolute wall-clock time.
+#[derive(Debug, Clone)]
 pub struct Scheduled<A> {
-    pub at: chrono::DateTime<chrono::Utc>,
+    pub at: Timestamp,
     pub action: A,
 }
 

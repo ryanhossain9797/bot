@@ -1,13 +1,21 @@
 
 use crate::externals::{decide, execute_tool, send_reply, BrainInput};
 use crate::stats::{StatsAction, StatsId, StatsInit, StatsMachine};
-use chrono::{DateTime, Duration, Utc};
+use jiff::Timestamp;
 use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const IDLE_RESET_SECS: i64 = 60;
 const RESCUE_SECS: i64 = 30;
+
+fn now() -> Timestamp {
+    Timestamp::now()
+}
+
+fn in_future(seconds: i64) -> Timestamp {
+    now().checked_add(jiff::SignedDuration::from_secs(seconds)).unwrap()
+}
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConversationId(pub String);
@@ -23,7 +31,7 @@ pub struct Conversation {
     turns: u64,
     history: Vec<HistoryEntry>,
     phase: Phase,
-    phase_since: DateTime<Utc>,
+    phase_since: Timestamp,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -35,7 +43,7 @@ pub enum HistoryEntry {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 enum Phase {
-    Idle { reset_at: Option<DateTime<Utc>> },
+    Idle { reset_at: Option<Timestamp> },
     AwaitingDecision,
     RunningTool { tool: String },
     SendingReply,
@@ -83,7 +91,7 @@ impl StateMachine for ConversationMachine {
             turns: 0,
             history: Vec::new(),
             phase: Phase::Idle { reset_at: None },
-            phase_since: Utc::now(),
+            phase_since: now(),
         }
     }
 
@@ -105,7 +113,7 @@ impl StateMachine for ConversationMachine {
             }),
             Phase::Idle { reset_at: None } => None,
             Phase::AwaitingDecision | Phase::RunningTool { .. } | Phase::SendingReply => Some(Scheduled {
-                at: state.phase_since + Duration::seconds(RESCUE_SECS),
+                at: state.phase_since.checked_add(jiff::SignedDuration::from_secs(RESCUE_SECS)).unwrap(),
                 action: ConversationAction::ForceReset,
             }),
         }
@@ -137,7 +145,7 @@ fn conversation_transition(
                 turns: state.turns + 1,
                 history,
                 phase: Phase::AwaitingDecision,
-                phase_since: Utc::now(),
+                phase_since: now(),
             })
         }
 
@@ -148,7 +156,7 @@ fn conversation_transition(
                 turns: state.turns,
                 history: with_entry(&state.history, HistoryEntry::Bot(reply)),
                 phase: Phase::SendingReply,
-                phase_since: Utc::now(),
+                phase_since: now(),
             })
         }
 
@@ -158,7 +166,7 @@ fn conversation_transition(
                 turns: state.turns,
                 history: state.history.clone(),
                 phase: Phase::RunningTool { tool: tool.clone() },
-                phase_since: Utc::now(),
+                phase_since: now(),
             })
         }
 
@@ -178,7 +186,7 @@ fn conversation_transition(
                     },
                 ),
                 phase: Phase::AwaitingDecision,
-                phase_since: Utc::now(),
+                phase_since: now(),
             })
         }
 
@@ -186,16 +194,16 @@ fn conversation_transition(
             turns: state.turns,
             history: state.history.clone(),
             phase: Phase::Idle {
-                reset_at: Some(Utc::now() + Duration::seconds(IDLE_RESET_SECS)),
+                reset_at: Some(now() + jiff::SignedDuration::from_secs(IDLE_RESET_SECS)),
             },
-            phase_since: Utc::now(),
+            phase_since: now(),
         }),
 
         (Phase::Idle { .. }, ConversationAction::IdleReset) => Ok(Conversation {
             turns: 0,
             history: Vec::new(),
             phase: Phase::Idle { reset_at: None },
-            phase_since: Utc::now(),
+            phase_since: now(),
         }),
 
         (
@@ -210,7 +218,7 @@ fn conversation_transition(
                 turns: state.turns,
                 history: state.history.clone(),
                 phase: Phase::SendingReply,
-                phase_since: Utc::now(),
+                phase_since: now(),
             })
         }
 

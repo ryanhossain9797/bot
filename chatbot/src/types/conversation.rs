@@ -1,6 +1,6 @@
 use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
 use crate::types::media::{Attachment, MessageImage};
-use chrono::{DateTime, Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -233,7 +233,7 @@ pub enum Pending {
 pub struct Conversation {
     pub pending: Vec<Pending>,
     pub state: ConversationState,
-    pub last_transition: DateTime<Utc>,
+    pub last_transition: Timestamp,
     pub is_group: bool,
     pub bot_identity: String,
     #[serde(default)]
@@ -348,7 +348,7 @@ pub enum ToolType {
 }
 
 impl ToolType {
-    pub fn rescue_timeout(&self) -> Duration {
+    pub fn rescue_timeout(&self) -> SignedDuration {
         let ms = match self {
             ToolType::RunBashCommand { .. } => 300_000,
             ToolType::VisitUrl { .. } => 90_000,
@@ -361,7 +361,7 @@ impl ToolType {
             | ToolType::MetaNoOpExtraTurn
             | ToolType::MetaMalformed { .. } => 30_000,
         };
-        Duration::milliseconds(ms)
+        SignedDuration::from_millis(ms)
     }
 }
 

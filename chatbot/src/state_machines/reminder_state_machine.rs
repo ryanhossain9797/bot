@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::Utc;
+use jiff::Timestamp;
 use re_framework::{Effects, Scheduled, StateMachine};
 
 use crate::state_machines::conversation_state_machine::ConversationMachine;
@@ -29,7 +29,7 @@ impl StateMachine for ReminderForConversationMachine {
             conversation_id: constructor.id.conversation_id,
             addressee: constructor.addressee,
             note: constructor.note,
-            created_on: Utc::now(),
+            created_on: Timestamp::now(),
             fire_at: constructor.fire_at,
         }
     }

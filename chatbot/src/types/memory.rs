@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::types::conversation::{CompactionOutput, ConversationId, HistoryEntry, InterruptionReason};
@@ -6,7 +6,7 @@ use crate::types::conversation::{CompactionOutput, ConversationId, HistoryEntry,
 #[derive(Clone, Serialize, Deserialize)]
 pub struct MemoryManager {
     pub state: MemoryManagerState,
-    pub last_transition: DateTime<Utc>,
+    pub last_transition: Timestamp,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
