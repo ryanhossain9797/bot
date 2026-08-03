@@ -44,5 +44,7 @@ COPY chatbot/searxng/ /app/searxng/
 
 COPY chatbot/skills/ /app/skills/
 
+COPY chatbot/models/qwen-qwen3-6-35b-a3b/chat_template.jinja /app/models/qwen-qwen3-6-35b-a3b/chat_template.jinja
+
 
 CMD ["/app/chatbot"]
