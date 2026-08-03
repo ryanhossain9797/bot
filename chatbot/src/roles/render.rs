@@ -78,3 +78,70 @@ pub(super) fn render(
     })?;
     Ok(rendered)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat_format::ChatMessage;
+
+    const PRIMARY_TEMPLATE: &str =
+        include_str!("../../models/qwen-qwen3-6-35b-a3b/chat_template.jinja");
+
+    fn flags() -> FormatFlags {
+        FormatFlags {
+            enable_thinking: false,
+            add_generation_prompt: true,
+        }
+    }
+
+    #[test]
+    fn anchors_to_oldest_when_no_user_query_survives_compaction() {
+        let messages = vec![
+            ChatMessage::assistant("[Summary of earlier conversation, condensed to save context]\n…"),
+            ChatMessage::assistant("Let me check that."),
+            ChatMessage::tool("call_0", "cargo: command not found"),
+        ];
+        let inputs = RenderInputs {
+            messages: &messages,
+            tools: None,
+            footer: Some("footer"),
+        };
+        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+            .expect("must anchor to the oldest message, not raise 'No user query found'");
+        assert!(out.contains("system prompt"));
+    }
+
+    #[test]
+    fn clamps_anchor_on_long_no_user_query_history() {
+        let mut messages =
+            vec![ChatMessage::assistant("[Summary of earlier conversation]\n…")];
+        for i in 0..14 {
+            messages.push(ChatMessage::assistant(format!("step {i}")));
+            messages.push(ChatMessage::tool(format!("call_{i}"), "ok"));
+        }
+        let inputs = RenderInputs {
+            messages: &messages,
+            tools: None,
+            footer: Some("footer"),
+        };
+        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+            .expect("long no-user-query history clamps and renders");
+        assert!(out.contains("system prompt"));
+    }
+
+    #[test]
+    fn renders_normal_conversation_with_user_query() {
+        let messages = vec![
+            ChatMessage::user("make it compile"),
+            ChatMessage::assistant("on it"),
+        ];
+        let inputs = RenderInputs {
+            messages: &messages,
+            tools: None,
+            footer: Some("footer"),
+        };
+        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+            .expect("normal conversation renders");
+        assert!(out.contains("make it compile"));
+    }
+}
