@@ -10,9 +10,8 @@ use crate::{
 };
 use rs_trafilatura::extract;
 use serde::Deserialize;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::sync::{Arc, LazyLock, Mutex};
 
 #[derive(Deserialize)]
 struct SearxngResponse {
@@ -311,10 +310,16 @@ async fn fetch_url_content(url: &str) -> anyhow::Result<ToolResultData> {
     Ok(ToolResultData::text(actual, simplified))
 }
 
-fn content_hash(content: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+static EDIT_LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn edit_lock(conversation_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut registry = EDIT_LOCKS.lock().expect("edit-lock registry poisoned");
+    Arc::clone(
+        registry
+            .entry(conversation_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+    )
 }
 
 fn number_lines(content: &str, from: usize, count: usize) -> String {
@@ -365,7 +370,6 @@ fn render_diff(content: &str, old: &str, new: &str) -> String {
 async fn run_tool(
     conversation_id: &str,
     tool_type: ToolType,
-    expected_file_hash: Option<String>,
 ) -> Result<ToolResultData, String> {
     match tool_type {
         ToolType::MetaNoOpExtraTurn => {
@@ -383,12 +387,10 @@ async fn run_tool(
                 actual: note.clone(),
                 simplified: note,
                 image_for_assistant: Some(image),
-                metadata: HashMap::new(),
             })
         }
         ToolType::ReadFile { path, offset, limit } => {
             let content = read_file(conversation_id, &path).await?;
-            let hash = content_hash(&content);
             let from = offset.unwrap_or(1).max(1);
             let count = limit.unwrap_or(usize::MAX);
             let numbered = number_lines(&content, from, count);
@@ -397,25 +399,13 @@ async fn run_tool(
             } else {
                 clip_to(&numbered, ACTUAL_MAX)
             };
-            Ok(ToolResultData {
-                simplified: clip_to(&body, SIMPLIFIED_MAX),
-                actual: body,
-                image_for_assistant: None,
-                metadata: HashMap::from([("file_hash".to_string(), hash)]),
-            })
+            let simplified = clip_to(&body, SIMPLIFIED_MAX);
+            Ok(ToolResultData::text(body, simplified))
         }
         ToolType::EditFile { path, old_string, new_string } => {
+            let lock = edit_lock(conversation_id);
+            let _guard = lock.lock().await;
             let content = read_file(conversation_id, &path).await?;
-            let live_hash = content_hash(&content);
-            match expected_file_hash {
-                None => return Err(format!(
-                    "'{path}' hasn't been read yet — call read_file on it before editing."
-                )),
-                Some(h) if h != live_hash => return Err(format!(
-                    "'{path}' has changed since you last read it — call read_file on it again before editing."
-                )),
-                Some(_) => {}
-            }
             match content.matches(&old_string).count() {
                 0 => return Err(format!(
                     "old_string was not found in '{path}'. Copy it exactly from read_file output (without the line-number prefixes)."
@@ -428,12 +418,8 @@ async fn run_tool(
             let updated = content.replacen(&old_string, &new_string, 1);
             write_file(conversation_id, &path, &updated).await?;
             let body = format!("Edited '{path}':\n{}", render_diff(&content, &old_string, &new_string));
-            Ok(ToolResultData {
-                simplified: clip_to(&body, SIMPLIFIED_MAX),
-                actual: body,
-                image_for_assistant: None,
-                metadata: HashMap::from([("file_hash".to_string(), content_hash(&updated))]),
-            })
+            let simplified = clip_to(&body, SIMPLIFIED_MAX);
+            Ok(ToolResultData::text(body, simplified))
         }
         ToolType::UseSkill { skill } => match skill {
             None => {
@@ -460,10 +446,9 @@ async fn run_tool(
 pub async fn execute_tool(
     conversation_id: String,
     tool_call: ToolCall,
-    expected_file_hash: Option<String>,
 ) -> ConversationAction {
     let tool_name = tool_call.tool_type.wire_name().to_string();
-    let result = run_tool(&conversation_id, tool_call.tool_type, expected_file_hash).await;
+    let result = run_tool(&conversation_id, tool_call.tool_type).await;
     if let Err(err) = &result {
         eprintln!("[tool {tool_name} id {}] failed: {err}", tool_call.id);
     }
@@ -492,5 +477,44 @@ mod tests {
             .actual
             .contains("This domain is for use in documentation examples"));
         assert!(content.actual.contains("https://iana.org/domains/example"));
+    }
+
+    #[test]
+    fn edit_lock_is_per_conversation() {
+        let a1 = edit_lock("conv-a");
+        let a2 = edit_lock("conv-a");
+        let b = edit_lock("conv-b");
+        assert!(Arc::ptr_eq(&a1, &a2), "same conversation must share one lock");
+        assert!(!Arc::ptr_eq(&a1, &b), "different conversations must not share a lock");
+    }
+
+    #[tokio::test]
+    async fn edit_lock_serializes_same_conversation() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let inside = Arc::new(AtomicBool::new(false));
+        let overlaps = Arc::new(AtomicUsize::new(0));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let inside = Arc::clone(&inside);
+                let overlaps = Arc::clone(&overlaps);
+                tokio::spawn(async move {
+                    let lock = edit_lock("serialize-test");
+                    let _guard = lock.lock().await;
+                    if inside.swap(true, Ordering::SeqCst) {
+                        overlaps.fetch_add(1, Ordering::SeqCst);
+                    }
+                    tokio::task::yield_now().await;
+                    inside.store(false, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        for t in tasks {
+            t.await.unwrap();
+        }
+        assert_eq!(
+            overlaps.load(Ordering::SeqCst),
+            0,
+            "edit lock must serialize concurrent same-conversation edits"
+        );
     }
 }

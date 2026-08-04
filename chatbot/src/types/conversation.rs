@@ -500,21 +500,6 @@ pub struct CompactionOutput {
     pub through: HistoryId,
 }
 
-pub fn latest_file_hash<'a>(history: &'a [HistoryEntry], path: &str) -> Option<&'a str> {
-    history.iter().rev().find_map(|entry| match &entry.kind {
-        HistoryEntryKind::Input(LLMInput::ToolResults(results, _)) => {
-            results.iter().rev().find_map(|r| match &r.call.tool_type {
-                ToolType::ReadFile { path: p, .. } | ToolType::EditFile { path: p, .. }
-                    if p == path =>
-                {
-                    r.data.metadata.get("file_hash").map(String::as_str)
-                }
-                _ => None,
-            })
-        }
-        _ => None,
-    })
-}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
@@ -542,7 +527,6 @@ pub struct ToolResultData {
     pub actual: String,
     pub simplified: String,
     pub image_for_assistant: Option<MessageImage>,
-    pub metadata: HashMap<String, String>,
 }
 
 impl ToolResultData {
@@ -551,7 +535,6 @@ impl ToolResultData {
             actual,
             simplified,
             image_for_assistant: None,
-            metadata: HashMap::new(),
         }
     }
 }
