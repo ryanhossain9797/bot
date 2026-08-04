@@ -6,7 +6,7 @@ use crate::externals::{
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::conversation::{
-    latest_file_hash, Pending, SystemMessage, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
+    Pending, SystemMessage, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
 };
 use crate::types::media::Attachment;
 use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
@@ -193,7 +193,6 @@ fn apply_post_send(
             tool_rounds,
             tool_calls,
         } => {
-            let history = recent_conversation.history();
             let mut pending_tools = HashMap::new();
             for tool_call in tool_calls {
                 match &tool_call.tool_type {
@@ -225,17 +224,10 @@ fn apply_post_send(
                     ToolType::MetaMalformed { report } => {
                         enqueue_self_result(effects, conversation_id, &tool_call.id, report.clone());
                     }
-                    tool_type => {
-                        let expected_file_hash = match tool_type {
-                            ToolType::EditFile { path, .. } => {
-                                latest_file_hash(&history, path).map(str::to_string)
-                            }
-                            _ => None,
-                        };
+                    _ => {
                         effects.enqueue_external(execute_tool(
                             conversation_id.to_string(),
                             tool_call.clone(),
-                            expected_file_hash,
                         ));
                     }
                 }
