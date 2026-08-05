@@ -7,8 +7,8 @@ use crate::{
     },
     Env,
 };
-use chrono::Utc;
 use llama_cpp_2::mtmd::mtmd_default_marker;
+use re_framework::Timestamp;
 
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ fn session_footer(
     } else {
         "DIRECT MESSAGE (one-to-one with the user), not a group chat- every message is meant for you, there is no one else."
     };
-    let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+    let now = Timestamp::now().strftime("%Y-%m-%d %H:%M:%S UTC");
     let bot_name = crate::BOT_NAME;
 
     let mut lines = vec![
@@ -187,10 +187,13 @@ async fn get_response_from_llm(
             InterruptionReason::Failed
         })?;
 
-    let raw = Arc::clone(&role).generate(prompt, images).await.map_err(|e| {
-        eprintln!("[llm] generation failed: {e:#}");
-        InterruptionReason::Failed
-    })?;
+    let raw = Arc::clone(&role)
+        .generate(prompt, images)
+        .await
+        .map_err(|e| {
+            eprintln!("[llm] generation failed: {e:#}");
+            InterruptionReason::Failed
+        })?;
     let parsed = role.parse_response(&raw);
 
     let thoughts = parsed.reasoning;

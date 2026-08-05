@@ -21,8 +21,7 @@ use crate::{
     },
     Env,
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use re_framework::{Effects, Scheduled, StateMachine};
+use re_framework::{Effects, Scheduled, SignedDuration, StateMachine, Timestamp};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -159,7 +158,7 @@ fn send_then(
             recent_conversation,
             post_send,
         },
-        last_transition: Utc::now(),
+        last_transition: Timestamp::now(),
         pending,
         is_group,
         bot_identity,
@@ -183,7 +182,7 @@ fn apply_post_send(
             state: ConversationState::Idle {
                 recent_conversation,
             },
-            last_transition: Utc::now(),
+            last_transition: Timestamp::now(),
             pending,
             is_group,
             bot_identity,
@@ -241,7 +240,7 @@ fn apply_post_send(
                     pending_tools,
                     completed_tools: Vec::new(),
                 },
-                last_transition: Utc::now(),
+                last_transition: Timestamp::now(),
                 pending,
                 is_group,
                 bot_identity,
@@ -272,7 +271,7 @@ fn apply_post_send(
                     current_input,
                     tool_rounds,
                 },
-                last_transition: Utc::now(),
+                last_transition: Timestamp::now(),
                 pending,
                 is_group,
                 bot_identity,
@@ -388,7 +387,7 @@ fn conversation_transition(
                     state: ConversationState::Idle {
                         recent_conversation: RecentConversation::new(String::new(), history),
                     },
-                    last_transition: Utc::now(),
+                    last_transition: Timestamp::now(),
                     ..conversation
                 })
             }
@@ -569,7 +568,7 @@ fn followup_message(input: LLMInput) -> Option<ConversationMessage> {
     }
 }
 
-fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
+fn validate_delay(delay_seconds: i64) -> Result<Timestamp, String> {
     match delay_seconds {
         d if d <= 0 => Err(format!(
             "Reminder not set: delay_seconds must be a positive number of seconds in the future (got {d})."
@@ -577,17 +576,17 @@ fn validate_delay(delay_seconds: i64) -> Result<DateTime<Utc>, String> {
         d if d > MAX_REMINDER_SECS => Err(format!(
             "Reminder not set: delay_seconds {d} is too far out (max {MAX_REMINDER_SECS}, ~1 year)."
         )),
-        d => Utc::now()
-            .checked_add_signed(ChronoDuration::seconds(d))
-            .ok_or_else(|| "Reminder not set: the requested time overflows.".to_string()),
+        d => Timestamp::now()
+            .checked_add(SignedDuration::from_secs(d))
+            .map_err(|_| "Reminder not set: the requested time overflows.".to_string()),
     }
 }
 
-fn reminder_confirmation(fire_at: DateTime<Utc>, note: &str) -> String {
+fn reminder_confirmation(fire_at: Timestamp, note: &str) -> String {
     format!(
         "Reminder set — fires around {}. Note: \"{note}\". Tell the user you've set it; you'll be \
          prompted automatically when it fires. (Reminders are lost on a redeploy.)",
-        fire_at.format("%Y-%m-%d %H:%M:%S UTC")
+        fire_at.strftime("%Y-%m-%d %H:%M:%S UTC")
     )
 }
 
@@ -664,7 +663,7 @@ fn post_transition(
             current_input,
             tool_rounds: 0,
         },
-        last_transition: Utc::now(),
+        last_transition: Timestamp::now(),
         pending: Vec::new(),
         is_group,
         bot_identity,
@@ -712,11 +711,17 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
     match &conversation.state {
         ConversationState::Idle { .. } => None,
         ConversationState::AwaitingLLMDecision { .. } => Some(Scheduled {
-            at: conversation.last_transition + ChronoDuration::milliseconds(LLM_TIMEOUT_MS),
+            at: conversation
+                .last_transition
+                .checked_add(SignedDuration::from_millis(LLM_TIMEOUT_MS))
+                .expect("millis should not overflow"),
             action: ConversationAction::LLMDecisionResult(Err(InterruptionReason::TimedOut)),
         }),
         ConversationState::SendingMessage { .. } => Some(Scheduled {
-            at: conversation.last_transition + ChronoDuration::milliseconds(SEND_TIMEOUT_MS),
+            at: conversation
+                .last_transition
+                .checked_add(SignedDuration::from_millis(SEND_TIMEOUT_MS))
+                .expect("millis should not overflow"),
             action: ConversationAction::MessageSent(Err("timed out".to_string())),
         }),
         ConversationState::RunningTools { pending_tools, .. } => pending_tools
@@ -742,7 +747,7 @@ fn construct_conversation(constructor: ConversationConstructor) -> Conversation 
     Conversation {
         pending: Vec::new(),
         state: ConversationState::default(),
-        last_transition: Utc::now(),
+        last_transition: Timestamp::now(),
         is_group: constructor.is_group,
         bot_identity: constructor.bot_identity,
         compaction_in_flight: false,

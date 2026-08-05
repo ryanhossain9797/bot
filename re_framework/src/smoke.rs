@@ -1,5 +1,5 @@
-use crate::{handle, register, Effects, EntityId, Identified, Scheduled, StateMachine};
-use chrono::{DateTime, Duration, Utc};
+use crate::{Effects, EntityId, Identified, Scheduled, StateMachine, handle, register};
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
@@ -37,7 +37,7 @@ struct CounterMachine;
 #[derive(Clone, Serialize, Deserialize)]
 struct CounterState {
     total: i64,
-    tick_at: Option<DateTime<Utc>>,
+    tick_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -70,7 +70,11 @@ impl StateMachine for CounterMachine {
     fn construct(init: CounterInit, _effects: &mut Effects<Self>) -> CounterState {
         CounterState {
             total: init.start,
-            tick_at: Some(Utc::now() + Duration::milliseconds(50)),
+            tick_at: Some(
+                Timestamp::now()
+                    .checked_add(SignedDuration::from_millis(50))
+                    .expect("50 ms should be ok"),
+            ),
         }
     }
 
@@ -120,13 +124,23 @@ impl StateMachine for CounterMachine {
 async fn smoke() {
     ensure_test_store().await;
     let obs = Arc::new(Mutex::new(Obs::default()));
-    register::<CounterMachine>(CounterEnv { obs: Arc::clone(&obs) });
+    register::<CounterMachine>(CounterEnv {
+        obs: Arc::clone(&obs),
+    });
     let sm = handle::<CounterMachine>();
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 0 }).await;
+    sm.maybe_construct(CounterInit {
+        id: "c1".to_string(),
+        start: 0,
+    })
+    .await;
     sm.act("c1".to_string(), CounterAction::Add(5)).await;
 
-    sm.maybe_construct(CounterInit { id: "c1".to_string(), start: 999 }).await;
+    sm.maybe_construct(CounterInit {
+        id: "c1".to_string(),
+        start: 999,
+    })
+    .await;
     sm.act("c1".to_string(), CounterAction::Add(3)).await;
 
     sm.act("c1".to_string(), CounterAction::Add(-1000)).await;
@@ -136,7 +150,11 @@ async fn smoke() {
 
     {
         let o = obs.lock().unwrap();
-        assert_eq!(o.totals, vec![5, 8, 18], "idempotency, Err no-op, and loop-back");
+        assert_eq!(
+            o.totals,
+            vec![5, 8, 18],
+            "idempotency, Err no-op, and loop-back"
+        );
         assert_eq!(o.ticks, 1, "timer fired exactly once");
     }
 
@@ -145,7 +163,103 @@ async fn smoke() {
     sm.act("c1".to_string(), CounterAction::Add(1)).await;
     tokio::time::sleep(StdDuration::from_millis(20)).await;
 
-    assert_eq!(obs.lock().unwrap().totals, vec![5, 8, 18], "post-delete act dropped");
+    assert_eq!(
+        obs.lock().unwrap().totals,
+        vec![5, 8, 18],
+        "post-delete act dropped"
+    );
+}
+
+struct PastDueEnv {
+    fired: Arc<Mutex<bool>>,
+}
+
+struct PastDueMachine;
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PastDueState {
+    fire_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum PastDueAction {
+    Fire,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PastDueInit {
+    id: String,
+}
+
+impl Identified for PastDueInit {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
+
+impl StateMachine for PastDueMachine {
+    type State = PastDueState;
+    type Id = String;
+    type Action = PastDueAction;
+    type Construction = PastDueInit;
+    type Env = PastDueEnv;
+
+    fn construct(_init: PastDueInit, _effects: &mut Effects<Self>) -> PastDueState {
+        PastDueState {
+            fire_at: Some(
+                Timestamp::now()
+                    .checked_sub(SignedDuration::from_secs(10))
+                    .expect("10 s in the past is representable"),
+            ),
+        }
+    }
+
+    fn transition(
+        _state: &PastDueState,
+        _id: &String,
+        env: &Arc<PastDueEnv>,
+        action: &PastDueAction,
+        _effects: &mut Effects<Self>,
+    ) -> anyhow::Result<PastDueState> {
+        match action {
+            PastDueAction::Fire => {
+                *env.fired.lock().unwrap() = true;
+                Ok(PastDueState { fire_at: None })
+            }
+        }
+    }
+
+    fn schedule(state: &PastDueState) -> Option<Scheduled<PastDueAction>> {
+        state.fire_at.map(|at| Scheduled {
+            at,
+            action: PastDueAction::Fire,
+        })
+    }
+
+    fn name() -> &'static str {
+        "PastDueMachine"
+    }
+}
+
+#[tokio::test]
+async fn overdue_timer_fires_promptly() {
+    ensure_test_store().await;
+    let fired = Arc::new(Mutex::new(false));
+    register::<PastDueMachine>(PastDueEnv {
+        fired: Arc::clone(&fired),
+    });
+    let sm = handle::<PastDueMachine>();
+    sm.maybe_construct(PastDueInit {
+        id: "pd1".to_string(),
+    })
+    .await;
+
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    assert!(
+        *fired.lock().unwrap(),
+        "a deadline 10s in the past must fire immediately, not wait |overdue|"
+    );
 }
 
 struct RtEnv {
@@ -224,7 +338,9 @@ impl StateMachine for PingerMachine {
     type Env = RtEnv;
     fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
         effects.enqueue_act_maybe_construct::<PongerMachine>(
-            PongerInit { id: "pong1".to_string() },
+            PongerInit {
+                id: "pong1".to_string(),
+            },
             PongerAction::Pong(0),
         );
         PingerState
@@ -255,18 +371,30 @@ impl StateMachine for PingerMachine {
 async fn outbound() {
     ensure_test_store().await;
     let received = Arc::new(Mutex::new(Vec::<i64>::new()));
-    register::<PongerMachine>(RtEnv { received: Arc::clone(&received) });
-    register::<PingerMachine>(RtEnv { received: Arc::clone(&received) });
+    register::<PongerMachine>(RtEnv {
+        received: Arc::clone(&received),
+    });
+    register::<PingerMachine>(RtEnv {
+        received: Arc::clone(&received),
+    });
     let ponger = handle::<PongerMachine>();
     let pinger = handle::<PingerMachine>();
 
     ponger.delete("pong1".to_string()).await;
     pinger.delete("ping1".to_string()).await;
 
-    pinger.maybe_construct(PingerInit { id: "ping1".to_string() }).await;
+    pinger
+        .maybe_construct(PingerInit {
+            id: "ping1".to_string(),
+        })
+        .await;
 
-    pinger.act("ping1".to_string(), PingerAction::Ping(42)).await;
-    pinger.act("ping1".to_string(), PingerAction::Ping(-1)).await;
+    pinger
+        .act("ping1".to_string(), PingerAction::Ping(42))
+        .await;
+    pinger
+        .act("ping1".to_string(), PingerAction::Ping(-1))
+        .await;
 
     tokio::time::sleep(StdDuration::from_millis(50)).await;
     assert_eq!(

@@ -1,7 +1,7 @@
 [package]
 name = "chatbot"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 
 [dependencies]
@@ -29,7 +29,6 @@ serenity = { version = "0.12", default-features = false, features = [
 ] }
 regex = "1.12"
 uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.13", features = ["json"] }
 urlencoding = "2.1"
 rs-trafilatura = { version="0.1", git = "https://github.com/Murrough-Foley/rs-trafilatura" }

@@ -1,4 +1,3 @@
-
 use crate::handle::machines;
 use crate::store::store;
 use std::collections::HashMap;
@@ -24,7 +23,11 @@ async fn sweeper_loop() {
     let mut interval = MIN_INTERVAL;
     loop {
         let woke = sweep_once((OUTBOX_GRACE_MS, TIMER_LOOK_AHEAD_MS), &mut recently_woken).await;
-        interval = if woke == 0 { (interval * 2).min(MAX_INTERVAL) } else { MIN_INTERVAL };
+        interval = if woke == 0 {
+            (interval * 2).min(MAX_INTERVAL)
+        } else {
+            MIN_INTERVAL
+        };
         tokio::time::sleep(interval).await;
     }
 }
@@ -61,7 +64,7 @@ async fn sweep_once(
     (outbox_grace_ms, timer_look_ahead_ms): (i64, i64),
     recently_woken: &mut HashMap<(String, String), Instant>,
 ) -> usize {
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
     let stalled = paged("stalled-outbox", |offset| {
         store().stalled_outbox_senders(now_ms - outbox_grace_ms, BATCH, offset)
     })

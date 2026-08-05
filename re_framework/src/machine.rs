@@ -1,6 +1,7 @@
 use crate::effects::Effects;
-use serde::de::DeserializeOwned;
+use jiff::Timestamp;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 pub trait EntityId: Clone + Eq + Serialize + DeserializeOwned + Send + Sync + 'static {
@@ -13,7 +14,7 @@ pub trait Identified {
 }
 
 pub struct Scheduled<A> {
-    pub at: chrono::DateTime<chrono::Utc>,
+    pub at: Timestamp,
     pub action: A,
 }
 

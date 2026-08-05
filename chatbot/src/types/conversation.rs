@@ -1,6 +1,6 @@
 use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
 use crate::types::media::{Attachment, MessageImage};
-use chrono::{DateTime, Duration, Utc};
+use re_framework::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -180,7 +180,11 @@ impl ConversationMessage {
 
     pub fn redacted(&self) -> ConversationMessage {
         ConversationMessage {
-            attachments: self.attachments.iter().map(Attachment::dehydrated).collect(),
+            attachments: self
+                .attachments
+                .iter()
+                .map(Attachment::dehydrated)
+                .collect(),
             ..self.clone()
         }
     }
@@ -204,7 +208,11 @@ impl ConversationMessage {
                     }
                     None => dehydrated += 1,
                 },
-                Attachment::File { filename, content_type, url } => {
+                Attachment::File {
+                    filename,
+                    content_type,
+                    url,
+                } => {
                     let kind = content_type.as_deref().unwrap_or("unknown type");
                     parts.push(format!("file {filename} ({kind}) url: {url}"));
                 }
@@ -233,7 +241,7 @@ pub enum Pending {
 pub struct Conversation {
     pub pending: Vec<Pending>,
     pub state: ConversationState,
-    pub last_transition: DateTime<Utc>,
+    pub last_transition: Timestamp,
     pub is_group: bool,
     pub bot_identity: String,
     #[serde(default)]
@@ -283,7 +291,11 @@ impl LLMInput {
 
                 for r in results {
                     let mut parts: Vec<String> = Vec::new();
-                    let text = if full { &r.data.actual } else { &r.data.simplified };
+                    let text = if full {
+                        &r.data.actual
+                    } else {
+                        &r.data.simplified
+                    };
                     if !text.is_empty() {
                         parts.push(text.clone());
                     }
@@ -318,11 +330,19 @@ impl LLMInput {
 #[strum_discriminants(derive(EnumIter))]
 #[strum_discriminants(vis(pub))]
 pub enum ToolType {
-    WebSearch { query: String },
-    VisitUrl { url: String },
-    RunBashCommand { command: String },
+    WebSearch {
+        query: String,
+    },
+    VisitUrl {
+        url: String,
+    },
+    RunBashCommand {
+        command: String,
+    },
     ResetBashContainer,
-    ViewImage { path: String },
+    ViewImage {
+        path: String,
+    },
     ReadFile {
         path: String,
         offset: Option<usize>,
@@ -348,7 +368,7 @@ pub enum ToolType {
 }
 
 impl ToolType {
-    pub fn rescue_timeout(&self) -> Duration {
+    pub fn rescue_timeout(&self) -> SignedDuration {
         let ms = match self {
             ToolType::RunBashCommand { .. } => 300_000,
             ToolType::VisitUrl { .. } => 90_000,
@@ -361,7 +381,7 @@ impl ToolType {
             | ToolType::MetaNoOpExtraTurn
             | ToolType::MetaMalformed { .. } => 30_000,
         };
-        Duration::milliseconds(ms)
+        SignedDuration::from_millis(ms)
     }
 }
 

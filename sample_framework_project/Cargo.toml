@@ -1,18 +1,17 @@
 [package]
 name = "sample_framework_project"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 re_framework = { path = "../re_framework" }
 tokio = { version = "1.36", features = ["full"] }
 anyhow = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = "1.0"
-turso = "0.6.1"
+turso = "0.7"
 
 [lints]
 workspace = true

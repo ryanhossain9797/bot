@@ -1,9 +1,10 @@
-
 use crate::store::{
-    init_store, CallToken, LoadedEntity, OutboxDraft, OutboxRow, RowKind, SaveOutcome, Store, TransitionWrite,
+    CallToken, LoadedEntity, OutboxDraft, OutboxRow, RowKind, SaveOutcome, Store, TransitionWrite,
+    init_store,
 };
 use anyhow::Context;
 use async_trait::async_trait;
+use jiff::Timestamp;
 
 pub(crate) struct TursoStore {
     db: turso::Database,
@@ -15,8 +16,12 @@ pub async fn init_turso_store(path: &str) -> anyhow::Result<()> {
 }
 
 async fn open_turso_store(path: &str) -> anyhow::Result<TursoStore> {
-    if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir).with_context(|| format!("create_dir_all {}", dir.display()))?;
+    if let Some(dir) = std::path::Path::new(path)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("create_dir_all {}", dir.display()))?;
     }
     let db = turso::Builder::new_local(path)
         .build()
@@ -79,7 +84,11 @@ impl TursoStore {
 
 #[async_trait]
 impl Store for TursoStore {
-    async fn load(&self, machine: &'static str, id_string: &str) -> anyhow::Result<Option<LoadedEntity>> {
+    async fn load(
+        &self,
+        machine: &'static str,
+        id_string: &str,
+    ) -> anyhow::Result<Option<LoadedEntity>> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -111,15 +120,28 @@ impl Store for TursoStore {
         outbox: &[OutboxDraft],
     ) -> anyhow::Result<SaveOutcome> {
         let conn = self.connect()?;
-        conn.execute("BEGIN IMMEDIATE", ()).await.context("begin insert")?;
-        let result =
-            insert_in_tx(&conn, machine, id_string, id_json, generation, state_json, next_tick_on, outbox).await;
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .context("begin insert")?;
+        let result = insert_in_tx(
+            &conn,
+            machine,
+            id_string,
+            id_json,
+            generation,
+            state_json,
+            next_tick_on,
+            outbox,
+        )
+        .await;
         finish_tx(&conn, result).await
     }
 
     async fn save(&self, write: &TransitionWrite) -> anyhow::Result<SaveOutcome> {
         let conn = self.connect()?;
-        conn.execute("BEGIN IMMEDIATE", ()).await.context("begin save")?;
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .context("begin save")?;
         let result = save_in_tx(&conn, write).await;
         finish_tx(&conn, result).await
     }
@@ -135,7 +157,12 @@ impl Store for TursoStore {
             .query(
                 "SELECT caller_generation, last_seq FROM call_dedup
                  WHERE machine = ? AND id = ? AND caller_machine = ? AND caller_id = ?",
-                (machine, id_string, token.sender_machine, token.sender_id.as_str()),
+                (
+                    machine,
+                    id_string,
+                    token.sender_machine,
+                    token.sender_id.as_str(),
+                ),
             )
             .await
             .context("dedup lookup")?;
@@ -153,7 +180,11 @@ impl Store for TursoStore {
         }
     }
 
-    async fn pending_outbox(&self, machine: &'static str, sender_id: &str) -> anyhow::Result<Vec<OutboxRow>> {
+    async fn pending_outbox(
+        &self,
+        machine: &'static str,
+        sender_id: &str,
+    ) -> anyhow::Result<Vec<OutboxRow>> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -199,7 +230,12 @@ impl Store for TursoStore {
         collect_pairs(&mut rows).await
     }
 
-    async fn due_timers(&self, cutoff_ms: i64, limit: i64, offset: i64) -> anyhow::Result<Vec<(String, String)>> {
+    async fn due_timers(
+        &self,
+        cutoff_ms: i64,
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<Vec<(String, String)>> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -252,7 +288,9 @@ impl Store for TursoStore {
 
     async fn delete(&self, machine: &'static str, id_string: &str) -> anyhow::Result<()> {
         let conn = self.connect()?;
-        conn.execute("BEGIN IMMEDIATE", ()).await.context("begin delete")?;
+        conn.execute("BEGIN IMMEDIATE", ())
+            .await
+            .context("begin delete")?;
         let result = async {
             conn.execute(
                 "DELETE FROM entities WHERE machine = ? AND id = ?",
@@ -288,14 +326,24 @@ impl Store for TursoStore {
 async fn collect_pairs(rows: &mut turso::Rows) -> anyhow::Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.context("pair row")? {
-        out.push((row.get(0).context("column 0")?, row.get(1).context("column 1")?));
+        out.push((
+            row.get(0).context("column 0")?,
+            row.get(1).context("column 1")?,
+        ));
     }
     Ok(out)
 }
 
-async fn current_version(conn: &turso::Connection, machine: &str, id: &str) -> anyhow::Result<Option<i64>> {
+async fn current_version(
+    conn: &turso::Connection,
+    machine: &str,
+    id: &str,
+) -> anyhow::Result<Option<i64>> {
     let mut rows = conn
-        .query("SELECT version FROM entities WHERE machine = ? AND id = ?", (machine, id))
+        .query(
+            "SELECT version FROM entities WHERE machine = ? AND id = ?",
+            (machine, id),
+        )
         .await
         .context("version probe")?;
     match rows.next().await.context("version probe row")? {
@@ -316,7 +364,9 @@ async fn insert_in_tx(
     outbox: &[OutboxDraft],
 ) -> anyhow::Result<SaveOutcome> {
     if let Some(actual) = current_version(conn, machine, id_string).await? {
-        return Ok(SaveOutcome::Conflict { actual: Some(actual) });
+        return Ok(SaveOutcome::Conflict {
+            actual: Some(actual),
+        });
     }
     conn.execute(
         "INSERT INTO entities (machine, id, id_json, generation, state, version, next_outbox_seq, next_tick_on)
@@ -337,7 +387,10 @@ async fn insert_in_tx(
     Ok(SaveOutcome::Ok)
 }
 
-async fn save_in_tx(conn: &turso::Connection, write: &TransitionWrite) -> anyhow::Result<SaveOutcome> {
+async fn save_in_tx(
+    conn: &turso::Connection,
+    write: &TransitionWrite,
+) -> anyhow::Result<SaveOutcome> {
     let updated = conn
         .execute(
             "UPDATE entities SET state = ?, version = version + 1, next_outbox_seq = ?, next_tick_on = ?
@@ -358,8 +411,16 @@ async fn save_in_tx(conn: &turso::Connection, write: &TransitionWrite) -> anyhow
         let actual = current_version(conn, write.machine, &write.id_string).await?;
         return Ok(SaveOutcome::Conflict { actual });
     }
-    insert_outbox_rows(conn, write.machine, &write.id_string, &write.id_json, write.generation, write.first_seq, &write.outbox)
-        .await?;
+    insert_outbox_rows(
+        conn,
+        write.machine,
+        &write.id_string,
+        &write.id_json,
+        write.generation,
+        write.first_seq,
+        &write.outbox,
+    )
+    .await?;
     if let Some(token) = &write.dedup {
         conn.execute(
             "INSERT INTO call_dedup (machine, id, caller_machine, caller_id, caller_generation, last_seq)
@@ -407,7 +468,7 @@ async fn insert_outbox_rows(
                 draft.target_id_json.as_str(),
                 draft.payload_json.as_str(),
                 draft.kind.as_str(),
-                chrono::Utc::now().timestamp_millis(),
+                Timestamp::now().as_millisecond(),
             ),
         )
         .await
@@ -437,7 +498,8 @@ mod tests {
     use crate::store::contract;
 
     async fn fresh_store(tag: &str) -> TursoStore {
-        let path = std::env::temp_dir().join(format!("re_fw_store_test_{}_{tag}.db", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("re_fw_store_test_{}_{tag}.db", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let db = turso::Builder::new_local(path.to_str().expect("utf8 temp path"))
             .build()
