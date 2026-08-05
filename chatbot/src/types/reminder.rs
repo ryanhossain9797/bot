@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use re_framework::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -45,8 +45,8 @@ pub struct ReminderForConversation {
     pub conversation_id: ConversationId,
     pub addressee: String,
     pub note: String,
-    pub created_on: DateTime<Utc>,
-    pub fire_at: DateTime<Utc>,
+    pub created_on: Timestamp,
+    pub fire_at: Timestamp,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -65,7 +65,7 @@ pub struct ReminderConstructor {
     pub id: ReminderForConversationId,
     pub addressee: String,
     pub note: String,
-    pub fire_at: DateTime<Utc>,
+    pub fire_at: Timestamp,
 }
 
 impl re_framework::Identified for ReminderConstructor {

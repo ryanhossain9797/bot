@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use chrono::{Duration as ChronoDuration, Utc};
-use re_framework::{Effects, Scheduled, StateMachine};
+use re_framework::{Effects, Scheduled, SignedDuration, StateMachine, Timestamp};
 
 use crate::externals::summarize_external::summarize;
 use crate::state_machines::conversation_state_machine::ConversationMachine;
@@ -28,7 +27,7 @@ impl StateMachine for MemoryManagerMachine {
     ) -> MemoryManager {
         MemoryManager {
             state: MemoryManagerState::Idle,
-            last_transition: Utc::now(),
+            last_transition: Timestamp::now(),
         }
     }
 
@@ -60,7 +59,7 @@ impl StateMachine for MemoryManagerMachine {
 
         Ok(MemoryManager {
             state: next_state,
-            last_transition: Utc::now(),
+            last_transition: Timestamp::now(),
         })
     }
 
@@ -68,7 +67,10 @@ impl StateMachine for MemoryManagerMachine {
         match &state.state {
             MemoryManagerState::Idle => None,
             MemoryManagerState::Compacting => Some(Scheduled {
-                at: state.last_transition + ChronoDuration::milliseconds(COMPACT_TIMEOUT_MS),
+                at: state
+                    .last_transition
+                    .checked_add(SignedDuration::from_millis(COMPACT_TIMEOUT_MS))
+                    .expect("millis should not overflow"),
                 action: MemoryManagerAction::CompactionDone(Err(InterruptionReason::TimedOut)),
             }),
         }

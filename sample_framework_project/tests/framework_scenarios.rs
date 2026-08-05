@@ -1,11 +1,11 @@
-
-use re_framework::{handle, register, Effects, EntityId, Identified, Scheduled, StateMachine};
+use re_framework::{
+    handle, register, Effects, EntityId, Identified, Scheduled, StateMachine, Timestamp,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-
 
 static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -34,7 +34,8 @@ async fn raw_conn() -> turso::Connection {
         .await
         .expect("open raw db handle");
     let conn = db.connect().expect("raw connect");
-    conn.busy_timeout(Duration::from_secs(5)).expect("raw busy_timeout");
+    conn.busy_timeout(Duration::from_secs(5))
+        .expect("raw busy_timeout");
     conn
 }
 
@@ -44,7 +45,12 @@ fn recorded() -> &'static Mutex<HashMap<String, Vec<i64>>> {
 }
 
 fn values(receiver: &str) -> Vec<i64> {
-    recorded().lock().expect("recorded lock").get(receiver).cloned().unwrap_or_default()
+    recorded()
+        .lock()
+        .expect("recorded lock")
+        .get(receiver)
+        .cloned()
+        .unwrap_or_default()
 }
 
 async fn entity_version(machine: &str, id: &str) -> Option<i64> {
@@ -82,7 +88,10 @@ async fn pending_outbox_count(machine: &str, sender_id: &str) -> i64 {
 async fn wait_for(what: &str, timeout: Duration, mut cond: impl FnMut() -> bool) {
     let deadline = tokio::time::Instant::now() + timeout;
     while !cond() {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for: {what}");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for: {what}"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
@@ -97,7 +106,6 @@ async fn wait_for_outbox_empty(machine: &str, sender_id: &str, timeout: Duration
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Sid(String);
@@ -142,7 +150,12 @@ impl StateMachine for RecvMachine {
         _effects: &mut Effects<Self>,
     ) -> anyhow::Result<RecvState> {
         let RecvAction::Val(n) = action;
-        recorded().lock().expect("recorded lock").entry(id.0.clone()).or_default().push(*n);
+        recorded()
+            .lock()
+            .expect("recorded lock")
+            .entry(id.0.clone())
+            .or_default()
+            .push(*n);
         Ok(state.clone())
     }
     fn schedule(_state: &RecvState) -> Option<Scheduled<RecvAction>> {
@@ -194,7 +207,9 @@ impl StateMachine for SenderMachine {
             }
             SenderAction::SendToLate { to, v } => {
                 effects.enqueue_act_maybe_construct::<LateMachine>(
-                    LateInit { id: Sid(to.clone()) },
+                    LateInit {
+                        id: Sid(to.clone()),
+                    },
                     LateAction::Val(*v),
                 );
             }
@@ -288,7 +303,12 @@ impl StateMachine for LateMachine {
         _effects: &mut Effects<Self>,
     ) -> anyhow::Result<LateState> {
         let LateAction::Val(n) = action;
-        recorded().lock().expect("recorded lock").entry(id.0.clone()).or_default().push(*n);
+        recorded()
+            .lock()
+            .expect("recorded lock")
+            .entry(id.0.clone())
+            .or_default()
+            .push(*n);
         Ok(state.clone())
     }
     fn schedule(_state: &LateState) -> Option<Scheduled<LateAction>> {
@@ -299,23 +319,32 @@ impl StateMachine for LateMachine {
     }
 }
 
-
 #[tokio::test]
 async fn c1_construct_actions_apply_exactly_once() {
     let _guard = SERIAL.lock().await;
     setup().await;
 
-    handle::<RecvMachine>().maybe_construct(RecvInit { id: Sid("c1_r".into()) }).await;
+    handle::<RecvMachine>()
+        .maybe_construct(RecvInit {
+            id: Sid("c1_r".into()),
+        })
+        .await;
     handle::<CtorSpamMachine>()
-        .maybe_construct(CtorSpamInit { id: Sid("c1_s".into()), target: "c1_r".into() })
+        .maybe_construct(CtorSpamInit {
+            id: Sid("c1_s".into()),
+            target: "c1_r".into(),
+        })
         .await;
 
     wait_for_outbox_empty("ScnCtorSpam", "c1_s", Duration::from_secs(10)).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    assert_eq!(values("c1_r"), vec![1, 2], "each construct-enqueued action must apply exactly once");
+    assert_eq!(
+        values("c1_r"),
+        vec![1, 2],
+        "each construct-enqueued action must apply exactly once"
+    );
 }
-
 
 #[tokio::test]
 async fn c2_c3_stale_seq_redelivery_is_deduped() {
@@ -323,12 +352,39 @@ async fn c2_c3_stale_seq_redelivery_is_deduped() {
     setup().await;
 
     let sender = handle::<SenderMachine>();
-    handle::<RecvMachine>().maybe_construct(RecvInit { id: Sid("c2_r".into()) }).await;
-    sender.maybe_construct(SenderInit { id: Sid("c2_s".into()) }).await;
+    handle::<RecvMachine>()
+        .maybe_construct(RecvInit {
+            id: Sid("c2_r".into()),
+        })
+        .await;
+    sender
+        .maybe_construct(SenderInit {
+            id: Sid("c2_s".into()),
+        })
+        .await;
 
-    sender.act(Sid("c2_s".into()), SenderAction::Send { to: "c2_r".into(), v: 1 }).await;
-    sender.act(Sid("c2_s".into()), SenderAction::Send { to: "c2_r".into(), v: 2 }).await;
-    wait_for("both sends applied", Duration::from_secs(10), || values("c2_r") == vec![1, 2]).await;
+    sender
+        .act(
+            Sid("c2_s".into()),
+            SenderAction::Send {
+                to: "c2_r".into(),
+                v: 1,
+            },
+        )
+        .await;
+    sender
+        .act(
+            Sid("c2_s".into()),
+            SenderAction::Send {
+                to: "c2_r".into(),
+                v: 2,
+            },
+        )
+        .await;
+    wait_for("both sends applied", Duration::from_secs(10), || {
+        values("c2_r") == vec![1, 2]
+    })
+    .await;
     wait_for_outbox_empty("ScnSender", "c2_s", Duration::from_secs(10)).await;
 
     let conn = raw_conn().await;
@@ -339,7 +395,7 @@ async fn c2_c3_stale_seq_redelivery_is_deduped() {
                  '\"c2_s\"', 'ScnRecv', '\"c2_r\"', ?, 'act', ?)",
         (
             serde_json::to_string(&RecvAction::Val(1)).expect("serialize action"),
-            chrono::Utc::now().timestamp_millis(),
+            Timestamp::now().as_millisecond(),
         ),
     )
     .await
@@ -365,18 +421,30 @@ async fn c2_c3_stale_seq_redelivery_is_deduped() {
     );
 }
 
-
 #[tokio::test]
 async fn c4_sweep_wake_drains_live_actor() {
     let _guard = SERIAL.lock().await;
     setup().await;
 
-    handle::<RecvMachine>().maybe_construct(RecvInit { id: Sid("c4_r".into()) }).await;
-    handle::<SenderMachine>().maybe_construct(SenderInit { id: Sid("c4_s".into()) }).await;
-    handle::<SenderMachine>().act(Sid("c4_s".into()), SenderAction::Noop).await;
+    handle::<RecvMachine>()
+        .maybe_construct(RecvInit {
+            id: Sid("c4_r".into()),
+        })
+        .await;
+    handle::<SenderMachine>()
+        .maybe_construct(SenderInit {
+            id: Sid("c4_s".into()),
+        })
+        .await;
+    handle::<SenderMachine>()
+        .act(Sid("c4_s".into()), SenderAction::Noop)
+        .await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while entity_version("ScnSender", "c4_s").await != Some(1) {
-        assert!(tokio::time::Instant::now() < deadline, "timed out waiting for noop commit");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for noop commit"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let conn = raw_conn().await;
@@ -387,7 +455,7 @@ async fn c4_sweep_wake_drains_live_actor() {
                  '\"c4_s\"', 'ScnRecv', '\"c4_r\"', ?, 'act', ?)",
         (
             serde_json::to_string(&RecvAction::Val(7)).expect("serialize action"),
-            chrono::Utc::now().timestamp_millis() - 600_000,
+            Timestamp::now().as_millisecond() - 600_000,
         ),
     )
     .await
@@ -395,13 +463,14 @@ async fn c4_sweep_wake_drains_live_actor() {
 
     re_framework::start();
 
-    wait_for("sweep to force-drain the live actor", Duration::from_secs(15), || {
-        values("c4_r") == vec![7]
-    })
+    wait_for(
+        "sweep to force-drain the live actor",
+        Duration::from_secs(15),
+        || values("c4_r") == vec![7],
+    )
     .await;
     wait_for_outbox_empty("ScnSender", "c4_s", Duration::from_secs(10)).await;
 }
-
 
 #[tokio::test]
 async fn c5_unregistered_target_is_transient_not_poison() {
@@ -409,21 +478,32 @@ async fn c5_unregistered_target_is_transient_not_poison() {
     setup().await;
 
     let sender = handle::<SenderMachine>();
-    sender.maybe_construct(SenderInit { id: Sid("c5_s".into()) }).await;
     sender
-        .act(Sid("c5_s".into()), SenderAction::SendToLate { to: "c5_l".into(), v: 7 })
+        .maybe_construct(SenderInit {
+            id: Sid("c5_s".into()),
+        })
+        .await;
+    sender
+        .act(
+            Sid("c5_s".into()),
+            SenderAction::SendToLate {
+                to: "c5_l".into(),
+                v: 7,
+            },
+        )
         .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     register::<LateMachine>(());
 
-    wait_for("delivery after late registration", Duration::from_secs(20), || {
-        values("c5_l") == vec![7]
-    })
+    wait_for(
+        "delivery after late registration",
+        Duration::from_secs(20),
+        || values("c5_l") == vec![7],
+    )
     .await;
     wait_for_outbox_empty("ScnSender", "c5_s", Duration::from_secs(10)).await;
 }
-
 
 #[tokio::test]
 async fn c6_recreated_sender_is_not_falsely_deduped() {
@@ -431,24 +511,56 @@ async fn c6_recreated_sender_is_not_falsely_deduped() {
     setup().await;
 
     let sender = handle::<SenderMachine>();
-    handle::<RecvMachine>().maybe_construct(RecvInit { id: Sid("c6_r".into()) }).await;
-    sender.maybe_construct(SenderInit { id: Sid("c6_s".into()) }).await;
-    sender.act(Sid("c6_s".into()), SenderAction::Send { to: "c6_r".into(), v: 1 }).await;
-    wait_for("first send applied", Duration::from_secs(10), || values("c6_r") == vec![1]).await;
+    handle::<RecvMachine>()
+        .maybe_construct(RecvInit {
+            id: Sid("c6_r".into()),
+        })
+        .await;
+    sender
+        .maybe_construct(SenderInit {
+            id: Sid("c6_s".into()),
+        })
+        .await;
+    sender
+        .act(
+            Sid("c6_s".into()),
+            SenderAction::Send {
+                to: "c6_r".into(),
+                v: 1,
+            },
+        )
+        .await;
+    wait_for("first send applied", Duration::from_secs(10), || {
+        values("c6_r") == vec![1]
+    })
+    .await;
     wait_for_outbox_empty("ScnSender", "c6_s", Duration::from_secs(10)).await;
 
     sender.delete(Sid("c6_s".into())).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    sender.maybe_construct(SenderInit { id: Sid("c6_s".into()) }).await;
-    sender.act(Sid("c6_s".into()), SenderAction::Send { to: "c6_r".into(), v: 9 }).await;
+    sender
+        .maybe_construct(SenderInit {
+            id: Sid("c6_s".into()),
+        })
+        .await;
+    sender
+        .act(
+            Sid("c6_s".into()),
+            SenderAction::Send {
+                to: "c6_r".into(),
+                v: 9,
+            },
+        )
+        .await;
 
-    wait_for("send from recreated sender applied", Duration::from_secs(10), || {
-        values("c6_r") == vec![1, 9]
-    })
+    wait_for(
+        "send from recreated sender applied",
+        Duration::from_secs(10),
+        || values("c6_r") == vec![1, 9],
+    )
     .await;
 }
-
 
 struct CollideA;
 struct CollideB;

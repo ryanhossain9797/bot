@@ -1,8 +1,10 @@
 use crate::effects::Effects;
 use crate::machine::{EntityId, Identified, StateMachine};
-use crate::store::{new_generation, store, CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite};
-use chrono::Utc;
+use crate::store::{
+    CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite, new_generation, store,
+};
 use dashmap::DashMap;
+use jiff::Timestamp;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -39,7 +41,8 @@ enum LoadStatus {
     Corrupt,
 }
 
-type DeliverFuture = Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
+type DeliverFuture =
+    Pin<Box<dyn Future<Output = Result<DeliveryOutcome, TransientDelivery>> + Send>>;
 type Deliverer = Box<dyn Fn(RowKind, String, String, CallToken) -> DeliverFuture + Send + Sync>;
 type WakeFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type Waker = Box<dyn Fn(String) -> WakeFuture + Send + Sync>;
@@ -76,7 +79,10 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
         entities: Arc::new(DashMap::new()),
         env: Arc::new(env),
     }));
-    handles().insert(std::any::TypeId::of::<SM>(), leaked as &(dyn std::any::Any + Send + Sync));
+    handles().insert(
+        std::any::TypeId::of::<SM>(),
+        leaked as &(dyn std::any::Any + Send + Sync),
+    );
     machines().insert(
         SM::name().to_string(),
         MachineVtable {
@@ -84,7 +90,9 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
                 Box::pin(async move {
                     match serde_json::from_str::<SM::Id>(&id_json) {
                         Ok(id) => handle::<SM>().wake(&id).await,
-                        Err(e) => log_transition::<SM>(&format!("sweep skipped unparseable id {id_json}: {e}")),
+                        Err(e) => log_transition::<SM>(&format!(
+                            "sweep skipped unparseable id {id_json}: {e}"
+                        )),
                     }
                 })
             }),
@@ -93,16 +101,27 @@ pub fn register<SM: StateMachine>(env: SM::Env) {
                     match kind {
                         RowKind::Act => {
                             let Ok(id) = serde_json::from_str::<SM::Id>(&id_json) else {
-                                return Ok(DeliveryOutcome::Rejected(format!("unparseable target id: {id_json}")));
+                                return Ok(DeliveryOutcome::Rejected(format!(
+                                    "unparseable target id: {id_json}"
+                                )));
                             };
-                            let Ok(action) = serde_json::from_str::<SM::Action>(&payload_json) else {
-                                return Ok(DeliveryOutcome::Rejected(format!("unparseable action for {}", SM::name())));
+                            let Ok(action) = serde_json::from_str::<SM::Action>(&payload_json)
+                            else {
+                                return Ok(DeliveryOutcome::Rejected(format!(
+                                    "unparseable action for {}",
+                                    SM::name()
+                                )));
                             };
                             handle::<SM>().deliver_tracked(id, action, token).await
                         }
                         RowKind::Construct => {
-                            let Ok(construction) = serde_json::from_str::<SM::Construction>(&payload_json) else {
-                                return Ok(DeliveryOutcome::Rejected(format!("unparseable construction for {}", SM::name())));
+                            let Ok(construction) =
+                                serde_json::from_str::<SM::Construction>(&payload_json)
+                            else {
+                                return Ok(DeliveryOutcome::Rejected(format!(
+                                    "unparseable construction for {}",
+                                    SM::name()
+                                )));
                             };
                             handle::<SM>().deliver_construct(construction).await
                         }
@@ -144,7 +163,11 @@ pub struct StateMachineHandle<SM: StateMachine> {
 }
 
 impl<SM: StateMachine> StateMachineHandle<SM> {
-    fn try_send(&self, key: &str, envelope: Envelope<SM::Action>) -> Result<(), Envelope<SM::Action>> {
+    fn try_send(
+        &self,
+        key: &str,
+        envelope: Envelope<SM::Action>,
+    ) -> Result<(), Envelope<SM::Action>> {
         match self.entities.get(key) {
             Some(handle) => handle.sender.send(envelope).map_err(|e| e.0),
             None => Err(envelope),
@@ -161,7 +184,12 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 tokio::spawn(run_entity::<SM>(
                     persisted,
                     rx,
-                    EntityContext::new(&id, epoch, Arc::clone(&self.env), Arc::clone(&self.entities)),
+                    EntityContext::new(
+                        &id,
+                        epoch,
+                        Arc::clone(&self.env),
+                        Arc::clone(&self.entities),
+                    ),
                 ));
                 slot.insert(SoleMailboxHandle { sender: tx, epoch });
             }
@@ -218,13 +246,20 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                     Ok(()) => {
                         let _ = self.construct_fresh(id, key, construction).await;
                     }
-                    Err(e) => log_transition::<SM>(&format!("reset failed — construct aborted: {e:#}")),
+                    Err(e) => {
+                        log_transition::<SM>(&format!("reset failed — construct aborted: {e:#}"))
+                    }
                 }
             }
         }
     }
 
-    async fn construct_fresh(&self, id: SM::Id, key: String, construction: SM::Construction) -> anyhow::Result<()> {
+    async fn construct_fresh(
+        &self,
+        id: SM::Id,
+        key: String,
+        construction: SM::Construction,
+    ) -> anyhow::Result<()> {
         let mut effects = Effects::new(id.clone());
         let state = SM::construct(construction, &mut effects);
         let state_json = serde_json::to_string(&state).map_err(|e| {
@@ -234,7 +269,15 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         let id_json = serde_json::to_string(&id).expect("EntityId serializes");
         let generation = new_generation();
         match store()
-            .insert(SM::name(), &key, &id_json, generation, &state_json, tick_deadline::<SM>(&state), &effects.actions)
+            .insert(
+                SM::name(),
+                &key,
+                &id_json,
+                generation,
+                &state_json,
+                tick_deadline::<SM>(&state),
+                &effects.actions,
+            )
             .await
         {
             Err(e) => {
@@ -244,11 +287,15 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
             Ok(SaveOutcome::Conflict { .. }) => {
                 match self.ensure_live(&id, &key).await {
                     Ok(LoadStatus::Live) => {}
-                    Ok(LoadStatus::Absent) => log_transition::<SM>("construct raced a delete; dropping construction"),
-                    Ok(LoadStatus::Corrupt) => {
-                        log_transition::<SM>("construct raced another corrupt row; dropping construction")
+                    Ok(LoadStatus::Absent) => {
+                        log_transition::<SM>("construct raced a delete; dropping construction")
                     }
-                    Err(e) => log_transition::<SM>(&format!("construct raced; reload failed: {e:#}")),
+                    Ok(LoadStatus::Corrupt) => log_transition::<SM>(
+                        "construct raced another corrupt row; dropping construction",
+                    ),
+                    Err(e) => {
+                        log_transition::<SM>(&format!("construct raced; reload failed: {e:#}"))
+                    }
                 }
                 Ok(())
             }
@@ -268,7 +315,10 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    async fn deliver_construct(&self, construction: SM::Construction) -> Result<DeliveryOutcome, TransientDelivery> {
+    async fn deliver_construct(
+        &self,
+        construction: SM::Construction,
+    ) -> Result<DeliveryOutcome, TransientDelivery> {
         let id = construction.get_id().clone();
         let key = id.get_id_string();
         match self.ensure_live(&id, &key).await {
@@ -308,14 +358,18 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 }
                 Ok(LoadStatus::Live) => {}
                 Ok(LoadStatus::Absent) => {
-                    let Envelope::Act(action) = &envelope else { unreachable!("act sends Act") };
+                    let Envelope::Act(action) = &envelope else {
+                        unreachable!("act sends Act")
+                    };
                     println!(
                         "[warn] action {action:?} for unconstructed entity {key}; dropping (maybe_construct must precede act)"
                     );
                     return;
                 }
                 Ok(LoadStatus::Corrupt) => {
-                    log_transition::<SM>("act dropped — stored state unparseable (resets on next maybe_construct)");
+                    log_transition::<SM>(
+                        "act dropped — stored state unparseable (resets on next maybe_construct)",
+                    );
                     return;
                 }
             }
@@ -337,7 +391,11 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
     ) -> Result<DeliveryOutcome, TransientDelivery> {
         let key = id.get_id_string();
         let (ack_tx, ack_rx) = oneshot::channel();
-        let mut envelope = Envelope::Tracked { action, token, ack: ack_tx };
+        let mut envelope = Envelope::Tracked {
+            action,
+            token,
+            ack: ack_tx,
+        };
         let mut sent = false;
         for _ in 0..2 {
             envelope = match self.try_send(&key, envelope) {
@@ -351,12 +409,14 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
                 Err(e) => return Err(TransientDelivery(format!("load failed: {e:#}"))),
                 Ok(LoadStatus::Live) => {}
                 Ok(LoadStatus::Absent) => {
-                    return Ok(DeliveryOutcome::Rejected(format!("unconstructed entity {key}")))
+                    return Ok(DeliveryOutcome::Rejected(format!(
+                        "unconstructed entity {key}"
+                    )));
                 }
                 Ok(LoadStatus::Corrupt) => {
                     return Ok(DeliveryOutcome::Rejected(format!(
                         "entity {key} state unparseable (resets on next maybe_construct)"
-                    )))
+                    )));
                 }
             }
         }
@@ -429,7 +489,12 @@ async fn run_entity<SM: StateMachine>(
     } = persisted;
     let (dispatch_tx, dispatch_rx) = mpsc::unbounded_channel::<Vec<OutboxRow>>();
     let (_dispatcher_stop, stopped) = tokio::sync::watch::channel(());
-    tokio::spawn(run_dispatcher(SM::name(), ctx.id_string.clone(), dispatch_rx, stopped));
+    tokio::spawn(run_dispatcher(
+        SM::name(),
+        ctx.id_string.clone(),
+        dispatch_rx,
+        stopped,
+    ));
 
     drain_outbox::<SM>(&ctx.id_string, &dispatch_tx).await;
 
@@ -437,9 +502,7 @@ async fn run_entity<SM: StateMachine>(
         let envelope = match SM::schedule(&state) {
             None => rx.recv().await,
             Some(scheduled) => {
-                let delay = (scheduled.at - Utc::now())
-                    .to_std()
-                    .unwrap_or(std::time::Duration::ZERO);
+                let delay = scheduled.at.duration_since(Timestamp::now()).unsigned_abs();
 
                 tokio::time::timeout(delay, rx.recv())
                     .await
@@ -461,7 +524,10 @@ async fn run_entity<SM: StateMachine>(
         };
 
         if let Some((token, ack)) = tracked.take() {
-            match store().is_duplicate(SM::name(), &ctx.id_string, &token).await {
+            match store()
+                .is_duplicate(SM::name(), &ctx.id_string, &token)
+                .await
+            {
                 Ok(true) => {
                     let _ = ack.send(DeliveryOutcome::Duplicate);
                     continue;
@@ -501,7 +567,11 @@ async fn run_entity<SM: StateMachine>(
                         version += 1;
                         next_seq = write.next_outbox_seq;
                         if !write.outbox.is_empty() {
-                            let _ = dispatch_tx.send(rows_from_drafts(generation, write.first_seq, &write.outbox));
+                            let _ = dispatch_tx.send(rows_from_drafts(
+                                generation,
+                                write.first_seq,
+                                &write.outbox,
+                            ));
                         }
                         for external in effects.externals {
                             tokio::spawn(external);
@@ -534,10 +604,14 @@ async fn run_entity<SM: StateMachine>(
 }
 
 fn tick_deadline<SM: StateMachine>(state: &SM::State) -> Option<i64> {
-    SM::schedule(state).map(|scheduled| scheduled.at.timestamp_millis())
+    SM::schedule(state).map(|scheduled| scheduled.at.as_millisecond())
 }
 
-fn rows_from_drafts(generation: i64, first_seq: i64, drafts: &[crate::store::OutboxDraft]) -> Vec<OutboxRow> {
+fn rows_from_drafts(
+    generation: i64,
+    first_seq: i64,
+    drafts: &[crate::store::OutboxDraft],
+) -> Vec<OutboxRow> {
     drafts
         .iter()
         .enumerate()
@@ -589,7 +663,15 @@ async fn dispatch_row(
                 "no machine named {} registered yet",
                 row.target_machine
             ))),
-            Some(vtable) => (vtable.deliver)(row.kind, row.target_id_json.clone(), row.payload_json.clone(), token).await,
+            Some(vtable) => {
+                (vtable.deliver)(
+                    row.kind,
+                    row.target_id_json.clone(),
+                    row.payload_json.clone(),
+                    token,
+                )
+                .await
+            }
         };
         match outcome {
             Ok(DeliveryOutcome::Applied | DeliveryOutcome::Duplicate) => {
@@ -597,8 +679,14 @@ async fn dispatch_row(
                 return true;
             }
             Ok(DeliveryOutcome::Rejected(reason)) => {
-                println!("[outbox] {machine}/{sender_id} seq {} rejected by {}: {reason}", row.seq, row.target_machine);
-                if let Err(e) = store().fail_outbox(machine, sender_id, row.sender_generation, row.seq, &reason).await {
+                println!(
+                    "[outbox] {machine}/{sender_id} seq {} rejected by {}: {reason}",
+                    row.seq, row.target_machine
+                );
+                if let Err(e) = store()
+                    .fail_outbox(machine, sender_id, row.sender_generation, row.seq, &reason)
+                    .await
+                {
                     println!("[outbox] failed to poison row seq {}: {e:#}", row.seq);
                 }
                 return true;
@@ -627,10 +715,15 @@ async fn ack_with_retry(
     stopped: &mut tokio::sync::watch::Receiver<()>,
 ) {
     for attempt in 0..5 {
-        match store().ack_outbox(machine, sender_id, sender_generation, seq).await {
+        match store()
+            .ack_outbox(machine, sender_id, sender_generation, seq)
+            .await
+        {
             Ok(()) => return,
             Err(e) => {
-                println!("[outbox] ack failed for {machine}/{sender_id} seq {seq} (attempt {attempt}): {e:#}");
+                println!(
+                    "[outbox] ack failed for {machine}/{sender_id} seq {seq} (attempt {attempt}): {e:#}"
+                );
                 if stopped.has_changed().is_err() {
                     return;
                 }
@@ -643,7 +736,7 @@ async fn ack_with_retry(
 fn log_transition<SM: StateMachine>(label: &str) {
     println!(
         "TRANSITION AT {} - StateMachine: {} - {}",
-        Utc::now(),
+        Timestamp::now(),
         SM::name(),
         label
     );
