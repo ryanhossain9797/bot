@@ -502,7 +502,10 @@ async fn run_entity<SM: StateMachine>(
         let envelope = match SM::schedule(&state) {
             None => rx.recv().await,
             Some(scheduled) => {
-                let delay = scheduled.at.duration_since(Timestamp::now()).unsigned_abs();
+                let delay = std::time::Duration::try_from(
+                    scheduled.at.duration_since(Timestamp::now()),
+                )
+                .unwrap_or(std::time::Duration::ZERO);
 
                 tokio::time::timeout(delay, rx.recv())
                     .await

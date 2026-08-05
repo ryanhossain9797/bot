@@ -1,8 +1,6 @@
 use crate::{Effects, EntityId, Identified, Scheduled, StateMachine, handle, register};
-use jiff::civil::Time;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
-use std::ops::Add;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
@@ -169,6 +167,98 @@ async fn smoke() {
         obs.lock().unwrap().totals,
         vec![5, 8, 18],
         "post-delete act dropped"
+    );
+}
+
+struct PastDueEnv {
+    fired: Arc<Mutex<bool>>,
+}
+
+struct PastDueMachine;
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PastDueState {
+    fire_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum PastDueAction {
+    Fire,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PastDueInit {
+    id: String,
+}
+
+impl Identified for PastDueInit {
+    type Id = String;
+    fn get_id(&self) -> &String {
+        &self.id
+    }
+}
+
+impl StateMachine for PastDueMachine {
+    type State = PastDueState;
+    type Id = String;
+    type Action = PastDueAction;
+    type Construction = PastDueInit;
+    type Env = PastDueEnv;
+
+    fn construct(_init: PastDueInit, _effects: &mut Effects<Self>) -> PastDueState {
+        PastDueState {
+            fire_at: Some(
+                Timestamp::now()
+                    .checked_sub(SignedDuration::from_secs(10))
+                    .expect("10 s in the past is representable"),
+            ),
+        }
+    }
+
+    fn transition(
+        _state: &PastDueState,
+        _id: &String,
+        env: &Arc<PastDueEnv>,
+        action: &PastDueAction,
+        _effects: &mut Effects<Self>,
+    ) -> anyhow::Result<PastDueState> {
+        match action {
+            PastDueAction::Fire => {
+                *env.fired.lock().unwrap() = true;
+                Ok(PastDueState { fire_at: None })
+            }
+        }
+    }
+
+    fn schedule(state: &PastDueState) -> Option<Scheduled<PastDueAction>> {
+        state.fire_at.map(|at| Scheduled {
+            at,
+            action: PastDueAction::Fire,
+        })
+    }
+
+    fn name() -> &'static str {
+        "PastDueMachine"
+    }
+}
+
+#[tokio::test]
+async fn overdue_timer_fires_promptly() {
+    ensure_test_store().await;
+    let fired = Arc::new(Mutex::new(false));
+    register::<PastDueMachine>(PastDueEnv {
+        fired: Arc::clone(&fired),
+    });
+    let sm = handle::<PastDueMachine>();
+    sm.maybe_construct(PastDueInit {
+        id: "pd1".to_string(),
+    })
+    .await;
+
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    assert!(
+        *fired.lock().unwrap(),
+        "a deadline 10s in the past must fire immediately, not wait |overdue|"
     );
 }
 
