@@ -106,10 +106,7 @@ impl StateMachine for ConversationMachine {
             Phase::Idle { reset_at: None } => None,
             Phase::AwaitingDecision | Phase::RunningTool { .. } | Phase::SendingReply => {
                 Some(Scheduled {
-                    at: state
-                        .phase_since
-                        .checked_add(SignedDuration::from_secs(RESCUE_SECS))
-                        .expect("secs should be fine"),
+                    at: state.phase_since + SignedDuration::from_secs(RESCUE_SECS),
                     action: ConversationAction::ForceReset,
                 })
             }
@@ -196,11 +193,7 @@ fn conversation_transition(
             turns: state.turns,
             history: state.history.clone(),
             phase: Phase::Idle {
-                reset_at: Some(
-                    Timestamp::now()
-                        .checked_add(SignedDuration::from_secs(IDLE_RESET_SECS))
-                        .expect("secs should be fine"),
-                ),
+                reset_at: Some(Timestamp::now() + SignedDuration::from_secs(IDLE_RESET_SECS)),
             },
             phase_since: Timestamp::now(),
         }),
