@@ -711,17 +711,11 @@ fn conversation_schedule(conversation: &Conversation) -> Option<Scheduled<Conver
     match &conversation.state {
         ConversationState::Idle { .. } => None,
         ConversationState::AwaitingLLMDecision { .. } => Some(Scheduled {
-            at: conversation
-                .last_transition
-                .checked_add(SignedDuration::from_millis(LLM_TIMEOUT_MS))
-                .expect("millis should not overflow"),
+            at: conversation.last_transition + SignedDuration::from_millis(LLM_TIMEOUT_MS),
             action: ConversationAction::LLMDecisionResult(Err(InterruptionReason::TimedOut)),
         }),
         ConversationState::SendingMessage { .. } => Some(Scheduled {
-            at: conversation
-                .last_transition
-                .checked_add(SignedDuration::from_millis(SEND_TIMEOUT_MS))
-                .expect("millis should not overflow"),
+            at: conversation.last_transition + SignedDuration::from_millis(SEND_TIMEOUT_MS),
             action: ConversationAction::MessageSent(Err("timed out".to_string())),
         }),
         ConversationState::RunningTools { pending_tools, .. } => pending_tools

@@ -70,11 +70,7 @@ impl StateMachine for CounterMachine {
     fn construct(init: CounterInit, _effects: &mut Effects<Self>) -> CounterState {
         CounterState {
             total: init.start,
-            tick_at: Some(
-                Timestamp::now()
-                    .checked_add(SignedDuration::from_millis(50))
-                    .expect("50 ms should be ok"),
-            ),
+            tick_at: Some(Timestamp::now() + SignedDuration::from_millis(50)),
         }
     }
 
@@ -207,11 +203,7 @@ impl StateMachine for PastDueMachine {
 
     fn construct(_init: PastDueInit, _effects: &mut Effects<Self>) -> PastDueState {
         PastDueState {
-            fire_at: Some(
-                Timestamp::now()
-                    .checked_sub(SignedDuration::from_secs(10))
-                    .expect("10 s in the past is representable"),
-            ),
+            fire_at: Some(Timestamp::now() - SignedDuration::from_secs(10)),
         }
     }
 

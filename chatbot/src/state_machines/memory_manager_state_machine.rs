@@ -67,10 +67,7 @@ impl StateMachine for MemoryManagerMachine {
         match &state.state {
             MemoryManagerState::Idle => None,
             MemoryManagerState::Compacting => Some(Scheduled {
-                at: state
-                    .last_transition
-                    .checked_add(SignedDuration::from_millis(COMPACT_TIMEOUT_MS))
-                    .expect("millis should not overflow"),
+                at: state.last_transition + SignedDuration::from_millis(COMPACT_TIMEOUT_MS),
                 action: MemoryManagerAction::CompactionDone(Err(InterruptionReason::TimedOut)),
             }),
         }
