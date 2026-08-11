@@ -190,7 +190,7 @@ impl ToolKind {
                 json!({
                     "type": "object",
                     "properties": {
-                        "user_id": { "type": "string", "description": "The user's identifier (platform-local, e.g. \"ABC123\")." },
+                        "user_id": { "type": "string", "description": "The user's identifier (platform-local, e.g. ABC123 — no prefixes, parenthesis, quotes or anything else)." },
                         "command": { "type": "string", "description": "The bash command to run, e.g. \"python3 -c 'print(2**10)'\" or \"pip install requests && python3 script.py\". Multi-line scripts are fine." }
                     },
                     "required": ["command", "user_id"]
