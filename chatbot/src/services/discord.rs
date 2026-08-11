@@ -58,7 +58,7 @@ impl EventHandler for Handler {
 
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
-        let user_id = author_id.to_string();
+        let user_id = format!("Discord_{}", author_id);
         let name = message
             .author
             .global_name

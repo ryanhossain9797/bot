@@ -338,6 +338,7 @@ pub enum ToolType {
     },
     RunBashCommand {
         command: String,
+        user_id: String,
     },
     ResetBashContainer,
     ViewImage {

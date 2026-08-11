@@ -43,6 +43,7 @@ struct VisitUrlArgs {
 #[derive(Debug, Deserialize)]
 struct RunBashArgs {
     command: String,
+    user_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,9 +190,10 @@ impl ToolKind {
                 json!({
                     "type": "object",
                     "properties": {
+                        "user_id": { "type": "string", "description": "The user's Discord username or ID." },
                         "command": { "type": "string", "description": "The bash command to run, e.g. \"python3 -c 'print(2**10)'\" or \"pip install requests && python3 script.py\". Multi-line scripts are fine." }
                     },
-                    "required": ["command"]
+                    "required": []
                 }),
             ),
             ToolKind::ResetBashContainer => (
@@ -290,9 +292,12 @@ impl ToolType {
                 [("query".to_string(), json!(query))].into_iter().collect()
             }
             ToolType::VisitUrl { url } => [("url".to_string(), json!(url))].into_iter().collect(),
-            ToolType::RunBashCommand { command } => [("command".to_string(), json!(command))]
-                .into_iter()
-                .collect(),
+            ToolType::RunBashCommand { command, user_id } => [
+                ("command".to_string(), json!(command)),
+                ("user_id".to_string(), json!(user_id)),
+            ]
+            .into_iter()
+            .collect(),
             ToolType::ResetBashContainer => Map::new(),
             ToolType::ViewImage { path } => {
                 [("path".to_string(), json!(path))].into_iter().collect()
@@ -355,6 +360,7 @@ impl ToolType {
             }),
             ToolKind::RunBashCommand => Ok(ToolType::RunBashCommand {
                 command: parse_args::<RunBashArgs>(name, arguments)?.command,
+                user_id: parse_args::<RunBashArgs>(name, arguments)?.user_id,
             }),
             ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
             ToolKind::ViewImage => Ok(ToolType::ViewImage {
