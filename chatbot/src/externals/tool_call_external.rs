@@ -378,7 +378,7 @@ async fn run_tool(
         }
         ToolType::WebSearch { query } => fetch_web_search(&query).await.map_err(|e| e.to_string()),
         ToolType::VisitUrl { url } => fetch_url_content(&url).await.map_err(|e| e.to_string()),
-        ToolType::RunBashCommand { command } => run_bash(conversation_id, &command).await,
+        ToolType::RunBashCommand { command, .. } => run_bash(conversation_id, &command).await,
         ToolType::ResetBashContainer => reset_bash(conversation_id).await,
         ToolType::ViewImage { path } => {
             let image = pull_image(conversation_id, &path).await?;
