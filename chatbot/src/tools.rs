@@ -193,7 +193,7 @@ impl ToolKind {
                         "user_id": { "type": "string", "description": "The user's Discord username or ID." },
                         "command": { "type": "string", "description": "The bash command to run, e.g. \"python3 -c 'print(2**10)'\" or \"pip install requests && python3 script.py\". Multi-line scripts are fine." }
                     },
-                    "required": []
+                    "required": ["command", "user_id"]
                 }),
             ),
             ToolKind::ResetBashContainer => (
@@ -358,10 +358,13 @@ impl ToolType {
             ToolKind::VisitUrl => Ok(ToolType::VisitUrl {
                 url: parse_args::<VisitUrlArgs>(name, arguments)?.url,
             }),
-            ToolKind::RunBashCommand => Ok(ToolType::RunBashCommand {
-                command: parse_args::<RunBashArgs>(name, arguments)?.command,
-                user_id: parse_args::<RunBashArgs>(name, arguments)?.user_id,
-            }),
+            ToolKind::RunBashCommand => {
+                let args = parse_args::<RunBashArgs>(name, arguments)?;
+                Ok(ToolType::RunBashCommand {
+                    command: args.command,
+                    user_id: args.user_id,
+                })
+            }
             ToolKind::ResetBashContainer => Ok(ToolType::ResetBashContainer),
             ToolKind::ViewImage => Ok(ToolType::ViewImage {
                 path: parse_args::<PathArgs>(name, arguments)?.path,
