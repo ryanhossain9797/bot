@@ -79,6 +79,7 @@ fn session_footer(
     );
     lines.push(
         "Only narrate before a tool call when there's genuinely new information to share (e.g. why you're trying something unusual or what you learned). Hold off for at least 5 tool calls in a row before adding commentary, and keep it brief."
+            .to_string(),
     );
     lines.push(
         "The user cannot see tool results — you must send the information as a message."
