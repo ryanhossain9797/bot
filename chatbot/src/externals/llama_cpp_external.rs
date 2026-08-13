@@ -78,7 +78,8 @@ fn session_footer(
         "If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can, then carry on with the corrected info; don't just agree or defend a wrong prior.".to_string(),
     );
     lines.push(
-        "If you already have something worth sharing — a partial answer, or what you're about to do — say it right after your thinking and before the tool call, instead of calling silently.".to_string(),
+        "Only narrate before a tool call when there's genuinely new information to share (e.g. why you're trying something unusual or what you learned). Hold off for at least 5 tool calls in a row before adding commentary, and keep it brief."
+            .to_string(),
     );
     lines.push(
         "The user cannot see tool results — you must send the information as a message."
