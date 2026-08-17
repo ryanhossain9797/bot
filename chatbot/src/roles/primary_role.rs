@@ -60,7 +60,7 @@ const THINKING_NUDGE: &str =
 const MAX_THINKING_TOKENS: usize = 2000;
 
 const PACK_DIR_ENV: &str = "MODEL_PACK_DIR";
-const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
+const DEFAULT_PACK_DIR: &str = "./models/qwen3-8-27b";
 
 fn pack_dir() -> PathBuf {
     std::env::var_os(PACK_DIR_ENV).map_or_else(|| DEFAULT_PACK_DIR.into(), PathBuf::from)

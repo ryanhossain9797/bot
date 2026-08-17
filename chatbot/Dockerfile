@@ -11,6 +11,9 @@ RUN apt-get install -y \
     git \
     libvulkan-dev \
     glslc \
+    glslang-tools \
+    spirv-headers \
+    spirv-tools \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 

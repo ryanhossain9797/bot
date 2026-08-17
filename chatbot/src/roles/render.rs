@@ -85,7 +85,7 @@ mod tests {
     use crate::chat_format::ChatMessage;
 
     const PRIMARY_TEMPLATE: &str =
-        include_str!("../../models/qwen-qwen3-6-35b-a3b/chat_template.jinja");
+        include_str!("../../models/qwen3-8-27b/chat_template.jinja");
 
     fn flags() -> FormatFlags {
         FormatFlags {
@@ -143,5 +143,24 @@ mod tests {
         let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
             .expect("normal conversation renders");
         assert!(out.contains("make it compile"));
+    }
+
+    #[test]
+    fn renders_footer_system_block() {
+        let messages = vec![
+            ChatMessage::user("hi"),
+            ChatMessage::assistant("hello"),
+        ];
+        let inputs = RenderInputs {
+            messages: &messages,
+            tools: None,
+            footer: Some("SYSTEM METADATA FOOTER"),
+        };
+        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+            .expect("renders with footer");
+        assert!(
+            out.contains("SYSTEM METADATA FOOTER"),
+            "the footer system block must render into the prompt"
+        );
     }
 }
