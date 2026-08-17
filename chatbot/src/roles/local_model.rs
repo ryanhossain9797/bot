@@ -224,7 +224,7 @@ fn run_generation_mtmd(
 
     let bitmaps = images
         .iter()
-        .map(|bytes| MtmdBitmap::from_buffer(mtmd, bytes))
+        .map(|bytes| MtmdBitmap::from_buffer(mtmd, bytes, false))
         .collect::<Result<Vec<_>, _>>()?;
     let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
 
