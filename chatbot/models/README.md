@@ -53,6 +53,59 @@ The `parser` name is resolved against the parser family in
 existing parser is a manifest change; a genuinely new grammar means adding a `Parser` impl and a
 line in `from_name`.
 
+## The chat template
+
+`chat_template.jinja` is **not** the model's raw template — it's the model's **native** template
+(the one embedded in the GGUF as `tokenizer.chat_template`) with a small set of **local
+customizations** applied on top. The render pipeline
+([chatbot/src/roles/render.rs](../src/roles/render.rs)) feeds it `messages`, `tools`, `footer`,
+`add_generation_prompt`, and `enable_thinking`, and pre-serializes `tools`/tool-call args to strings
+before handing them over.
+
+### Current customizations
+
+Relative to the stock Qwen3 native template, ours differ in four places:
+
+1. **tools loop** — drop the `| tojson` filter (`{{- tool }}`): the render pipeline already hands the
+   template serialized tool strings.
+2. **tool-call args** — drop the `args_value | tojson | safe` coercion, for the same reason.
+3. **compaction anchor** — replace the native `raise_exception('No user query found…')` with
+   *anchor-to-oldest + a 10-message cap*, so a conversation whose user turn was evicted by compaction
+   still renders instead of throwing (which silently drops the bot's turn).
+4. **footer block** — append a `{% if footer %}<|im_start|>system…<|im_end|>{% endif %}` block before
+   the generation prompt (the "SYSTEM GENERATED CONVERSATION METADATA FOOTER"). Nothing else consumes
+   the `footer` variable.
+
+### Porting the customizations to a new model
+
+A new model ships its **own** native template, which may differ from the current pack's (newer Qwen
+templates add e.g. a `reasoning_effort` block). Don't reuse the old pack's template verbatim, and
+don't take the new native verbatim — **port our customizations onto the new model's native
+template**. Diffing is the tool for both halves.
+
+Extract a model's native template from its GGUF (metadata only — no weights loaded):
+
+```bash
+python3 - <<'PY'   # pip install gguf
+from gguf import GGUFReader
+r = GGUFReader("models/<pack>/<model>.gguf")
+f = r.get_field("tokenizer.chat_template")
+open("native.jinja", "w").write(bytes(f.parts[f.data[-1]]).decode())
+PY
+```
+
+1. **Identify** our customizations authoritatively: extract the **current** pack's native template and
+   `diff native.jinja models/<current-pack>/chat_template.jinja`. That diff *is* the customization
+   list — don't work from memory (e.g. the `</think>` split fallback and the `preserve_thinking`
+   default are *native* differences between model versions, not ours).
+2. **Apply** exactly those diff hunks to the **new** model's extracted native template, and save it as
+   the new pack's `chat_template.jinja`.
+3. **Verify** it diffs back to only the intended customizations
+   (`diff new-native.jinja models/<new-pack>/chat_template.jinja`) and that it renders:
+   `cargo test -p chatbot roles::render`. That test `include_str!`s `PRIMARY_TEMPLATE` in
+   [render.rs](../src/roles/render.rs) — repoint it at the new pack first. It resolves at **build
+   time**, so the `.jinja` must be committed (only `*.gguf` is gitignored).
+
 ## Supported format
 
 Weights and projector must be **GGUF** (the quantized format llama.cpp loads). The projector
@@ -63,7 +116,8 @@ Weights and projector must be **GGUF** (the quantized format llama.cpp loads). T
 1. Create a folder here, e.g. `models/my-model/`.
 2. Drop the GGUF weights and mmproj projector into it.
 3. Write a `manifest.toml` (copy the Qwen one and adjust filenames/knobs).
-4. Add the chat template the model expects as a `.jinja` file and point `template` at it.
+4. Build `chat_template.jinja` from the model's native template plus our local customizations — see
+   [The chat template](#the-chat-template) — and point `template` at it.
 5. Make sure `[format] parser` names a parser the bot knows (`qwen` today), or add one.
 6. Run with `MODEL_PACK_DIR=./models/my-model` (see the `Justfile`'s `run_local`, which mounts the
    pack and sets this variable).
