@@ -1,31 +1,31 @@
 use crate::externals::{
     llama_cpp_external::get_llm_decision,
-    message_external::{send_message, OutboundMessage},
+    message_external::{OutboundMessage, send_message},
     tool_call_external::execute_tool,
 };
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::conversation::{
-    Pending, SystemMessage, ToolResult, ToolResultData, ToolType, MAX_TOOL_ROUNDS,
+    MAX_TOOL_ROUNDS, Pending, SystemMessage, ToolResult, ToolResultData, ToolType,
 };
 use crate::types::media::Attachment;
-use crate::types::memory::{MemoryManagerAction, MemoryManagerConstructor};
+use crate::types::memory_manager::{MemoryManagerAction, MemoryManagerConstructor};
 use crate::types::reminder::{
-    ReminderConstructor, ReminderForConversationId, ReminderId, MAX_REMINDER_SECS,
+    MAX_REMINDER_SECS, ReminderConstructor, ReminderForConversationId, ReminderId,
 };
 use crate::{
+    Env,
     types::conversation::{
         CompactionOutput, Conversation, ConversationAction, ConversationConstructor,
-        ConversationId, ConversationMessage, ConversationState, HistoryEntry, HistoryEntryKind,
-        InterruptionReason, LLMInput, PostSend, RecentConversation,
+        ConversationFailure, ConversationId, ConversationMessage, ConversationState, HistoryEntry,
+        HistoryEntryKind, InterruptionReason, LLMInput, PostSend, RecentConversation,
     },
-    Env,
 };
 use re_framework::{Effects, Scheduled, SignedDuration, StateMachine, Timestamp};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-type ConversationTransitionResult = anyhow::Result<Conversation>;
+type ConversationTransitionResult = Result<Conversation, ConversationFailure>;
 type ConversationEffects = Effects<ConversationMachine>;
 
 const REDACT_HISTORY_IMAGES: bool = false;
@@ -216,12 +216,18 @@ fn apply_post_send(
                             Err(msg) => (None, msg),
                         };
                         if let Some(constructor) = maybe_construct {
-                            effects.enqueue_construct::<ReminderForConversationMachine>(constructor);
+                            effects
+                                .enqueue_construct::<ReminderForConversationMachine>(constructor);
                         }
                         enqueue_self_result(effects, conversation_id, &tool_call.id, text);
                     }
                     ToolType::MetaMalformed { report } => {
-                        enqueue_self_result(effects, conversation_id, &tool_call.id, report.clone());
+                        enqueue_self_result(
+                            effects,
+                            conversation_id,
+                            &tool_call.id,
+                            report.clone(),
+                        );
                     }
                     _ => {
                         effects.enqueue_external(execute_tool(
@@ -289,6 +295,7 @@ fn conversation_transition(
     effects: &mut ConversationEffects,
 ) -> ConversationTransitionResult {
     let from = state_label(&conversation.state);
+
     let state = match (conversation.state, action) {
         (
             user_state,
@@ -487,9 +494,10 @@ fn conversation_transition(
                 ..conversation
             })
         }
-        _ => Err(anyhow::anyhow!(
-            "no transition for {action:?} in state {from}"
-        )),
+        _ => Err(ConversationFailure::InvalidAction {
+            action: action.clone(),
+            state: from.to_string(),
+        }),
     };
 
     post_transition(env, conversation_id, state, effects)
@@ -754,6 +762,7 @@ impl StateMachine for ConversationMachine {
     type Action = ConversationAction;
     type Construction = ConversationConstructor;
     type Env = crate::Env;
+    type Failure = ConversationFailure;
 
     fn construct(
         constructor: ConversationConstructor,
@@ -839,8 +848,9 @@ mod tests {
             panic!("mixed batch should merge into a ConversationMessage");
         };
         assert!(msg.text.contains("hey"));
-        assert!(msg
-            .text
-            .contains("[Reminder — IMPORTANT] For Alice: take meds"));
+        assert!(
+            msg.text
+                .contains("[Reminder — IMPORTANT] For Alice: take meds")
+        );
     }
 }

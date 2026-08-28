@@ -1,5 +1,5 @@
 use re_framework::{
-    handle, register, Effects, EntityId, Identified, Scheduled, StateMachine, Timestamp,
+    Effects, EntityId, Identified, Scheduled, StateMachine, Timestamp, handle, register,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -133,12 +133,20 @@ impl Identified for RecvInit {
         &self.id
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum RecvFailure {
+    Foo,
+}
+
 impl StateMachine for RecvMachine {
     type State = RecvState;
     type Id = Sid;
     type Action = RecvAction;
     type Construction = RecvInit;
     type Env = ();
+    type Failure = RecvFailure;
+
     fn construct(_init: RecvInit, _effects: &mut Effects<Self>) -> RecvState {
         RecvState
     }
@@ -148,7 +156,7 @@ impl StateMachine for RecvMachine {
         _env: &Arc<()>,
         action: &RecvAction,
         _effects: &mut Effects<Self>,
-    ) -> anyhow::Result<RecvState> {
+    ) -> Result<RecvState, RecvFailure> {
         let RecvAction::Val(n) = action;
         recorded()
             .lock()
@@ -185,12 +193,20 @@ impl Identified for SenderInit {
         &self.id
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum SenderFailure {
+    Foo,
+}
+
 impl StateMachine for SenderMachine {
     type State = SenderState;
     type Id = Sid;
     type Action = SenderAction;
     type Construction = SenderInit;
     type Env = ();
+    type Failure = SenderFailure;
+
     fn construct(_init: SenderInit, _effects: &mut Effects<Self>) -> SenderState {
         SenderState
     }
@@ -200,7 +216,7 @@ impl StateMachine for SenderMachine {
         _env: &Arc<()>,
         action: &SenderAction,
         effects: &mut Effects<Self>,
-    ) -> anyhow::Result<SenderState> {
+    ) -> Result<SenderState, SenderFailure> {
         match action {
             SenderAction::Send { to, v } => {
                 effects.enqueue_action::<RecvMachine>(Sid(to.clone()), RecvAction::Val(*v));
@@ -241,12 +257,19 @@ impl Identified for CtorSpamInit {
         &self.id
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum CtorSpamFailure {
+    Foo,
+}
 impl StateMachine for CtorSpamMachine {
     type State = CtorSpamState;
     type Id = Sid;
     type Action = CtorSpamAction;
     type Construction = CtorSpamInit;
     type Env = ();
+    type Failure = CtorSpamFailure;
+
     fn construct(init: CtorSpamInit, effects: &mut Effects<Self>) -> CtorSpamState {
         effects.enqueue_action::<RecvMachine>(Sid(init.target.clone()), RecvAction::Val(1));
         effects.enqueue_action::<RecvMachine>(Sid(init.target), RecvAction::Val(2));
@@ -258,7 +281,7 @@ impl StateMachine for CtorSpamMachine {
         _env: &Arc<()>,
         _action: &CtorSpamAction,
         _effects: &mut Effects<Self>,
-    ) -> anyhow::Result<CtorSpamState> {
+    ) -> Result<CtorSpamState, CtorSpamFailure> {
         Ok(state.clone())
     }
     fn schedule(_state: &CtorSpamState) -> Option<Scheduled<CtorSpamAction>> {
@@ -286,12 +309,20 @@ impl Identified for LateInit {
         &self.id
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum LateFailure {
+    Foo,
+}
+
 impl StateMachine for LateMachine {
     type State = LateState;
     type Id = Sid;
     type Action = LateAction;
     type Construction = LateInit;
     type Env = ();
+    type Failure = LateFailure;
+
     fn construct(_init: LateInit, _effects: &mut Effects<Self>) -> LateState {
         LateState
     }
@@ -301,7 +332,7 @@ impl StateMachine for LateMachine {
         _env: &Arc<()>,
         action: &LateAction,
         _effects: &mut Effects<Self>,
-    ) -> anyhow::Result<LateState> {
+    ) -> Result<LateState, LateFailure> {
         let LateAction::Val(n) = action;
         recorded()
             .lock()
@@ -573,6 +604,8 @@ macro_rules! collide_machine {
             type Action = RecvAction;
             type Construction = RecvInit;
             type Env = ();
+            type Failure = RecvFailure;
+
             fn construct(_init: RecvInit, _effects: &mut Effects<Self>) -> RecvState {
                 RecvState
             }
@@ -582,7 +615,7 @@ macro_rules! collide_machine {
                 _env: &Arc<()>,
                 _action: &RecvAction,
                 _effects: &mut Effects<Self>,
-            ) -> anyhow::Result<RecvState> {
+            ) -> Result<RecvState, RecvFailure> {
                 Ok(state.clone())
             }
             fn schedule(_state: &RecvState) -> Option<Scheduled<RecvAction>> {

@@ -502,10 +502,9 @@ async fn run_entity<SM: StateMachine>(
         let envelope = match SM::schedule(&state) {
             None => rx.recv().await,
             Some(scheduled) => {
-                let delay = std::time::Duration::try_from(
-                    scheduled.at.duration_since(Timestamp::now()),
-                )
-                .unwrap_or(std::time::Duration::ZERO);
+                let delay =
+                    std::time::Duration::try_from(scheduled.at.duration_since(Timestamp::now()))
+                        .unwrap_or(std::time::Duration::ZERO);
 
                 tokio::time::timeout(delay, rx.recv())
                     .await
@@ -597,9 +596,11 @@ async fn run_entity<SM: StateMachine>(
                 }
             }
             Err(err) => {
-                log_transition::<SM>(&format!("dropped — no state change: {err}"));
+                let failure = serde_json::to_string(&err)
+                    .unwrap_or_else(|e| format!("failed to serialize failure {err:?}: {e}"));
+                log_transition::<SM>(&format!("dropped — no state change: {failure}"));
                 if let Some((_, ack)) = tracked {
-                    let _ = ack.send(DeliveryOutcome::Rejected(err.to_string()));
+                    let _ = ack.send(DeliveryOutcome::Rejected(failure));
                 }
             }
         }

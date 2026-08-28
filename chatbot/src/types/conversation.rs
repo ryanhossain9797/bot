@@ -32,8 +32,12 @@ impl Platform {
 
     pub fn formatting_note(&self) -> &'static str {
         match self {
-            Platform::Discord => "Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align).",
-            Platform::Telegram => "Platform: Telegram — supports a limited markdown subset (bold, italic, `code`, links); no tables, headers, or bullet lists. For tabular data use a ```code block```.",
+            Platform::Discord => {
+                "Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align)."
+            }
+            Platform::Telegram => {
+                "Platform: Telegram — supports a limited markdown subset (bold, italic, `code`, links); no tables, headers, or bullet lists. For tabular data use a ```code block```."
+            }
         }
     }
 
@@ -151,7 +155,10 @@ pub struct SystemMessage {
 
 impl SystemMessage {
     pub fn to_content(&self) -> String {
-        format!("[Reminder — IMPORTANT] For {}: {}", self.addressee, self.note)
+        format!(
+            "[Reminder — IMPORTANT] For {}: {}",
+            self.addressee, self.note
+        )
     }
 }
 
@@ -236,7 +243,6 @@ pub enum Pending {
     System(SystemMessage),
 }
 
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub pending: Vec<Pending>,
@@ -251,7 +257,7 @@ pub struct Conversation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LLMInput {
     ConversationMessage(ConversationMessage),
-                SystemMessage(Vec<SystemMessage>),
+    SystemMessage(Vec<SystemMessage>),
     ToolResults(Vec<ToolResult>, Option<ConversationMessage>),
 }
 
@@ -521,7 +527,6 @@ pub struct CompactionOutput {
     pub through: HistoryId,
 }
 
-
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
     NewMessage {
@@ -571,4 +576,12 @@ impl std::fmt::Debug for ConversationAction {
             ConversationAction::ReminderFired { .. } => write!(f, "ReminderFired"),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ConversationFailure {
+    InvalidAction {
+        action: ConversationAction,
+        state: String,
+    },
 }

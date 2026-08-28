@@ -2,15 +2,23 @@ use std::sync::Arc;
 
 use re_framework::{Effects, Scheduled, SignedDuration, StateMachine, Timestamp};
 
+use crate::Env;
 use crate::externals::summarize_external::summarize;
 use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::types::conversation::{ConversationAction, ConversationId, InterruptionReason};
-use crate::types::memory::{
-    MemoryManager, MemoryManagerAction, MemoryManagerConstructor, MemoryManagerState,
+use crate::types::memory_manager::{
+    MemoryManager, MemoryManagerAction, MemoryManagerConstructor, MemoryManagerFailure,
+    MemoryManagerState,
 };
-use crate::Env;
 
 const COMPACT_TIMEOUT_MS: i64 = 300_000;
+
+fn state_label(state: &MemoryManagerState) -> &'static str {
+    match state {
+        MemoryManagerState::Idle => "Idle",
+        MemoryManagerState::Compacting => "Compacting",
+    }
+}
 
 pub struct MemoryManagerMachine;
 
@@ -20,6 +28,7 @@ impl StateMachine for MemoryManagerMachine {
     type Action = MemoryManagerAction;
     type Construction = MemoryManagerConstructor;
     type Env = crate::Env;
+    type Failure = MemoryManagerFailure;
 
     fn construct(
         _constructor: MemoryManagerConstructor,
@@ -37,7 +46,9 @@ impl StateMachine for MemoryManagerMachine {
         env: &Arc<Env>,
         action: &MemoryManagerAction,
         effects: &mut Effects<Self>,
-    ) -> anyhow::Result<MemoryManager> {
+    ) -> Result<MemoryManager, MemoryManagerFailure> {
+        let from = state_label(&state.state);
+
         let next_state = match (&state.state, action) {
             (MemoryManagerState::Idle, MemoryManagerAction::Compact { history }) => {
                 effects.enqueue_external(summarize(Arc::clone(env), history.clone()));
@@ -51,9 +62,10 @@ impl StateMachine for MemoryManagerMachine {
                 MemoryManagerState::Idle
             }
             _ => {
-                return Err(anyhow::anyhow!(
-                    "no transition for {action:?} in memory manager"
-                ))
+                return Err(MemoryManagerFailure::InvalidAction {
+                    action: action.clone(),
+                    state: from.to_string(),
+                });
             }
         };
 

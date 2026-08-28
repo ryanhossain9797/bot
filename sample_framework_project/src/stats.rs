@@ -1,4 +1,3 @@
-
 use re_framework::{Effects, EntityId, Identified, Scheduled, StateMachine};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,12 +37,18 @@ impl Identified for StatsInit {
 
 pub struct StatsMachine;
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+pub enum StatsFailure {
+    Foo,
+}
+
 impl StateMachine for StatsMachine {
     type State = Stats;
     type Id = StatsId;
     type Action = StatsAction;
     type Construction = StatsInit;
     type Env = ();
+    type Failure = StatsFailure;
 
     fn construct(_init: StatsInit, _effects: &mut Effects<Self>) -> Stats {
         Stats {
@@ -58,7 +63,7 @@ impl StateMachine for StatsMachine {
         _env: &Arc<()>,
         action: &StatsAction,
         _effects: &mut Effects<Self>,
-    ) -> anyhow::Result<Stats> {
+    ) -> Result<Stats, StatsFailure> {
         let StatsAction::MessageHandled { conversation } = action;
         let per_conversation = state
             .per_conversation
@@ -66,7 +71,12 @@ impl StateMachine for StatsMachine {
             .map(|(conv, count)| (conv.clone(), *count))
             .chain([(
                 conversation.clone(),
-                state.per_conversation.get(conversation).copied().unwrap_or(0) + 1,
+                state
+                    .per_conversation
+                    .get(conversation)
+                    .copied()
+                    .unwrap_or(0)
+                    + 1,
             )])
             .collect::<BTreeMap<_, _>>();
         let next = Stats {

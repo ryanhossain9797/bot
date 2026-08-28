@@ -44,3 +44,11 @@ impl re_framework::Identified for MemoryManagerConstructor {
         &self.id
     }
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum MemoryManagerFailure {
+    InvalidAction {
+        action: MemoryManagerAction,
+        state: String,
+    },
+}
