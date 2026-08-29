@@ -63,7 +63,7 @@ impl StateMachine for MemoryManagerMachine {
             }
             _ => {
                 return Err(MemoryManagerFailure::InvalidAction {
-                    action: action.clone(),
+                    action: format!("{action:?}"),
                     state: from.to_string(),
                 });
             }

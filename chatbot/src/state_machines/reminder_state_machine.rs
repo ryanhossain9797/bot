@@ -60,7 +60,7 @@ impl StateMachine for ReminderForConversationMachine {
             }
             _ => {
                 return Err(ReminderFailure::InvalidAction {
-                    action: action.clone(),
+                    action: format!("{action:?}"),
                     state: from.to_string(),
                 });
             }
@@ -83,6 +83,6 @@ impl StateMachine for ReminderForConversationMachine {
     }
 
     fn name() -> &'static str {
-        "ReminderForConversationMachine"
+        "ReminderMachine"
     }
 }

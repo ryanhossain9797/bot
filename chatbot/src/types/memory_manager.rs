@@ -47,8 +47,5 @@ impl re_framework::Identified for MemoryManagerConstructor {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MemoryManagerFailure {
-    InvalidAction {
-        action: MemoryManagerAction,
-        state: String,
-    },
+    InvalidAction { action: String, state: String },
 }

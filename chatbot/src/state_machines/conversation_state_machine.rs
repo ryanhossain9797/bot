@@ -495,7 +495,7 @@ fn conversation_transition(
             })
         }
         _ => Err(ConversationFailure::InvalidAction {
-            action: action.clone(),
+            action: format!("{action:?}"),
             state: from.to_string(),
         }),
     };

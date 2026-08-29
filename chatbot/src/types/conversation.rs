@@ -580,8 +580,5 @@ impl std::fmt::Debug for ConversationAction {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ConversationFailure {
-    InvalidAction {
-        action: ConversationAction,
-        state: String,
-    },
+    InvalidAction { action: String, state: String },
 }

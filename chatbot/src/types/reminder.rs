@@ -77,8 +77,5 @@ impl re_framework::Identified for ReminderConstructor {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ReminderFailure {
-    InvalidAction {
-        action: ReminderAction,
-        state: String,
-    },
+    InvalidAction { action: String, state: String },
 }
