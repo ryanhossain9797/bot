@@ -1,4 +1,4 @@
-use crate::externals::{decide, execute_tool, send_reply, BrainInput};
+use crate::externals::{BrainInput, decide, execute_tool, send_reply};
 use crate::stats::{StatsAction, StatsId, StatsInit, StatsMachine};
 use re_framework::{
     Effects, EntityId, Identified, Scheduled, SignedDuration, StateMachine, Timestamp,
@@ -41,7 +41,7 @@ enum Phase {
     SendingReply,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Clone, Deserialize)]
 pub enum ConversationAction {
     UserMessage(String),
     Decided(Decision),
@@ -51,7 +51,7 @@ pub enum ConversationAction {
     ForceReset,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Clone, Deserialize)]
 pub enum Decision {
     Reply(String),
     CallTool { tool: String, args: Vec<String> },
@@ -71,12 +71,22 @@ impl Identified for ConversationInit {
 
 pub struct ConversationMachine;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ConversationFailure {
+    NoFailure,
+    InvalidAction {
+        action: ConversationAction,
+        phase: Phase,
+    },
+}
+
 impl StateMachine for ConversationMachine {
     type State = Conversation;
     type Id = ConversationId;
     type Action = ConversationAction;
     type Construction = ConversationInit;
     type Env = ();
+    type Failure = ConversationFailure;
 
     fn construct(_init: ConversationInit, _effects: &mut Effects<Self>) -> Conversation {
         Conversation {
@@ -93,7 +103,7 @@ impl StateMachine for ConversationMachine {
         _env: &Arc<()>,
         action: &ConversationAction,
         effects: &mut Effects<Self>,
-    ) -> anyhow::Result<Conversation> {
+    ) -> Result<Conversation, ConversationFailure> {
         conversation_transition(state, id, action, effects)
     }
 
@@ -123,7 +133,7 @@ fn conversation_transition(
     id: &ConversationId,
     action: &ConversationAction,
     effects: &mut Effects<ConversationMachine>,
-) -> anyhow::Result<Conversation> {
+) -> Result<Conversation, ConversationFailure> {
     match (&state.phase, action) {
         (Phase::Idle { .. }, ConversationAction::UserMessage(text)) => {
             let history = with_entry(&state.history, HistoryEntry::User(text.clone()));
@@ -221,7 +231,10 @@ fn conversation_transition(
             })
         }
 
-        (phase, action) => anyhow::bail!("invalid action {action:?} in phase {phase:?}"),
+        (phase, action) => Err(ConversationFailure::InvalidAction {
+            action: action.clone(),
+            phase: phase.clone(),
+        }),
     }
 }
 

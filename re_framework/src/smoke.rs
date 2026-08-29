@@ -60,12 +60,18 @@ impl Identified for CounterInit {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum CounterFailure {
+    NegativeTotal,
+}
+
 impl StateMachine for CounterMachine {
     type State = CounterState;
     type Id = String;
     type Action = CounterAction;
     type Construction = CounterInit;
     type Env = CounterEnv;
+    type Failure = CounterFailure;
 
     fn construct(init: CounterInit, _effects: &mut Effects<Self>) -> CounterState {
         CounterState {
@@ -80,11 +86,11 @@ impl StateMachine for CounterMachine {
         env: &Arc<CounterEnv>,
         action: &CounterAction,
         effects: &mut Effects<Self>,
-    ) -> anyhow::Result<CounterState> {
+    ) -> Result<CounterState, CounterFailure> {
         match action {
             CounterAction::Add(n) => {
                 if state.total + n < 0 {
-                    anyhow::bail!("would go negative");
+                    return Err(CounterFailure::NegativeTotal);
                 }
                 let mut next = state.clone();
                 next.total += n;
@@ -194,12 +200,18 @@ impl Identified for PastDueInit {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum PastDueFailure {
+    PastDue,
+}
+
 impl StateMachine for PastDueMachine {
     type State = PastDueState;
     type Id = String;
     type Action = PastDueAction;
     type Construction = PastDueInit;
     type Env = PastDueEnv;
+    type Failure = PastDueFailure;
 
     fn construct(_init: PastDueInit, _effects: &mut Effects<Self>) -> PastDueState {
         PastDueState {
@@ -213,7 +225,7 @@ impl StateMachine for PastDueMachine {
         env: &Arc<PastDueEnv>,
         action: &PastDueAction,
         _effects: &mut Effects<Self>,
-    ) -> anyhow::Result<PastDueState> {
+    ) -> Result<PastDueState, PastDueFailure> {
         match action {
             PastDueAction::Fire => {
                 *env.fired.lock().unwrap() = true;
@@ -276,12 +288,18 @@ impl Identified for PongerInit {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum PongerFailure {
+    NoFailure,
+}
+
 impl StateMachine for PongerMachine {
     type State = PongerState;
     type Id = String;
     type Action = PongerAction;
     type Construction = PongerInit;
     type Env = RtEnv;
+    type Failure = PongerFailure;
     fn construct(_init: PongerInit, _effects: &mut Effects<Self>) -> PongerState {
         PongerState
     }
@@ -291,7 +309,7 @@ impl StateMachine for PongerMachine {
         env: &Arc<RtEnv>,
         action: &PongerAction,
         _effects: &mut Effects<Self>,
-    ) -> anyhow::Result<PongerState> {
+    ) -> Result<PongerState, PongerFailure> {
         let PongerAction::Pong(n) = action;
         env.received.lock().unwrap().push(*n);
         Ok(state.clone())
@@ -322,12 +340,18 @@ impl Identified for PingerInit {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+enum PingerFailure {
+    NegativePing,
+}
+
 impl StateMachine for PingerMachine {
     type State = PingerState;
     type Id = String;
     type Action = PingerAction;
     type Construction = PingerInit;
     type Env = RtEnv;
+    type Failure = PingerFailure;
     fn construct(_init: PingerInit, effects: &mut Effects<Self>) -> PingerState {
         effects.enqueue_act_maybe_construct::<PongerMachine>(
             PongerInit {
@@ -343,13 +367,14 @@ impl StateMachine for PingerMachine {
         _env: &Arc<RtEnv>,
         action: &PingerAction,
         effects: &mut Effects<Self>,
-    ) -> anyhow::Result<PingerState> {
+    ) -> Result<PingerState, PingerFailure> {
         let PingerAction::Ping(n) = action;
         if *n < 0 {
-            anyhow::bail!("no negative pings");
+            Err(PingerFailure::NegativePing)
+        } else {
+            effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n));
+            Ok(state.clone())
         }
-        effects.enqueue_action::<PongerMachine>("pong1".to_string(), PongerAction::Pong(*n));
-        Ok(state.clone())
     }
     fn schedule(_state: &PingerState) -> Option<Scheduled<PingerAction>> {
         None

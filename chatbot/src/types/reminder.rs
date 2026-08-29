@@ -40,7 +40,7 @@ impl re_framework::EntityId for ReminderForConversationId {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub struct ReminderForConversation {
+pub struct Reminder {
     pub state: ReminderState,
     pub conversation_id: ConversationId,
     pub addressee: String,
@@ -73,4 +73,9 @@ impl re_framework::Identified for ReminderConstructor {
     fn get_id(&self) -> &ReminderForConversationId {
         &self.id
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ReminderFailure {
+    InvalidAction { action: String, state: String },
 }

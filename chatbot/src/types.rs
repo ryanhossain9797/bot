@@ -1,4 +1,4 @@
 pub mod conversation;
 pub mod media;
-pub mod memory;
+pub mod memory_manager;
 pub mod reminder;

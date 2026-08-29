@@ -10,29 +10,80 @@ pub(crate) struct TursoStore {
     db: turso::Database,
 }
 
-pub async fn init_turso_store(path: &str) -> anyhow::Result<()> {
-    let backend = open_turso_store(path).await?;
-    init_store(backend)
+#[derive(Debug)]
+pub enum StoreInitError {
+    CreateDatabaseDirectoryFailed {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
+    OpenDatabaseFileFailed {
+        path: String,
+        source: turso::Error,
+    },
+    CreateFrameworkTablesFailed(turso::Error),
+    StoreAlreadyInitialized,
 }
 
-async fn open_turso_store(path: &str) -> anyhow::Result<TursoStore> {
+impl std::fmt::Display for StoreInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StoreInitError::CreateDatabaseDirectoryFailed { path, .. } => {
+                write!(f, "could not create database directory {}", path.display())
+            }
+            StoreInitError::OpenDatabaseFileFailed { path, .. } => {
+                write!(f, "could not open turso database at {path}")
+            }
+            StoreInitError::CreateFrameworkTablesFailed(_) => {
+                f.write_str("could not create framework tables")
+            }
+            StoreInitError::StoreAlreadyInitialized => f.write_str("store already initialized"),
+        }
+    }
+}
+
+impl std::error::Error for StoreInitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StoreInitError::CreateDatabaseDirectoryFailed { source, .. } => Some(source),
+            StoreInitError::OpenDatabaseFileFailed { source, .. } => Some(source),
+            StoreInitError::CreateFrameworkTablesFailed(source) => Some(source),
+            StoreInitError::StoreAlreadyInitialized => None,
+        }
+    }
+}
+
+pub async fn init_turso_store(path: &str) -> Result<(), StoreInitError> {
+    let backend = open_turso_store(path).await?;
+    init_store(backend).map_err(|_| StoreInitError::StoreAlreadyInitialized)
+}
+
+async fn open_turso_store(path: &str) -> Result<TursoStore, StoreInitError> {
     if let Some(dir) = std::path::Path::new(path)
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
     {
-        std::fs::create_dir_all(dir)
-            .with_context(|| format!("create_dir_all {}", dir.display()))?;
+        std::fs::create_dir_all(dir).map_err(|source| {
+            StoreInitError::CreateDatabaseDirectoryFailed {
+                path: dir.to_path_buf(),
+                source,
+            }
+        })?;
     }
     let db = turso::Builder::new_local(path)
         .build()
         .await
-        .with_context(|| format!("open turso db at {path}"))?;
+        .map_err(|source| StoreInitError::OpenDatabaseFileFailed {
+            path: path.to_string(),
+            source,
+        })?;
     create_tables(&db).await?;
     Ok(TursoStore { db })
 }
 
-async fn create_tables(db: &turso::Database) -> anyhow::Result<()> {
-    let conn = db.connect().context("connect for schema init")?;
+async fn create_tables(db: &turso::Database) -> Result<(), StoreInitError> {
+    let conn = db
+        .connect()
+        .map_err(StoreInitError::CreateFrameworkTablesFailed)?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS entities (
              machine TEXT NOT NULL,
@@ -70,7 +121,7 @@ async fn create_tables(db: &turso::Database) -> anyhow::Result<()> {
          );",
     )
     .await
-    .context("create framework tables")
+    .map_err(StoreInitError::CreateFrameworkTablesFailed)
 }
 
 impl TursoStore {

@@ -23,6 +23,7 @@ pub trait StateMachine: Sized + 'static {
     type Id: EntityId;
     type Action: Serialize + DeserializeOwned + Send + std::fmt::Debug + 'static;
     type Construction: Identified<Id = Self::Id> + Serialize + DeserializeOwned + Send + 'static;
+    type Failure: Clone + Serialize + DeserializeOwned + Send + std::fmt::Debug + 'static;
     type Env: Send + Sync + 'static;
 
     fn construct(construction: Self::Construction, effects: &mut Effects<Self>) -> Self::State;
@@ -32,7 +33,7 @@ pub trait StateMachine: Sized + 'static {
         env: &Arc<Self::Env>,
         action: &Self::Action,
         effects: &mut Effects<Self>,
-    ) -> anyhow::Result<Self::State>;
+    ) -> Result<Self::State, Self::Failure>;
     fn schedule(state: &Self::State) -> Option<Scheduled<Self::Action>>;
 
     fn name() -> &'static str;

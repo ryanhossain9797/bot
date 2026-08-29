@@ -19,7 +19,7 @@ resume; kill between a conversation's commit and stats delivery to watch the out
 Idle conversations reset after 60s (persisted timer — survives a restart too).";
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     re_framework::init_turso_store("framework_db/sample.db").await?;
     register::<ConversationMachine>(());
     register::<StatsMachine>(());
