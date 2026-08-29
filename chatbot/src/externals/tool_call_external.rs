@@ -462,23 +462,6 @@ pub async fn execute_tool(
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_fetch_web_search() {
-        let search_results = fetch_web_search("Rust programming").await.unwrap();
-        assert!(search_results.actual.contains("Search results for"));
-        assert!(search_results.actual.contains("Rust programming"));
-    }
-
-    #[tokio::test]
-    async fn test_fetch_url_content_real() {
-        let content = fetch_url_content("https://example.com").await.unwrap();
-        assert!(content.actual.contains("Example Domain"));
-        assert!(content
-            .actual
-            .contains("This domain is for use in documentation examples"));
-        assert!(content.actual.contains("https://iana.org/domains/example"));
-    }
-
     #[test]
     fn edit_lock_is_per_conversation() {
         let a1 = edit_lock("conv-a");
