@@ -1,4 +1,5 @@
 mod effects;
+mod error;
 mod handle;
 mod machine;
 mod store;

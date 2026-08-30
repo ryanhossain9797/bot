@@ -1,8 +1,11 @@
-use crate::store::{
-    CallToken, LoadedEntity, OutboxDraft, OutboxRow, RowKind, SaveOutcome, Store, TransitionWrite,
-    init_store,
+use crate::{
+    error::ReFrameworkError,
+    store::{
+        CallToken, LoadedEntity, OutboxDraft, OutboxRow, RowKind, SaveOutcome, Store,
+        TransitionWrite, init_store,
+    },
 };
-use anyhow::Context;
+
 use async_trait::async_trait;
 use jiff::Timestamp;
 
@@ -125,7 +128,7 @@ async fn create_tables(db: &turso::Database) -> Result<(), StoreInitError> {
 }
 
 impl TursoStore {
-    fn connect(&self) -> anyhow::Result<turso::Connection> {
+    fn connect(&self) -> Result<turso::Connection, ReFrameworkError> {
         let conn = self.db.connect().context("turso connect")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
             .context("set busy_timeout")?;
@@ -139,7 +142,7 @@ impl Store for TursoStore {
         &self,
         machine: &'static str,
         id_string: &str,
-    ) -> anyhow::Result<Option<LoadedEntity>> {
+    ) -> Result<Option<LoadedEntity>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -169,7 +172,7 @@ impl Store for TursoStore {
         state_json: &str,
         next_tick_on: Option<i64>,
         outbox: &[OutboxDraft],
-    ) -> anyhow::Result<SaveOutcome> {
+    ) -> Result<SaveOutcome, ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
@@ -188,7 +191,7 @@ impl Store for TursoStore {
         finish_tx(&conn, result).await
     }
 
-    async fn save(&self, write: &TransitionWrite) -> anyhow::Result<SaveOutcome> {
+    async fn save(&self, write: &TransitionWrite) -> Result<SaveOutcome, ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
@@ -202,7 +205,7 @@ impl Store for TursoStore {
         machine: &'static str,
         id_string: &str,
         token: &CallToken,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -235,7 +238,7 @@ impl Store for TursoStore {
         &self,
         machine: &'static str,
         sender_id: &str,
-    ) -> anyhow::Result<Vec<OutboxRow>> {
+    ) -> Result<Vec<OutboxRow>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -267,7 +270,7 @@ impl Store for TursoStore {
         cutoff_ms: i64,
         limit: i64,
         offset: i64,
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    ) -> Result<Vec<(String, String)>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -286,7 +289,7 @@ impl Store for TursoStore {
         cutoff_ms: i64,
         limit: i64,
         offset: i64,
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    ) -> Result<Vec<(String, String)>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -306,7 +309,7 @@ impl Store for TursoStore {
         sender_id: &str,
         sender_generation: i64,
         seq: i64,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute(
             "DELETE FROM outbox
@@ -325,7 +328,7 @@ impl Store for TursoStore {
         sender_generation: i64,
         seq: i64,
         reason: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute(
             "UPDATE outbox SET failure = ?
@@ -337,7 +340,7 @@ impl Store for TursoStore {
         Ok(())
     }
 
-    async fn delete(&self, machine: &'static str, id_string: &str) -> anyhow::Result<()> {
+    async fn delete(&self, machine: &'static str, id_string: &str) -> Result<(), ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
@@ -374,7 +377,7 @@ impl Store for TursoStore {
     }
 }
 
-async fn collect_pairs(rows: &mut turso::Rows) -> anyhow::Result<Vec<(String, String)>> {
+async fn collect_pairs(rows: &mut turso::Rows) -> Result<Vec<(String, String)>, ReFrameworkError> {
     let mut out = Vec::new();
     while let Some(row) = rows.next().await.context("pair row")? {
         out.push((
@@ -385,11 +388,7 @@ async fn collect_pairs(rows: &mut turso::Rows) -> anyhow::Result<Vec<(String, St
     Ok(out)
 }
 
-async fn current_version(
-    conn: &turso::Connection,
-    machine: &str,
-    id: &str,
-) -> anyhow::Result<Option<i64>> {
+async fn current_version(conn: &turso::Connection, machine: &str, id: &str) -> Result<Option<i64>> {
     let mut rows = conn
         .query(
             "SELECT version FROM entities WHERE machine = ? AND id = ?",
@@ -413,7 +412,7 @@ async fn insert_in_tx(
     state_json: &str,
     next_tick_on: Option<i64>,
     outbox: &[OutboxDraft],
-) -> anyhow::Result<SaveOutcome> {
+) -> Result<SaveOutcome> {
     if let Some(actual) = current_version(conn, machine, id_string).await? {
         return Ok(SaveOutcome::Conflict {
             actual: Some(actual),
@@ -441,7 +440,7 @@ async fn insert_in_tx(
 async fn save_in_tx(
     conn: &turso::Connection,
     write: &TransitionWrite,
-) -> anyhow::Result<SaveOutcome> {
+) -> Result<SaveOutcome, ReFrameworkError> {
     let updated = conn
         .execute(
             "UPDATE entities SET state = ?, version = version + 1, next_outbox_seq = ?, next_tick_on = ?
@@ -504,7 +503,7 @@ async fn insert_outbox_rows(
     generation: i64,
     first_seq: i64,
     outbox: &[OutboxDraft],
-) -> anyhow::Result<()> {
+) -> Result<(), ReFrameworkError> {
     for (offset, draft) in outbox.iter().enumerate() {
         conn.execute(
             "INSERT INTO outbox (sender_machine, sender_id, seq, sender_generation, sender_id_json, target_machine, target_id_json, action, kind, created_at)
@@ -530,8 +529,8 @@ async fn insert_outbox_rows(
 
 async fn finish_tx(
     conn: &turso::Connection,
-    result: anyhow::Result<SaveOutcome>,
-) -> anyhow::Result<SaveOutcome> {
+    result: Result<SaveOutcome, ReFrameworkError>,
+) -> Result<SaveOutcome, ReFrameworkError> {
     match &result {
         Ok(SaveOutcome::Ok) => {
             conn.execute("COMMIT", ()).await.context("commit")?;

@@ -1,3 +1,4 @@
+use crate::error::ReFrameworkError;
 use crate::handle::machines;
 use crate::store::store;
 use std::collections::HashMap;
@@ -9,7 +10,8 @@ const OUTBOX_GRACE_MS: i64 = 60_000;
 const MIN_INTERVAL: Duration = Duration::from_secs(10);
 const MAX_INTERVAL: Duration = Duration::from_secs(30);
 const LOOK_AHEAD_MARGIN: Duration = Duration::from_secs(30);
-const TIMER_LOOK_AHEAD_MS: i64 = (MAX_INTERVAL.as_secs() + LOOK_AHEAD_MARGIN.as_secs()) as i64 * 1000;
+const TIMER_LOOK_AHEAD_MS: i64 =
+    (MAX_INTERVAL.as_secs() + LOOK_AHEAD_MARGIN.as_secs()) as i64 * 1000;
 const REWAKE_SUPPRESS: Duration = Duration::from_secs(60);
 const WAKE_STAGGER: Duration = Duration::from_millis(25);
 
@@ -35,7 +37,7 @@ async fn sweeper_loop() {
 async fn paged<F, Fut>(what: &str, query: F) -> Vec<(String, String)>
 where
     F: Fn(i64) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<Vec<(String, String)>>>,
+    Fut: std::future::Future<Output = Result<Vec<(String, String)>, ReFrameworkError>>,
 {
     let mut all = Vec::new();
     for page in 0..MAX_PAGES {

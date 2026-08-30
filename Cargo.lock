@@ -3284,12 +3284,12 @@ dependencies = [
 name = "re_framework"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "dashmap 6.1.0",
  "jiff",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "turso",
 ]
