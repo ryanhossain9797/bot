@@ -3,6 +3,8 @@ pub(crate) mod turso;
 use async_trait::async_trait;
 use std::sync::OnceLock;
 
+use crate::error::ReFrameworkError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowKind {
     Act,
@@ -90,7 +92,7 @@ pub(crate) trait Store: Send + Sync {
         &self,
         machine: &'static str,
         id_string: &str,
-    ) -> anyhow::Result<Option<LoadedEntity>>;
+    ) -> Result<Option<LoadedEntity>, ReFrameworkError>;
 
     #[allow(clippy::too_many_arguments)]
     async fn insert(
@@ -102,36 +104,36 @@ pub(crate) trait Store: Send + Sync {
         state_json: &str,
         next_tick_on: Option<i64>,
         outbox: &[OutboxDraft],
-    ) -> anyhow::Result<SaveOutcome>;
+    ) -> Result<SaveOutcome, ReFrameworkError>;
 
-    async fn save(&self, write: &TransitionWrite) -> anyhow::Result<SaveOutcome>;
+    async fn save(&self, write: &TransitionWrite) -> Result<SaveOutcome, ReFrameworkError>;
 
     async fn is_duplicate(
         &self,
         machine: &'static str,
         id_string: &str,
         token: &CallToken,
-    ) -> anyhow::Result<bool>;
+    ) -> Result<bool, ReFrameworkError>;
 
     async fn pending_outbox(
         &self,
         machine: &'static str,
         sender_id: &str,
-    ) -> anyhow::Result<Vec<OutboxRow>>;
+    ) -> Result<Vec<OutboxRow>, ReFrameworkError>;
 
     async fn stalled_outbox_senders(
         &self,
         cutoff_ms: i64,
         limit: i64,
         offset: i64,
-    ) -> anyhow::Result<Vec<(String, String)>>;
+    ) -> Result<Vec<(String, String)>, ReFrameworkError>;
 
     async fn due_timers(
         &self,
         cutoff_ms: i64,
         limit: i64,
         offset: i64,
-    ) -> anyhow::Result<Vec<(String, String)>>;
+    ) -> Result<Vec<(String, String)>, ReFrameworkError>;
 
     async fn ack_outbox(
         &self,
@@ -139,7 +141,7 @@ pub(crate) trait Store: Send + Sync {
         sender_id: &str,
         sender_generation: i64,
         seq: i64,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), ReFrameworkError>;
 
     async fn fail_outbox(
         &self,
@@ -148,18 +150,18 @@ pub(crate) trait Store: Send + Sync {
         sender_generation: i64,
         seq: i64,
         reason: &str,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), ReFrameworkError>;
 
-    async fn delete(&self, machine: &'static str, id_string: &str) -> anyhow::Result<()>;
+    async fn delete(&self, machine: &'static str, id_string: &str) -> Result<(), ReFrameworkError>;
 }
 
 static STORE: OnceLock<Box<dyn Store>> = OnceLock::new();
 
-pub(crate) fn init_store(backend: impl Store + 'static) -> anyhow::Result<()> {
+pub(crate) fn init_store(backend: impl Store + 'static) -> Result<(), ReFrameworkError> {
     let boxed: Box<dyn Store> = Box::new(backend);
     STORE
         .set(boxed)
-        .map_err(|_| anyhow::anyhow!("store already initialized"))
+        .map_err(|_| ReFrameworkError::StoreError("store already initialized".into()))
 }
 
 pub(crate) fn store() -> &'static dyn Store {

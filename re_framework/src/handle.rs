@@ -1,4 +1,5 @@
 use crate::effects::Effects;
+use crate::error::ReFrameworkError;
 use crate::machine::{EntityId, Identified, StateMachine};
 use crate::store::{
     CallToken, OutboxRow, RowKind, SaveOutcome, TransitionWrite, new_generation, store,
@@ -206,7 +207,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         }
     }
 
-    async fn ensure_live(&self, id: &SM::Id, key: &str) -> anyhow::Result<LoadStatus> {
+    async fn ensure_live(&self, id: &SM::Id, key: &str) -> Result<LoadStatus, ReFrameworkError> {
         if self.entities.contains_key(key) {
             return Ok(LoadStatus::Live);
         }
@@ -259,13 +260,15 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         id: SM::Id,
         key: String,
         construction: SM::Construction,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ReFrameworkError> {
         let mut effects = Effects::new(id.clone());
         let state = SM::construct(construction, &mut effects);
-        let state_json = serde_json::to_string(&state).map_err(|e| {
-            log_transition::<SM>("construct aborted — state failed to serialize");
-            anyhow::anyhow!("state failed to serialize: {e}")
-        })?;
+        let state_json = serde_json::to_string(&state)
+            .inspect_err(|_| {
+                log_transition::<SM>("construct aborted — state failed to serialize");
+            })
+            .map_err(ReFrameworkError::StateSerializationError)?;
+
         let id_json = serde_json::to_string(&id).expect("EntityId serializes");
         let generation = new_generation();
         match store()

@@ -1,8 +1,11 @@
-use crate::store::{
-    CallToken, LoadedEntity, OutboxDraft, OutboxRow, RowKind, SaveOutcome, Store, TransitionWrite,
-    init_store,
+use crate::{
+    error::ReFrameworkError,
+    store::{
+        CallToken, LoadedEntity, OutboxDraft, OutboxRow, RowKind, SaveOutcome, Store,
+        TransitionWrite, init_store,
+    },
 };
-use anyhow::Context;
+
 use async_trait::async_trait;
 use jiff::Timestamp;
 
@@ -125,10 +128,15 @@ async fn create_tables(db: &turso::Database) -> Result<(), StoreInitError> {
 }
 
 impl TursoStore {
-    fn connect(&self) -> anyhow::Result<turso::Connection> {
-        let conn = self.db.connect().context("turso connect")?;
+    fn connect(&self) -> Result<turso::Connection, ReFrameworkError> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso connect: {e}").into()))?;
         conn.busy_timeout(std::time::Duration::from_secs(5))
-            .context("set busy_timeout")?;
+            .map_err(|e| {
+                ReFrameworkError::StoreError(format!("turso set busy_timeout: {e}").into())
+            })?;
         Ok(conn)
     }
 }
@@ -139,7 +147,7 @@ impl Store for TursoStore {
         &self,
         machine: &'static str,
         id_string: &str,
-    ) -> anyhow::Result<Option<LoadedEntity>> {
+    ) -> Result<Option<LoadedEntity>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -147,14 +155,26 @@ impl Store for TursoStore {
                 (machine, id_string),
             )
             .await
-            .context("load entity")?;
-        match rows.next().await.context("load entity row")? {
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso load entity: {e}").into()))?;
+        match rows.next().await.map_err(|e| {
+            ReFrameworkError::StoreError(format!("turso load entity row: {e}").into())
+        })? {
             None => Ok(None),
             Some(row) => Ok(Some(LoadedEntity {
-                state_json: row.get(0).context("state column")?,
-                generation: row.get(1).context("generation column")?,
-                version: row.get(2).context("version column")?,
-                next_outbox_seq: row.get(3).context("next_outbox_seq column")?,
+                state_json: row.get(0).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso state column: {e}").into())
+                })?,
+                generation: row.get(1).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso generation column: {e}").into())
+                })?,
+                version: row.get(2).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso version column: {e}").into())
+                })?,
+                next_outbox_seq: row.get(3).map_err(|e| {
+                    ReFrameworkError::StoreError(
+                        format!("turso next_outbox_seq column: {e}").into(),
+                    )
+                })?,
             })),
         }
     }
@@ -169,11 +189,11 @@ impl Store for TursoStore {
         state_json: &str,
         next_tick_on: Option<i64>,
         outbox: &[OutboxDraft],
-    ) -> anyhow::Result<SaveOutcome> {
+    ) -> Result<SaveOutcome, ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
-            .context("begin insert")?;
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso begin insert: {e}").into()))?;
         let result = insert_in_tx(
             &conn,
             machine,
@@ -188,11 +208,11 @@ impl Store for TursoStore {
         finish_tx(&conn, result).await
     }
 
-    async fn save(&self, write: &TransitionWrite) -> anyhow::Result<SaveOutcome> {
+    async fn save(&self, write: &TransitionWrite) -> Result<SaveOutcome, ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
-            .context("begin save")?;
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso begin save: {e}").into()))?;
         let result = save_in_tx(&conn, write).await;
         finish_tx(&conn, result).await
     }
@@ -202,7 +222,7 @@ impl Store for TursoStore {
         machine: &'static str,
         id_string: &str,
         token: &CallToken,
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -216,12 +236,20 @@ impl Store for TursoStore {
                 ),
             )
             .await
-            .context("dedup lookup")?;
-        match rows.next().await.context("dedup lookup row")? {
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso dedup lookup: {e}").into()))?;
+        match rows.next().await.map_err(|e| {
+            ReFrameworkError::StoreError(format!("turso dedup lookup row: {e}").into())
+        })? {
             None => Ok(false),
             Some(row) => {
-                let slot_generation: i64 = row.get(0).context("caller_generation column")?;
-                let last_seq: i64 = row.get(1).context("last_seq column")?;
+                let slot_generation: i64 = row.get(0).map_err(|e| {
+                    ReFrameworkError::StoreError(
+                        format!("turso caller_generation column: {e}").into(),
+                    )
+                })?;
+                let last_seq: i64 = row.get(1).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso last_seq column: {e}").into())
+                })?;
                 Ok(match slot_generation.cmp(&token.sender_generation) {
                     std::cmp::Ordering::Greater => true,
                     std::cmp::Ordering::Equal => last_seq >= token.seq,
@@ -235,7 +263,7 @@ impl Store for TursoStore {
         &self,
         machine: &'static str,
         sender_id: &str,
-    ) -> anyhow::Result<Vec<OutboxRow>> {
+    ) -> Result<Vec<OutboxRow>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -245,18 +273,37 @@ impl Store for TursoStore {
                 (machine, sender_id),
             )
             .await
-            .context("pending outbox")?;
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso pending outbox: {e}").into()))?;
         let mut pending = Vec::new();
-        while let Some(row) = rows.next().await.context("pending outbox row")? {
-            let kind: String = row.get(4).context("kind column")?;
+        while let Some(row) = rows.next().await.map_err(|e| {
+            ReFrameworkError::StoreError(format!("turso pending outbox row: {e}").into())
+        })? {
+            let kind: String = row.get(4).map_err(|e| {
+                ReFrameworkError::StoreError(format!("turso kind column: {e}").into())
+            })?;
             pending.push(OutboxRow {
-                seq: row.get(0).context("seq column")?,
-                sender_generation: row.get(5).context("sender_generation column")?,
-                kind: RowKind::parse(&kind)
-                    .with_context(|| format!("unknown outbox row kind {kind}"))?,
-                target_machine: row.get(1).context("target_machine column")?,
-                target_id_json: row.get(2).context("target_id_json column")?,
-                payload_json: row.get(3).context("action column")?,
+                seq: row.get(0).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso seq column: {e}").into())
+                })?,
+                sender_generation: row.get(5).map_err(|e| {
+                    ReFrameworkError::StoreError(
+                        format!("turso sender_generation column: {e}").into(),
+                    )
+                })?,
+                kind: RowKind::parse(&kind).ok_or_else(|| {
+                    ReFrameworkError::StoreError(
+                        format!("turso unknown outbox row kind {kind}").into(),
+                    )
+                })?,
+                target_machine: row.get(1).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso target_machine column: {e}").into())
+                })?,
+                target_id_json: row.get(2).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso target_id_json column: {e}").into())
+                })?,
+                payload_json: row.get(3).map_err(|e| {
+                    ReFrameworkError::StoreError(format!("turso action column: {e}").into())
+                })?,
             });
         }
         Ok(pending)
@@ -267,7 +314,7 @@ impl Store for TursoStore {
         cutoff_ms: i64,
         limit: i64,
         offset: i64,
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    ) -> Result<Vec<(String, String)>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -277,7 +324,9 @@ impl Store for TursoStore {
                 (cutoff_ms, limit, offset),
             )
             .await
-            .context("stalled outbox senders")?;
+            .map_err(|e| {
+                ReFrameworkError::StoreError(format!("turso stalled outbox senders: {e}").into())
+            })?;
         collect_pairs(&mut rows).await
     }
 
@@ -286,7 +335,7 @@ impl Store for TursoStore {
         cutoff_ms: i64,
         limit: i64,
         offset: i64,
-    ) -> anyhow::Result<Vec<(String, String)>> {
+    ) -> Result<Vec<(String, String)>, ReFrameworkError> {
         let conn = self.connect()?;
         let mut rows = conn
             .query(
@@ -296,7 +345,7 @@ impl Store for TursoStore {
                 (cutoff_ms, limit, offset),
             )
             .await
-            .context("due timers")?;
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso due timers: {e}").into()))?;
         collect_pairs(&mut rows).await
     }
 
@@ -306,7 +355,7 @@ impl Store for TursoStore {
         sender_id: &str,
         sender_generation: i64,
         seq: i64,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute(
             "DELETE FROM outbox
@@ -314,7 +363,7 @@ impl Store for TursoStore {
             (machine, sender_id, sender_generation, seq),
         )
         .await
-        .context("ack outbox")?;
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso ack outbox: {e}").into()))?;
         Ok(())
     }
 
@@ -325,7 +374,7 @@ impl Store for TursoStore {
         sender_generation: i64,
         seq: i64,
         reason: &str,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute(
             "UPDATE outbox SET failure = ?
@@ -333,40 +382,46 @@ impl Store for TursoStore {
             (reason, machine, sender_id, sender_generation, seq),
         )
         .await
-        .context("fail outbox")?;
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso fail outbox: {e}").into()))?;
         Ok(())
     }
 
-    async fn delete(&self, machine: &'static str, id_string: &str) -> anyhow::Result<()> {
+    async fn delete(&self, machine: &'static str, id_string: &str) -> Result<(), ReFrameworkError> {
         let conn = self.connect()?;
         conn.execute("BEGIN IMMEDIATE", ())
             .await
-            .context("begin delete")?;
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso begin delete: {e}").into()))?;
         let result = async {
             conn.execute(
                 "DELETE FROM entities WHERE machine = ? AND id = ?",
                 (machine, id_string),
             )
             .await
-            .context("delete entity")?;
+            .map_err(|e| {
+                ReFrameworkError::StoreError(format!("turso delete entity: {e}").into())
+            })?;
             conn.execute(
                 "DELETE FROM outbox WHERE sender_machine = ? AND sender_id = ?",
                 (machine, id_string),
             )
             .await
-            .context("delete outbox")?;
+            .map_err(|e| {
+                ReFrameworkError::StoreError(format!("turso delete outbox: {e}").into())
+            })?;
             conn.execute(
                 "DELETE FROM call_dedup WHERE machine = ? AND id = ?",
                 (machine, id_string),
             )
             .await
-            .context("delete dedup")?;
+            .map_err(|e| ReFrameworkError::StoreError(format!("turso delete dedup: {e}").into()))?;
             conn.execute(
                 "DELETE FROM call_dedup WHERE caller_machine = ? AND caller_id = ?",
                 (machine, id_string),
             )
             .await
-            .context("delete caller-side dedup")?;
+            .map_err(|e| {
+                ReFrameworkError::StoreError(format!("turso delete caller-side dedup: {e}").into())
+            })?;
             Ok(SaveOutcome::Ok)
         }
         .await;
@@ -374,12 +429,18 @@ impl Store for TursoStore {
     }
 }
 
-async fn collect_pairs(rows: &mut turso::Rows) -> anyhow::Result<Vec<(String, String)>> {
+async fn collect_pairs(rows: &mut turso::Rows) -> Result<Vec<(String, String)>, ReFrameworkError> {
     let mut out = Vec::new();
-    while let Some(row) = rows.next().await.context("pair row")? {
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso pair row: {e}").into()))?
+    {
         out.push((
-            row.get(0).context("column 0")?,
-            row.get(1).context("column 1")?,
+            row.get(0)
+                .map_err(|e| ReFrameworkError::StoreError(format!("turso column 0: {e}").into()))?,
+            row.get(1)
+                .map_err(|e| ReFrameworkError::StoreError(format!("turso column 1: {e}").into()))?,
         ));
     }
     Ok(out)
@@ -389,16 +450,22 @@ async fn current_version(
     conn: &turso::Connection,
     machine: &str,
     id: &str,
-) -> anyhow::Result<Option<i64>> {
+) -> Result<Option<i64>, ReFrameworkError> {
     let mut rows = conn
         .query(
             "SELECT version FROM entities WHERE machine = ? AND id = ?",
             (machine, id),
         )
         .await
-        .context("version probe")?;
-    match rows.next().await.context("version probe row")? {
-        Some(row) => Ok(Some(row.get(0).context("version column")?)),
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso version probe: {e}").into()))?;
+    match rows
+        .next()
+        .await
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso version probe row: {e}").into()))?
+    {
+        Some(row) => Ok(Some(row.get(0).map_err(|e| {
+            ReFrameworkError::StoreError(format!("turso version column: {e}").into())
+        })?)),
         None => Ok(None),
     }
 }
@@ -413,7 +480,7 @@ async fn insert_in_tx(
     state_json: &str,
     next_tick_on: Option<i64>,
     outbox: &[OutboxDraft],
-) -> anyhow::Result<SaveOutcome> {
+) -> Result<SaveOutcome, ReFrameworkError> {
     if let Some(actual) = current_version(conn, machine, id_string).await? {
         return Ok(SaveOutcome::Conflict {
             actual: Some(actual),
@@ -433,7 +500,7 @@ async fn insert_in_tx(
         ),
     )
     .await
-    .context("insert entity")?;
+    .map_err(|e| ReFrameworkError::StoreError(format!("turso insert entity: {e}").into()))?;
     insert_outbox_rows(conn, machine, id_string, id_json, generation, 0, outbox).await?;
     Ok(SaveOutcome::Ok)
 }
@@ -441,7 +508,7 @@ async fn insert_in_tx(
 async fn save_in_tx(
     conn: &turso::Connection,
     write: &TransitionWrite,
-) -> anyhow::Result<SaveOutcome> {
+) -> Result<SaveOutcome, ReFrameworkError> {
     let updated = conn
         .execute(
             "UPDATE entities SET state = ?, version = version + 1, next_outbox_seq = ?, next_tick_on = ?
@@ -457,7 +524,7 @@ async fn save_in_tx(
             ),
         )
         .await
-        .context("CAS update")?;
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso CAS update: {e}").into()))?;
     if updated == 0 {
         let actual = current_version(conn, write.machine, &write.id_string).await?;
         return Ok(SaveOutcome::Conflict { actual });
@@ -490,7 +557,7 @@ async fn save_in_tx(
             ),
         )
         .await
-        .context("dedup upsert")?;
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso dedup upsert: {e}").into()))?;
     }
     Ok(SaveOutcome::Ok)
 }
@@ -504,7 +571,7 @@ async fn insert_outbox_rows(
     generation: i64,
     first_seq: i64,
     outbox: &[OutboxDraft],
-) -> anyhow::Result<()> {
+) -> Result<(), ReFrameworkError> {
     for (offset, draft) in outbox.iter().enumerate() {
         conn.execute(
             "INSERT INTO outbox (sender_machine, sender_id, seq, sender_generation, sender_id_json, target_machine, target_id_json, action, kind, created_at)
@@ -523,18 +590,20 @@ async fn insert_outbox_rows(
             ),
         )
         .await
-        .context("insert outbox row")?;
+        .map_err(|e| ReFrameworkError::StoreError(format!("turso insert outbox row: {e}").into()))?;
     }
     Ok(())
 }
 
 async fn finish_tx(
     conn: &turso::Connection,
-    result: anyhow::Result<SaveOutcome>,
-) -> anyhow::Result<SaveOutcome> {
+    result: Result<SaveOutcome, ReFrameworkError>,
+) -> Result<SaveOutcome, ReFrameworkError> {
     match &result {
         Ok(SaveOutcome::Ok) => {
-            conn.execute("COMMIT", ()).await.context("commit")?;
+            conn.execute("COMMIT", ())
+                .await
+                .map_err(|e| ReFrameworkError::StoreError(format!("turso commit: {e}").into()))?;
         }
         Ok(SaveOutcome::Conflict { .. }) | Err(_) => {
             let _ = conn.execute("ROLLBACK", ()).await;
