@@ -264,7 +264,7 @@ impl<SM: StateMachine> StateMachineHandle<SM> {
         let mut effects = Effects::new(id.clone());
         let state = SM::construct(construction, &mut effects);
         let state_json = serde_json::to_string(&state)
-            .inspect(|_| {
+            .inspect_err(|_| {
                 log_transition::<SM>("construct aborted — state failed to serialize");
             })
             .map_err(ReFrameworkError::StateSerializationError)?;
