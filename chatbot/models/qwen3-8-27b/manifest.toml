@@ -1,4 +1,4 @@
-model    = "Qwen3.8-27B-Q4_K_M.gguf"
+model    = "Qwen3.8-27B-Q6_K.gguf"
 mmproj   = "mmproj-Qwen3.8-27B-BF16.gguf"
 template = "chat_template.jinja"
 

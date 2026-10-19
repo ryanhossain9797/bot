@@ -1,0 +1,6 @@
+# Pinned: `branches` 0.4.x (pulled in by turso) calls core::intrinsics::abort, which
+# nightly removed around 2026-10-03 — https://github.com/fereidani/branches/issues/10.
+# Unpin once a turso release depends on a fixed `branches`.
+[toolchain]
+channel = "nightly-2026-10-02"
+components = ["rustfmt", "clippy"]
