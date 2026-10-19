@@ -17,9 +17,10 @@ RUN apt-get install -y \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add x86_64-unknown-linux-gnu
-
 WORKDIR /app
+
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install && rustup target add x86_64-unknown-linux-gnu
 
 COPY Cargo.toml Cargo.lock ./
 COPY chatbot/src ./chatbot/src

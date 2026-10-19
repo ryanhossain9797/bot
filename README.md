@@ -6,7 +6,8 @@ persistent, actor-style state-machine framework.
 ## Overview
 
 - **Discord Integration**: Responds to direct messages and to @mentions in group channels
-- **Local LLM**: Runs Qwen3.6-35B-A3B in-process via `llama.cpp` (Vulkan/ROCm), no external API
+- **Local LLM**: Runs Qwen3.8-27B in-process via `llama.cpp` (Vulkan/ROCm), no external API, with
+  Qwen3-4B as a utility model for history compaction
 - **Multimodal**: Accepts image attachments and can inspect or send images back
 - **Tool Calling**: Multi-round tool execution (web search, page fetch, a private bash sandbox,
   file read/edit)
@@ -60,9 +61,12 @@ bot/
 
 Everything model-specific lives in a **model pack**: a self-contained folder holding the GGUF
 weights, the multimodal projector, our chat template, and a `manifest.toml` of knobs (sampling,
-context size, reasoning marker, which parser to use). Swap the folder via the `MODEL_PACK_DIR`
-environment variable and restart to change models — nothing model-specific is compiled in. See
-[chatbot/models/qwen-qwen3-6-35b-a3b/](chatbot/models/qwen-qwen3-6-35b-a3b/).
+context size, reasoning marker, which parser to use). Nothing model-specific is compiled in. Packs
+— weights included — are baked into the `bot-base` image by `Dockerfile.base`; `MODEL_PACK_DIR`
+and `UTILITY_MODEL_PACK_DIR` select which baked pack to load. To change models, put the files in
+the pack folder (real files or hard links — `docker build` won't follow symlinks), then rebuild
+the base and app images. See [chatbot/models/qwen3-8-27b/](chatbot/models/qwen3-8-27b/) and
+[chatbot/models/qwen3-4b/](chatbot/models/qwen3-4b/).
 
 #### Available Tools
 
@@ -172,7 +176,8 @@ HTTP call.
 
 - Docker (with a GPU runtime; the Justfile targets an AMD/ROCm host). The container mounts the Docker socket and self-manages its `web_search` SearxNG instance and bash sandbox as sibling containers.
 - A Discord bot token
-- A model pack under `chatbot/models/` (GGUF weights + mmproj + template + `manifest.toml`)
+- Model packs under `chatbot/models/` with their GGUF files present (weights + mmproj + template
+  + `manifest.toml`) — they are copied into the base image at build time
 
 ### Configuration
 
@@ -183,18 +188,21 @@ HTTP call.
 ### Build & deploy (from `chatbot/`)
 
 ```bash
-just build_base      # base image: Rust toolchain + llama.cpp
+just build_base      # base image: runtime deps + the model packs (weights baked in)
 just deploy_local    # build the app image and (re)start the `bot` container
 ```
 
-`run_local` mounts the model pack read-only and sets `MODEL_PACK_DIR` accordingly. The bot runs
-with host networking and mounts the Docker socket so it can spin up per-conversation bash sandboxes.
+Models are not mounted — they live in the image, so changing weights means re-running
+`just build_base`. `run_local` sets `MODEL_PACK_DIR` / `UTILITY_MODEL_PACK_DIR` to the baked packs
+under `/app/models/`. The bot runs with host networking and mounts the Docker socket so it can spin
+up per-conversation bash sandboxes.
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MODEL_PACK_DIR` | Path to the model pack folder | `./models/qwen-qwen3-6-35b-a3b` |
+| `MODEL_PACK_DIR` | Path to the primary model pack folder | `./models/qwen3-8-27b` |
+| `UTILITY_MODEL_PACK_DIR` | Path to the utility (compaction) model pack folder | `./models/qwen3-4b` |
 | `RUST_LOG` | Log level | `info` |
 
 ## Dependencies
