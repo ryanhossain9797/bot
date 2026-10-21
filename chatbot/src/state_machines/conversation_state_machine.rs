@@ -30,7 +30,7 @@ type ConversationEffects = Effects<ConversationMachine>;
 
 const REDACT_HISTORY_IMAGES: bool = false;
 
-const LLM_TIMEOUT_MS: i64 = 300_000;
+const LLM_TIMEOUT_MS: i64 = 900_000;
 const SEND_TIMEOUT_MS: i64 = 60_000;
 
 const COMPACT_WATERMARK: usize = 24;
