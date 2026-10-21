@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::mtmd::mtmd_default_marker;
 use tokio::task::spawn_blocking;
 
 use super::local_model::{self, LocalModel};
@@ -78,14 +79,19 @@ impl PrimaryRole {
     }
 
     /// Dev-only: time one prompt with standard decoding and, if the model has an MTP head, with MTP.
-    pub fn bench(&self, user_message: &str) -> anyhow::Result<()> {
-        let messages = [ChatMessage::user(user_message)];
+    pub fn bench(&self, user_message: &str, image: Option<Vec<u8>>) -> anyhow::Result<()> {
+        let content = match image {
+            Some(_) => format!("{user_message}\n{}", mtmd_default_marker()),
+            None => user_message.to_string(),
+        };
+        let images: Vec<Arc<Vec<u8>>> = image.into_iter().map(Arc::new).collect();
+        let messages = [ChatMessage::user(content)];
         let prompt = self.render_prompt(&RenderInputs {
             messages: &messages,
             tools: None,
             footer: None,
         })?;
-        local_model::bench(&self.model, &prompt, self.temperature(), &self.thinking())
+        local_model::bench(&self.model, &prompt, &images, self.temperature(), &self.thinking())
     }
 }
 

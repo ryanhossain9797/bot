@@ -69,12 +69,13 @@ the base and app images. See [chatbot/models/qwen3-8-27b/](chatbot/models/qwen3-
 [chatbot/models/qwen3-4b/](chatbot/models/qwen3-4b/).
 
 **MTP speculative decoding** is chosen per model: if the GGUF ships an MTP head
-(`<arch>.nextn_predict_layers > 0`, e.g. Qwen3.8-27B), text-only turns draft up to `draft_max`
-tokens per step through the MTP head and verify them in one batch. Output is identical to standard
-decoding, only faster (≈2× on Qwen3.8-27B). Turns with images use standard decoding. An optional
-`[speculative]` section in `manifest.toml` tunes it (`mtp = false` opts out; defaults
-`draft_max = 3`, `p_min = 0.0`). The startup log says which mode was picked, and each generation
-logs its tok/s. `chatbot bench [message]` compares both modes on one prompt.
+(`<arch>.nextn_predict_layers > 0`, e.g. Qwen3.8-27B), every turn drafts up to `draft_max` tokens
+per step through the MTP head and verifies them in one batch. Output is identical to standard
+decoding, only faster (≈2× on Qwen3.8-27B, text or images). Image prompts are still prefilled by
+mtmd; the drafter just doesn't see that prefill, and drafts nearly as well from the target's hidden
+state. An optional `[speculative]` section in `manifest.toml` tunes it (`mtp = false` opts out;
+defaults `draft_max = 3`, `p_min = 0.0`). The startup log says which mode was picked, and each
+generation logs its tok/s. `chatbot bench [message] [image]` compares both modes on one prompt.
 
 #### Available Tools
 

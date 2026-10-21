@@ -171,17 +171,37 @@ pub(super) fn run(
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<String> {
+    run_with(model, prompt, images, temperature, thinking, model.mtp)
+}
+
+fn run_with(
+    model: &LocalModel,
+    prompt: &str,
+    images: &[Arc<Vec<u8>>],
+    temperature: f32,
+    thinking: &ThinkingPolicy,
+    mtp: Option<MtpConfig>,
+) -> anyhow::Result<String> {
     let cfg = &model.cfg;
-    match (&model.mtmd, images.is_empty()) {
-        (_, true) => match model.mtp {
-            Some(mtp) => run_generation_text_mtp(model, mtp, cfg, prompt, temperature, thinking),
-            None => run_generation_text(model, cfg, prompt, temperature, thinking),
-        },
-        // MTP drafting skips embedding batches, so image prompts take the standard path.
-        (Some(mtmd), false) => {
+    match (&model.mtmd, images.is_empty(), mtp) {
+        (_, true, Some(mtp)) => {
+            run_generation_text_mtp(model, mtp, cfg, prompt, temperature, thinking)
+        }
+        (_, true, None) => run_generation_text(model, cfg, prompt, temperature, thinking),
+        (Some(mtmd), false, Some(mtp)) => run_generation_mtmd_mtp(
+            model,
+            mtmd,
+            mtp,
+            cfg,
+            prompt,
+            images,
+            temperature,
+            thinking,
+        ),
+        (Some(mtmd), false, None) => {
             run_generation_mtmd(model, mtmd, cfg, prompt, images, temperature, thinking)
         }
-        (None, false) => Err(anyhow::anyhow!(
+        (None, false, _) => Err(anyhow::anyhow!(
             "text-only model received {} image(s) but has no multimodal projector",
             images.len()
         )),
@@ -192,17 +212,27 @@ pub(super) fn run(
 pub(super) fn bench(
     model: &LocalModel,
     prompt: &str,
+    images: &[Arc<Vec<u8>>],
     temperature: f32,
     thinking: &ThinkingPolicy,
 ) -> anyhow::Result<()> {
-    let cfg = &model.cfg;
-    let standard = run_generation_text(model, cfg, prompt, temperature, thinking)?;
+    let standard = run_with(model, prompt, images, temperature, thinking, None)?;
     println!("[bench] standard output ({} chars): {}", standard.len(), preview(&standard));
     match model.mtp {
-        Some(mtp) => {
-            let speculative =
-                run_generation_text_mtp(model, mtp, cfg, prompt, temperature, thinking)?;
+        Some(_) => {
+            let speculative = run_with(model, prompt, images, temperature, thinking, model.mtp)?;
             println!("[bench] mtp output ({} chars): {}", speculative.len(), preview(&speculative));
+            let common = standard
+                .chars()
+                .zip(speculative.chars())
+                .take_while(|(a, b)| a == b)
+                .count();
+            println!(
+                "[bench] outputs identical: {} (common prefix {common} of {} / {} chars)",
+                standard == speculative,
+                standard.chars().count(),
+                speculative.chars().count()
+            );
         }
         None => println!("[bench] model has no MTP head — nothing to compare"),
     }
@@ -390,7 +420,55 @@ fn run_generation_text_mtp(
     spec.begin(&tokens)?;
 
     log_prompt(prompt);
-    generate_mtp(llama, &mut spec, tokens, temperature, cfg, thinking)
+    let n_past = tokens.len() as i32;
+    generate_mtp(llama, &mut spec, tokens, n_past, temperature, cfg, thinking)
+}
+
+/// Image prompts: mtmd prefills the target exactly as the standard path does, then the MTP loop
+/// runs. The drafter never sees the prompt (its process() hook skips mtmd's batches), but its
+/// input is the target's hidden state, which already carries the image — so drafts still land
+/// about as often as on text, and the output is identical to standard decoding.
+#[allow(clippy::too_many_arguments)]
+fn run_generation_mtmd_mtp(
+    model: &LocalModel,
+    mtmd: &MtmdContext,
+    mtp: MtpConfig,
+    cfg: &GenConfig,
+    prompt: &str,
+    images: &[Arc<Vec<u8>>],
+    temperature: f32,
+    thinking: &ThinkingPolicy,
+) -> anyhow::Result<String> {
+    let llama = &model.model;
+
+    let bitmaps = images
+        .iter()
+        .map(|bytes| MtmdBitmap::from_buffer(mtmd, bytes, false))
+        .collect::<Result<Vec<_>, _>>()?;
+    let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+
+    let mut spec = match new_mtp(model, mtp) {
+        Ok(spec) => spec,
+        Err(e) => {
+            eprintln!("[mtp] setup failed: {e:#} — falling back to standard decoding");
+            return run_generation_mtmd(model, mtmd, cfg, prompt, images, temperature, thinking);
+        }
+    };
+
+    let chunks = mtmd.tokenize(
+        MtmdInputText {
+            text: prompt.to_string(),
+            add_special: ADD_BOS_REEVAL_WHEN_CACHING_HITS,
+            parse_special: true,
+        },
+        &bitmap_refs,
+    )?;
+
+    let n_past =
+        chunks.eval_chunks(mtmd, spec.target_context(), 0, 0, cfg.batch_chunk as i32, true)?;
+
+    log_prompt(prompt);
+    generate_mtp(llama, &mut spec, Vec::new(), n_past, temperature, cfg, thinking)
 }
 
 fn sampler_chain(model: &LlamaModel, temperature: f32, cfg: &GenConfig) -> LlamaSampler {
@@ -546,6 +624,7 @@ fn generate_mtp(
     model: &LlamaModel,
     spec: &mut MtpSpeculative,
     mut history: Vec<LlamaToken>,
+    mut n_past: i32,
     temperature: f32,
     cfg: &GenConfig,
     thinking: &ThinkingPolicy,
@@ -553,7 +632,6 @@ fn generate_mtp(
     let mut sampler = sampler_chain(model, temperature, cfg);
     let mut out = Output::new(model, thinking);
     let mut batch = new_batch(cfg);
-    let mut n_past = history.len() as i32;
     let (mut drafted, mut accepted) = (0usize, 0usize);
 
     let mut pending = sampler.sample(spec.target_context(), -1);
