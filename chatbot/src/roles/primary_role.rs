@@ -5,6 +5,7 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use tokio::task::spawn_blocking;
 
 use super::local_model::{self, LocalModel};
+use crate::chat_format::ChatMessage;
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 use crate::model_pack::Pack;
 
@@ -74,6 +75,17 @@ impl PrimaryRole {
     pub fn load(backend: Arc<LlamaBackend>) -> anyhow::Result<Self> {
         let pack = Pack::load_from(&pack_dir())?;
         Ok(PrimaryRole { model: local_model::load_model(backend, &pack)? })
+    }
+
+    /// Dev-only: time one prompt with standard decoding and, if the model has an MTP head, with MTP.
+    pub fn bench(&self, user_message: &str) -> anyhow::Result<()> {
+        let messages = [ChatMessage::user(user_message)];
+        let prompt = self.render_prompt(&RenderInputs {
+            messages: &messages,
+            tools: None,
+            footer: None,
+        })?;
+        local_model::bench(&self.model, &prompt, self.temperature(), &self.thinking())
     }
 }
 

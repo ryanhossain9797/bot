@@ -65,8 +65,27 @@ async fn init_env() -> anyhow::Result<Env> {
     })
 }
 
+/// `chatbot bench [message]`: load the primary pack and compare standard vs MTP decoding on one
+/// prompt, without touching the store or Discord.
+fn bench(message: Option<String>) -> anyhow::Result<()> {
+    send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
+    let backend = Arc::new(LlamaBackend::init()?);
+    let primary = PrimaryRole::load(backend)?;
+    primary.bench(&message.unwrap_or_else(|| {
+        "Write a Python function that returns the first n prime numbers, then explain how it works."
+            .to_string()
+    }))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("bench") {
+        let message = args.next();
+        tokio::task::spawn_blocking(move || bench(message)).await??;
+        std::process::exit(0);
+    }
+
     re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
     re_framework::register::<ConversationMachine>(env.clone());
