@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use crate::Env;
-use crate::chat_format::ChatMessage;
-use crate::roles::{RenderInputs, Role};
+use crate::llm::ModelRole;
+use crate::llm::anthropic::{Message, MessagesRequest};
+use crate::prompts::{SUMMARIZER_MAX_TOKENS, SUMMARIZER_SYSTEM_PROMPT, SUMMARIZER_TEMPERATURE};
 use crate::types::conversation::{
     CompactionOutput, ConversationMessage, HistoryEntry, HistoryEntryKind, InterruptionReason,
     LLMInput,
@@ -89,37 +90,31 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
 }
 
 pub async fn summarize(env: Arc<Env>, history: Vec<HistoryEntry>) -> MemoryManagerAction {
-    let Some(utility) = env.utility.clone() else {
+    if !env.llm.has(ModelRole::Utility) {
         eprintln!("[compact] utility model unavailable — skipping compaction");
         return MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed));
-    };
+    }
 
     let Some(through) = history.last().map(|entry| entry.id.clone()) else {
         eprintln!("[compact] empty history — nothing to compact");
         return MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed));
     };
 
-    let transcript = history_to_transcript(&history);
-    let prompt = match utility.render_prompt(&RenderInputs {
-        messages: &[ChatMessage::user(transcript)],
-        tools: None,
+    let request = MessagesRequest {
+        max_tokens: SUMMARIZER_MAX_TOKENS,
+        system: Some(SUMMARIZER_SYSTEM_PROMPT.to_string()),
+        messages: vec![Message::user_text(history_to_transcript(&history))],
+        tools: Vec::new(),
+        temperature: Some(SUMMARIZER_TEMPERATURE),
         footer: None,
-    }) {
-        Ok(prompt) => prompt,
-        Err(e) => {
-            eprintln!("[compact] prompt render failed: {e:#}");
-            return MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed));
-        }
     };
 
-    let close_marker = utility.thinking().close_marker;
-    match Arc::clone(&utility).generate(prompt, Vec::new()).await {
-        Ok(raw) => {
-            let summary = raw
-                .split_once(&close_marker)
-                .map_or(raw.as_str(), |(_, after)| after)
-                .trim()
-                .to_string();
+    match Arc::clone(&env.llm)
+        .complete(ModelRole::Utility, request)
+        .await
+    {
+        Ok(response) => {
+            let summary = response.text().trim().to_string();
             MemoryManagerAction::CompactionDone(Ok(CompactionOutput { summary, through }))
         }
         Err(e) => {

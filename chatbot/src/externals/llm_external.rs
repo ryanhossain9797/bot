@@ -1,13 +1,20 @@
+//! The conversation's LLM external: builds an Anthropic Messages request from the history,
+//! runs it on whichever backend `Env::llm` is (native llama.cpp or remote), and maps the reply
+//! back to a `ConversationAction`. Like every external it never fails — errors become
+//! `LLMDecisionResult(Err(..))`.
+
 use crate::{
-    chat_format::ChatMessage,
-    roles::{PrimaryRole, RenderInputs, Role},
+    llm::{
+        anthropic::{Message, MessagesRequest, MessagesResponse},
+        ModelRole,
+    },
+    prompts::{PRIMARY_MAX_TOKENS, PRIMARY_SYSTEM_PROMPT, PRIMARY_TEMPERATURE},
     types::conversation::{
         ConversationAction, HistoryEntryKind, InterruptionReason, LLMInput, LLMResponse, Platform,
         RecentConversation, Reply, ToolCall, ToolType,
     },
     Env,
 };
-use llama_cpp_2::mtmd::mtmd_default_marker;
 use re_framework::Timestamp;
 
 use std::sync::Arc;
@@ -95,58 +102,8 @@ fn session_footer(
     lines.join("\n")
 }
 
-fn build_conversation(
+fn build_request(
     new_input: &LLMInput,
-    maybe_recent_conversation: Option<RecentConversation>,
-    tool_rounds: usize,
-    max_tool_rounds: usize,
-    is_group: bool,
-    bot_identity: &str,
-    platform: &Platform,
-) -> (Vec<ChatMessage>, String, Vec<Arc<Vec<u8>>>) {
-    let history = maybe_recent_conversation
-        .map(|rc| rc.history)
-        .unwrap_or_default();
-
-    let marker = mtmd_default_marker();
-    let mut messages: Vec<ChatMessage> = Vec::new();
-    let mut images: Vec<Arc<Vec<u8>>> = Vec::new();
-
-    for entry in &history {
-        match &entry.kind {
-            HistoryEntryKind::Input(input) => {
-                let (msgs, bytes) = input.messages_and_media(marker, false);
-                messages.extend(msgs);
-                images.extend(bytes);
-            }
-            HistoryEntryKind::Output(response) => messages.push(response.to_chat_message()),
-            HistoryEntryKind::OutputInterrupted(reason) => {
-                messages.push(ChatMessage::assistant(reason.note()))
-            }
-            HistoryEntryKind::Summary(summary) => messages.push(ChatMessage::assistant(format!(
-                "[Summary of earlier conversation, condensed to save context]\n{summary}"
-            ))),
-        }
-    }
-
-    let (live_msgs, live_bytes) = new_input.messages_and_media(marker, true);
-    messages.extend(live_msgs);
-    images.extend(live_bytes);
-
-    let footer = session_footer(
-        is_group,
-        bot_identity,
-        platform,
-        tool_rounds,
-        max_tool_rounds,
-    );
-
-    (messages, footer, images)
-}
-
-async fn get_response_from_llm(
-    role: Arc<PrimaryRole>,
-    current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
     max_tool_rounds: usize,
@@ -154,65 +111,61 @@ async fn get_response_from_llm(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
-) -> Result<LLMResponse, InterruptionReason> {
-    let (messages, footer, images) = build_conversation(
-        current_input,
-        maybe_recent_conversation,
-        tool_rounds,
-        max_tool_rounds,
-        is_group,
-        bot_identity,
-        platform,
-    );
+) -> MessagesRequest {
+    let history = maybe_recent_conversation
+        .map(|rc| rc.history)
+        .unwrap_or_default();
 
-    println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&messages).unwrap_or_default()
-    );
-    println!("---- footer ----\n{footer}");
-
-    if !images.is_empty() {
-        println!("[image] feeding {} image(s) to the model", images.len());
+    let mut messages: Vec<Message> = Vec::new();
+    for entry in &history {
+        match &entry.kind {
+            HistoryEntryKind::Input(input) => messages.extend(input.to_messages(false)),
+            HistoryEntryKind::Output(response) => messages.push(response.to_message()),
+            HistoryEntryKind::OutputInterrupted(reason) => {
+                messages.push(Message::assistant_text(reason.note()))
+            }
+            HistoryEntryKind::Summary(summary) => messages.push(Message::assistant_text(format!(
+                "[Summary of earlier conversation, condensed to save context]\n{summary}"
+            ))),
+        }
     }
+    messages.extend(new_input.to_messages(true));
 
-    let tools = allow_tools.then(ToolType::tool_definitions);
-    let prompt = role
-        .render_prompt(&RenderInputs {
-            messages: &messages,
-            tools: tools.as_deref(),
-            footer: Some(&footer),
-        })
-        .map_err(|e| {
-            eprintln!("[llm] prompt render failed: {e:#}");
-            InterruptionReason::Failed
-        })?;
+    MessagesRequest {
+        max_tokens: PRIMARY_MAX_TOKENS,
+        system: Some(PRIMARY_SYSTEM_PROMPT.to_string()),
+        messages,
+        tools: if allow_tools {
+            ToolType::tool_definitions()
+        } else {
+            Vec::new()
+        },
+        temperature: Some(PRIMARY_TEMPERATURE),
+        footer: Some(session_footer(
+            is_group,
+            bot_identity,
+            platform,
+            tool_rounds,
+            max_tool_rounds,
+        )),
+    }
+}
 
-    let raw = Arc::clone(&role)
-        .generate(prompt, images)
-        .await
-        .map_err(|e| {
-            eprintln!("[llm] generation failed: {e:#}");
-            InterruptionReason::Failed
-        })?;
-    let parsed = role.parse_response(&raw);
-
-    let thoughts = parsed.reasoning;
-    let content = parsed.content;
-    let tool_calls: Vec<ToolCall> = parsed
-        .tool_calls
-        .iter()
-        .enumerate()
-        .map(|(i, call)| {
-            let id = format!("call_{i}");
-            match ToolType::bind(&call.name, &call.arguments) {
+fn to_llm_response(response: &MessagesResponse) -> LLMResponse {
+    let thoughts = response.thinking();
+    let content = response.text();
+    let tool_calls: Vec<ToolCall> = response
+        .tool_uses()
+        .map(|(id, name, input)| {
+            let id = id.to_string();
+            match ToolType::bind(name, &input.to_string()) {
                 Ok(tool_type) => ToolCall { id, tool_type },
                 Err(e) => {
                     eprintln!("[llm] tool call did not parse: {e:#}");
                     ToolCall {
                         id,
                         tool_type: ToolType::MetaMalformed {
-                            report: malformed_report(&call.name, &e),
+                            report: malformed_report(name, &e),
                         },
                     }
                 }
@@ -235,11 +188,11 @@ async fn get_response_from_llm(
         );
     }
 
-    Ok(LLMResponse {
+    LLMResponse {
         thoughts,
         reply,
         tool_calls,
-    })
+    }
 }
 
 pub async fn get_llm_decision(
@@ -262,8 +215,7 @@ pub async fn get_llm_decision(
         }
     );
 
-    let llama_cpp_result = get_response_from_llm(
-        Arc::clone(&env.primary),
+    let request = build_request(
         &current_input,
         maybe_recent_conversation,
         tool_rounds,
@@ -272,12 +224,17 @@ pub async fn get_llm_decision(
         is_group,
         &bot_identity,
         &platform,
-    )
-    .await;
+    );
 
-    match llama_cpp_result {
-        Ok(llama_cpp_response) => ConversationAction::LLMDecisionResult(Ok(llama_cpp_response)),
-        Err(reason) => ConversationAction::LLMDecisionResult(Err(reason)),
+    match Arc::clone(&env.llm)
+        .complete(ModelRole::Primary, request)
+        .await
+    {
+        Ok(response) => ConversationAction::LLMDecisionResult(Ok(to_llm_response(&response))),
+        Err(e) => {
+            eprintln!("[llm] {e:#}");
+            ConversationAction::LLMDecisionResult(Err(InterruptionReason::Failed))
+        }
     }
 }
 

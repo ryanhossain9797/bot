@@ -20,10 +20,12 @@ static PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub(super) struct QwenParser;
 
 impl Parser for QwenParser {
-    fn parse(&self, raw: &str, close_marker: &str) -> ParsedResponse {
-        let (reasoning, body) = raw
-            .split_once(close_marker)
-            .map_or_else(|| (raw.trim(), ""), |(r, b)| (r.trim(), b));
+    fn parse(&self, raw: &str, close_marker: &str, thinking: bool) -> ParsedResponse {
+        let (reasoning, body) = match raw.split_once(close_marker) {
+            Some((r, b)) => (r.trim(), b),
+            None if thinking => (raw.trim(), ""),
+            None => ("", raw),
+        };
 
         let tool_calls = CALL_RE
             .captures_iter(body)

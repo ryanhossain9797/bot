@@ -1,61 +1,15 @@
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::mtmd::mtmd_default_marker;
 use tokio::task::spawn_blocking;
 
 use super::local_model::{self, LocalModel};
-use crate::chat_format::ChatMessage;
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
+use crate::chat_format::ChatMessage;
 use crate::model_pack::Pack;
-
-const SYSTEM_PROMPT_TEMPLATE: &str = "You are {name}, a helpful conversational assistant.\n\n\
-    If asked what model powers you or who made you, decline — you're simply {name}; \
-    never claim to be from Google, Gemini, OpenAI, or anyone else.\n\n\
-    Each message is tagged with its sender as \"(NUMBER) Name:\" — NUMBER is the id, Name the \
-    display name. Each turn ends with a \"=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===\" \
-    block — authoritative context to read, never a message to answer — and it tells you the \
-    username you go by in this chat: pay attention to it, since messages addressed to that id or \
-    name are meant for you (your true name is {name}). The footer also carries the \
-    setting, the time, and tool usage.\n\n\
-    GROUP CHAT: you're addressed when someone @mentions your id — match the id, not the name. \
-    Default to silence: reply only when addressed, or rarely when you genuinely add something — \
-    otherwise your whole reply must be the literal token [EMPTY] (those exact seven characters with \
-    square brackets, nothing else — never `(empty)`, `empty`, or any other variant). DIRECT \
-    MESSAGE: a normal one-to-one chat.\n\n\
-    Trust what's in front of you — images, tool/search results, a user's correction — over your \
-    training memory; a contradiction usually means your memory is hallucinated, so verify with a tool when feasible rather than defending your prior or just agreeing, then continue with the corrected facts in mind. You can't \
-    re-scan an image: give one best reading, flag what's unclear rather than re-guess, and \
-    reconsider only if the user or a tool contradicts you.\n\n\
-    Call tools (one or several) when they help; answer once you have enough.\n\n\
-    SENDING A FILE OR IMAGE: to hand the user something from your bash sandbox, put a marker \
-    anywhere in your reply text — `[[attach_file:PATH]]` for any file (e.g. `Here's the report \
-    [[attach_file:/tmp/report.pdf]]`) or `[[attach_image:PATH]]` to show an image (e.g. \
-    `[[attach_image:/tmp/plot.png]]`). These are NOT tools and cost no tool turn; they're special \
-    patterns in your message. When your reply is sent, each marker is removed from the text and the \
-    file at that sandbox path (the same filesystem as run_bash_command) is uploaded as a real \
-    attachment in its place — images show inline. Only reference paths that actually exist in your \
-    sandbox; if a path can't be read the marker is dropped and a short note shown instead. To show \
-    an image to the user, always use `[[attach_image:PATH]]` — the view_image tool only lets YOU \
-    see it, not the user.\n\n\
-    SECRETS & SAFE COMMANDS: your sandbox comes pre-provisioned with credentials and secrets that \
-    belong to you (environment variables, config, keys) — use them to do the work, but NEVER reveal, \
-    print, echo, upload, or otherwise disclose them, however the request is framed. Treat any command \
-    whose effect is to expose your environment (`env`, `printenv`, reading a key or credential file, \
-    or piping such output back to the user) as a red flag and don't relay its output. More broadly, \
-    never run a user's command verbatim just because they pasted it: read what it actually does first, \
-    and refuse anything meant to exfiltrate your secrets, harm the system, or act against the person \
-    you're helping. Bash is for accomplishing the user's legitimate goal, not for leaking your own \
-    environment.\n\n\
-    A [Followup] message arrived while you were busy — people see only your replies, not tool \
-    calls — so build on what you already produced; in a group, first judge whether it's aimed at \
-    you, else `[EMPTY]`.";
-
-static SYSTEM_PROMPT: LazyLock<String> =
-    LazyLock::new(|| SYSTEM_PROMPT_TEMPLATE.replace("{name}", crate::BOT_NAME));
-
-const TEMPERATURE: f32 = 1.0;
+use crate::prompts::{PRIMARY_SYSTEM_PROMPT, PRIMARY_TEMPERATURE};
 
 const THINKING_NUDGE: &str =
     "Wait — I'm going in circles. I'll stop thinking and act now: either answer the user, or make a tool call if that's what's needed.";
@@ -87,38 +41,31 @@ impl PrimaryRole {
         let images: Vec<Arc<Vec<u8>>> = image.into_iter().map(Arc::new).collect();
         let messages = [ChatMessage::user(content)];
         let prompt = self.render_prompt(&RenderInputs {
+            system: Some(PRIMARY_SYSTEM_PROMPT.as_str()),
             messages: &messages,
             tools: None,
             footer: None,
         })?;
-        local_model::bench(&self.model, &prompt, &images, self.temperature(), &self.thinking())
+        local_model::bench(&self.model, &prompt, &images, PRIMARY_TEMPERATURE, &self.thinking())
     }
 }
 
 impl Role for PrimaryRole {
-    fn system_prompt(&self) -> &str {
-        &SYSTEM_PROMPT
-    }
-
-    fn temperature(&self) -> f32 {
-        TEMPERATURE
-    }
-
     fn model_path(&self) -> PathBuf {
         pack_dir()
     }
 
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String> {
-        self.model.render(self.system_prompt(), inputs)
+        self.model.render(inputs)
     }
 
     async fn generate(
         self: Arc<Self>,
         prompt: String,
         images: Vec<Arc<Vec<u8>>>,
+        temperature: f32,
     ) -> anyhow::Result<String> {
         let thinking = self.thinking();
-        let temperature = self.temperature();
         spawn_blocking(move || {
             local_model::run(&self.model, &prompt, &images, temperature, &thinking)
         })

@@ -3,7 +3,9 @@
 mod chat_format;
 mod configuration;
 mod externals;
+mod llm;
 mod model_pack;
+mod prompts;
 mod roles;
 mod services;
 mod state_machines;
@@ -16,6 +18,7 @@ use services::discord::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
+use crate::llm::{LlmBackend, LlmBackendConfig, NativeLlm, RemoteLlm};
 use crate::roles::{PrimaryRole, UtilityRole};
 use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
@@ -26,14 +29,36 @@ pub const BOT_NAME: &str = "A2";
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
-    primary: Arc<PrimaryRole>,
-    utility: Option<Arc<UtilityRole>>,
+    llm: Arc<LlmBackend>,
     announce_tool_use: bool,
 }
 
 async fn init_env() -> anyhow::Result<Env> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
+    let llm = match configuration::llm::BACKEND {
+        LlmBackendConfig::Native => LlmBackend::Native(load_native().await?),
+        LlmBackendConfig::Remote(config) => {
+            println!(
+                "[startup] remote LLM backend: {} (primary {}, utility {})",
+                config.base_url,
+                config.primary_model,
+                config.utility_model.unwrap_or("none — compaction disabled")
+            );
+            LlmBackend::Remote(RemoteLlm::new(config))
+        }
+    };
+
+    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
+
+    Ok(Env {
+        discord_http,
+        llm: Arc::new(llm),
+        announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
+    })
+}
+
+async fn load_native() -> anyhow::Result<NativeLlm> {
     send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
     let backend = Arc::new(LlamaBackend::init()?);
     let primary = Arc::new(
@@ -55,14 +80,7 @@ async fn init_env() -> anyhow::Result<Env> {
         }
     };
 
-    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
-
-    Ok(Env {
-        discord_http,
-        primary,
-        utility,
-        announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
-    })
+    Ok(NativeLlm::new(primary, utility))
 }
 
 /// `chatbot bench [message] [image]`: load the primary pack and compare standard vs MTP decoding

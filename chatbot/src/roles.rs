@@ -13,21 +13,20 @@ pub use primary_role::PrimaryRole;
 pub use utility_role::UtilityRole;
 
 pub trait Role: Send + Sync {
-    fn system_prompt(&self) -> &str;
-    fn temperature(&self) -> f32;
-    #[allow(dead_code)]
     fn model_path(&self) -> PathBuf;
     fn render_prompt(&self, inputs: &RenderInputs) -> anyhow::Result<String>;
     async fn generate(
         self: Arc<Self>,
         prompt: String,
         images: Vec<Arc<Vec<u8>>>,
+        temperature: f32,
     ) -> anyhow::Result<String>;
     fn parse_response(&self, raw: &str) -> ParsedResponse;
     fn thinking(&self) -> ThinkingPolicy;
 }
 
 pub struct RenderInputs<'a> {
+    pub system: Option<&'a str>,
     pub messages: &'a [ChatMessage],
     pub tools: Option<&'a [ToolDefinition]>,
     pub footer: Option<&'a str>,

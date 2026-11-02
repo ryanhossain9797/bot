@@ -20,3 +20,19 @@ pub mod git {
     pub const NAME: &str = "";
     pub const EMAIL: &str = "";
 }
+pub mod llm {
+    #[allow(unused_imports)]
+    use crate::llm::{LlmBackendConfig, RemoteLlmConfig};
+
+    /// `Native` runs the local llama.cpp model packs (MODEL_PACK_DIR / UTILITY_MODEL_PACK_DIR).
+    /// `Remote` calls an Anthropic-compatible Messages API instead (currently a stub).
+    pub const BACKEND: LlmBackendConfig = LlmBackendConfig::Native;
+    // pub const BACKEND: LlmBackendConfig = LlmBackendConfig::Remote(RemoteLlmConfig {
+    //     base_url: "https://api.anthropic.com",
+    //     api_key: "FOO",
+    //     api_version: "2023-06-01",
+    //     primary_model: "claude-sonnet-5-5",
+    //     utility_model: Some("claude-haiku-5-5"),
+    //     timeout_secs: 900,
+    // });
+}

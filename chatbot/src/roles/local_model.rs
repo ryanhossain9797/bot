@@ -39,16 +39,13 @@ pub(super) struct LocalModel {
 }
 
 impl LocalModel {
-    pub(super) fn render(
-        &self,
-        system_prompt: &str,
-        inputs: &RenderInputs,
-    ) -> anyhow::Result<String> {
-        super::render::render(&self.template, system_prompt, inputs, self.flags)
+    pub(super) fn render(&self, inputs: &RenderInputs) -> anyhow::Result<String> {
+        super::render::render(&self.template, inputs, self.flags)
     }
 
     pub(super) fn parse(&self, raw: &str) -> ParsedResponse {
-        self.parser.parse(raw, &self.close_marker)
+        self.parser
+            .parse(raw, &self.close_marker, self.flags.enable_thinking)
     }
 
     pub(super) fn close_marker(&self) -> &str {
