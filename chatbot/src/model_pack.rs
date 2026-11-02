@@ -17,6 +17,8 @@ pub struct Manifest {
     pub context: Context,
     pub format: Format,
     pub thinking: Thinking,
+    #[serde(default)]
+    pub speculative: Speculative,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +45,26 @@ pub struct Format {
 #[derive(Debug, Deserialize)]
 pub struct Thinking {
     pub close_marker: String,
+}
+
+/// MTP (multi-token prediction) speculative decoding. Used only when the GGUF ships an MTP head
+/// (`<arch>.nextn_predict_layers > 0`); `mtp = false` opts a capable pack out.
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+pub struct Speculative {
+    pub mtp: bool,
+    pub draft_max: i32,
+    pub p_min: f32,
+}
+
+impl Default for Speculative {
+    fn default() -> Self {
+        Speculative {
+            mtp: true,
+            draft_max: 3,
+            p_min: 0.0,
+        }
+    }
 }
 
 impl Pack {

@@ -6,7 +6,7 @@ persistent, actor-style state-machine framework.
 ## Overview
 
 - **Discord Integration**: Responds to direct messages and to @mentions in group channels
-- **Local LLM**: Runs Qwen3.6-35B-A3B in-process via `llama.cpp` (Vulkan/ROCm), no external API, with
+- **Local LLM**: Runs Qwen3.8-27B in-process via `llama.cpp` (Vulkan/ROCm), no external API, with
   Qwen3-4B as a utility model for history compaction
 - **Multimodal**: Accepts image attachments and can inspect or send images back
 - **Tool Calling**: Multi-round tool execution (web search, page fetch, a private bash sandbox,
@@ -65,8 +65,17 @@ context size, reasoning marker, which parser to use). Nothing model-specific is 
 — weights included — are baked into the `bot-base` image by `Dockerfile.base`; `MODEL_PACK_DIR`
 and `UTILITY_MODEL_PACK_DIR` select which baked pack to load. To change models, put the files in
 the pack folder (real files or hard links — `docker build` won't follow symlinks), then rebuild
-the base and app images. See [chatbot/models/qwen-qwen3-6-35b-a3b/](chatbot/models/qwen-qwen3-6-35b-a3b/) and
+the base and app images. See [chatbot/models/qwen3-8-27b/](chatbot/models/qwen3-8-27b/) and
 [chatbot/models/qwen3-4b/](chatbot/models/qwen3-4b/).
+
+**MTP speculative decoding** is chosen per model: if the GGUF ships an MTP head
+(`<arch>.nextn_predict_layers > 0`, e.g. Qwen3.8-27B), every turn drafts up to `draft_max` tokens
+per step through the MTP head and verifies them in one batch. Output is identical to standard
+decoding, only faster (≈2× on Qwen3.8-27B, text or images). Image prompts are still prefilled by
+mtmd; the drafter just doesn't see that prefill, and drafts nearly as well from the target's hidden
+state. An optional `[speculative]` section in `manifest.toml` tunes it (`mtp = false` opts out;
+defaults `draft_max = 3`, `p_min = 0.0`). The startup log says which mode was picked, and each
+generation logs its tok/s. `chatbot bench [message] [image]` compares both modes on one prompt.
 
 #### Available Tools
 
@@ -201,7 +210,7 @@ up per-conversation bash sandboxes.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `MODEL_PACK_DIR` | Path to the primary model pack folder | `./models/qwen-qwen3-6-35b-a3b` |
+| `MODEL_PACK_DIR` | Path to the primary model pack folder | `./models/qwen3-8-27b` |
 | `UTILITY_MODEL_PACK_DIR` | Path to the utility (compaction) model pack folder | `./models/qwen3-4b` |
 | `RUST_LOG` | Log level | `info` |
 

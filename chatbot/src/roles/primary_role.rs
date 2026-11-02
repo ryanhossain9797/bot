@@ -2,9 +2,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 use llama_cpp_2::llama_backend::LlamaBackend;
+use llama_cpp_2::mtmd::mtmd_default_marker;
 use tokio::task::spawn_blocking;
 
 use super::local_model::{self, LocalModel};
+use crate::chat_format::ChatMessage;
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
 use crate::model_pack::Pack;
 
@@ -60,7 +62,7 @@ const THINKING_NUDGE: &str =
 const MAX_THINKING_TOKENS: usize = 2000;
 
 const PACK_DIR_ENV: &str = "MODEL_PACK_DIR";
-const DEFAULT_PACK_DIR: &str = "./models/qwen-qwen3-6-35b-a3b";
+const DEFAULT_PACK_DIR: &str = "./models/qwen3-8-27b";
 
 fn pack_dir() -> PathBuf {
     std::env::var_os(PACK_DIR_ENV).map_or_else(|| DEFAULT_PACK_DIR.into(), PathBuf::from)
@@ -74,6 +76,22 @@ impl PrimaryRole {
     pub fn load(backend: Arc<LlamaBackend>) -> anyhow::Result<Self> {
         let pack = Pack::load_from(&pack_dir())?;
         Ok(PrimaryRole { model: local_model::load_model(backend, &pack)? })
+    }
+
+    /// Dev-only: time one prompt with standard decoding and, if the model has an MTP head, with MTP.
+    pub fn bench(&self, user_message: &str, image: Option<Vec<u8>>) -> anyhow::Result<()> {
+        let content = match image {
+            Some(_) => format!("{user_message}\n{}", mtmd_default_marker()),
+            None => user_message.to_string(),
+        };
+        let images: Vec<Arc<Vec<u8>>> = image.into_iter().map(Arc::new).collect();
+        let messages = [ChatMessage::user(content)];
+        let prompt = self.render_prompt(&RenderInputs {
+            messages: &messages,
+            tools: None,
+            footer: None,
+        })?;
+        local_model::bench(&self.model, &prompt, &images, self.temperature(), &self.thinking())
     }
 }
 

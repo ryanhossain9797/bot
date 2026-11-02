@@ -85,7 +85,7 @@ mod tests {
     use crate::chat_format::ChatMessage;
 
     const PRIMARY_TEMPLATE: &str =
-        include_str!("../../models/qwen-qwen3-6-35b-a3b/chat_template.jinja");
+        include_str!("../../models/qwen3-8-27b/chat_template.jinja");
 
     fn flags() -> FormatFlags {
         FormatFlags {
