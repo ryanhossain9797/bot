@@ -2,11 +2,11 @@ pub mod anthropic;
 mod native;
 mod remote;
 
-use std::sync::Arc;
-
 use anthropic::{MessagesRequest, MessagesResponse};
 
 pub use native::NativeLlm;
+#[cfg(test)]
+pub(crate) use native::render_with_pack;
 pub use remote::RemoteLlm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,11 +46,11 @@ impl LlmBackend {
     }
 
     pub async fn complete(
-        self: Arc<Self>,
+        &self,
         role: ModelRole,
         request: MessagesRequest,
     ) -> anyhow::Result<MessagesResponse> {
-        match &*self {
+        match self {
             LlmBackend::Native(native) => native.complete(role, request).await,
             LlmBackend::Remote(remote) => remote.complete(role, request).await,
         }

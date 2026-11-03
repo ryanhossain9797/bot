@@ -109,7 +109,8 @@ pub async fn summarize(env: Arc<Env>, history: Vec<HistoryEntry>) -> MemoryManag
         footer: None,
     };
 
-    match Arc::clone(&env.llm)
+    match env
+        .llm
         .complete(ModelRole::Utility, request)
         .await
     {

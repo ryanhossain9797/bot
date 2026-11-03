@@ -145,7 +145,7 @@ async fn run<R: Role>(
             .into_iter()
             .enumerate()
             .map(|(i, call)| ContentBlock::ToolUse {
-                id: format!("call_{i}"),
+                id: format!("call_{i}_{}", uuid::Uuid::new_v4().simple()),
                 name: call.name,
                 input: serde_json::from_str(&call.arguments)
                     .unwrap_or(Value::String(call.arguments)),
@@ -164,6 +164,30 @@ async fn run<R: Role>(
         }),
         usage: Usage::default(),
     })
+}
+
+#[cfg(test)]
+pub(crate) fn render_with_pack(
+    pack_dir: &std::path::Path,
+    request: &MessagesRequest,
+) -> anyhow::Result<(String, Vec<Arc<Vec<u8>>>)> {
+    let pack = model_pack::Pack::load_from(pack_dir)?;
+    let (messages, images) = to_chat_messages(&request.messages, mtmd_default_marker());
+    let tools: Vec<ToolDefinition> = request.tools.iter().map(to_tool_definition).collect();
+    let prompt = roles::render_template(
+        &pack.template,
+        &RenderInputs {
+            system: request.system.as_deref(),
+            messages: &messages,
+            tools: (!tools.is_empty()).then_some(tools.as_slice()),
+            footer: request.footer.as_deref(),
+        },
+        roles::FormatFlags {
+            enable_thinking: pack.manifest.format.enable_thinking,
+            add_generation_prompt: pack.manifest.format.add_generation_prompt,
+        },
+    )?;
+    Ok((prompt, images))
 }
 
 fn to_tool_definition(tool: &Tool) -> ToolDefinition {

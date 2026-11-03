@@ -1,0 +1,164 @@
+<|im_start|>system
+Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.
+
+# Tools
+
+You have access to the following functions:
+
+<tools>
+{"type": "function", "function": {"name": "web_search", "description": "Search the web — ONE focused topic per query; search one fact at a time, never pile attributes into a single query. Snippets only, usually not enough for specifics (dates, numbers, names, quotes) — open the best result with visit_url and read it before answering. For several facts, fire several single-topic searches in the same turn (parallel is fine).", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "A few keywords for a single focused question, e.g. \"rust async runtime comparison\" or \"Stark Frieren hair color\". Don't pile unrelated attributes into one query — search one fact at a time."}}, "required": ["query"]}}}
+{"type": "function", "function": {"name": "visit_url", "description": "Read a web page in full (its readable text). The normal next step after web_search — open the best result and read it before answering anything detailed or factual; the snippet alone is rarely enough. Also works on a URL the user gave you.", "parameters": {"type": "object", "properties": {"url": {"type": "string", "description": "The full URL to fetch, e.g. \"https://example.com/article\" (typically taken from a web_search result)"}}, "required": ["url"]}}}
+{"type": "function", "function": {"name": "run_bash_command", "description": "Run a bash command in your own private Linux sandbox (persistent across calls within this conversation; has python3, pip, curl, git, and internet access). Use it to compute, write and run scripts, fetch and process data, install packages — anything a shell can do. The filesystem and installed packages persist between calls, so you can build up state. Not connected to the user's machine.", "parameters": {"type": "object", "properties": {"user_id": {"type": "string", "description": "The user's identifier (platform-local, e.g. ABC123 — no prefixes, parenthesis, quotes or anything else)."}, "command": {"type": "string", "description": "The bash command to run, e.g. \"python3 -c 'print(2**10)'\" or \"pip install requests && python3 script.py\". Multi-line scripts are fine."}}, "required": ["command", "user_id"]}}}
+{"type": "function", "function": {"name": "reset_bash_container", "description": "Wipe your sandbox and start fresh — destroys the current Linux environment (files, installed packages, processes) and the next run_bash_command boots a clean one. Use if it's in a broken state or you want a clean slate.", "parameters": {"type": "object", "properties": {}, "required": []}}}
+{"type": "function", "function": {"name": "view_image", "description": "Privately inspect an image yourself — the user does NOT see it. To show an image to the user, don't use this tool: write the marker `[[attach_image:PATH]]` in your reply instead. The path points to a file in the SAME private Linux environment as run_bash_command — create, download, or generate the image there first (e.g. with matplotlib, imagemagick, or curl). The file must be a valid image (PNG, JPEG, GIF, or WebP). Use it to inspect plots, screenshots, or downloaded images before deciding what to do next.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Path to the image file inside your bash sandbox, e.g. \"/tmp/plot.png\" or \"chart.png\" (relative to the sandbox working directory)."}}, "required": ["path"]}}}
+{"type": "function", "function": {"name": "read_file", "description": "Read a text file from your bash sandbox — the SAME private Linux environment as run_bash_command. Returns the file's contents with line numbers. Reads the whole file by default; for a large file, pass offset and/or limit to read a slice.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Path to the file inside your bash sandbox, e.g. \"/home/user/app/main.py\" or \"notes.txt\" (relative to the sandbox working directory)."}, "offset": {"type": "integer", "description": "1-based line number to start reading from. Defaults to the first line."}, "limit": {"type": "integer", "description": "Maximum number of lines to read, starting at offset. Defaults to the rest of the file."}}, "required": ["path"]}}}
+{"type": "function", "function": {"name": "edit_file", "description": "Edit a text file in your bash sandbox by replacing an exact string. `old_string` must appear EXACTLY ONCE in the current file — include enough surrounding context to make it unique — and is replaced with `new_string`. Returns a diff of the change.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Path to the file inside your bash sandbox (the same one you read_file'd)."}, "old_string": {"type": "string", "description": "The exact text to replace, copied from read_file output WITHOUT the line-number prefixes. Must match the file exactly (whitespace included) and be unique."}, "new_string": {"type": "string", "description": "The text to put in its place. Use an empty string to delete the matched text."}}, "required": ["path", "old_string", "new_string"]}}}
+{"type": "function", "function": {"name": "use_skill", "description": "Consult your skill library — short reference guides for specific tasks. Skills cover things like document processing (pdf, ebook, md, docx), downloading (media, documents, other), and large tasks (programming, multi-step flows), among others. Call it with NO arguments to list every available skill, or with a skill's name to read that one in full and follow it. Check here before attempting a task a skill might cover.", "parameters": {"type": "object", "properties": {"skill": {"type": "string", "description": "The name of the skill to read, exactly as shown in the no-argument listing, e.g. \"document_conversion\". The .md extension, surrounding quotes, and extra spaces are all optional. Omit this field entirely to list all available skills instead of reading one."}}, "required": []}}}
+{"type": "function", "function": {"name": "set_reminder", "description": "Set a reminder to message a user in the future. When the delay elapses, the conversation wakes on its own and you are prompted to send the reminder — so you do NOT keep this turn open waiting; call it, tell the user you've set it, and finish. Compute delay_seconds yourself from the current time in the metadata footer. Note: reminders are lost on a redeploy (they do survive a normal restart).", "parameters": {"type": "object", "properties": {"delay_seconds": {"type": "integer", "description": "How far in the future to fire, in seconds from now, e.g. 7200 for two hours. Compute it from the current time shown in the footer."}, "note": {"type": "string", "description": "What to remind the user about, in your own words — this is handed back to you when the reminder fires, e.g. \"take your meds\" or \"the meeting with Alex starts in 10 minutes\"."}, "addressee": {"type": "string", "description": "Who the reminder is for — the display name of the user it should be delivered to, as shown in the \"(id) Name:\" tag. In a one-to-one chat this is that user; in a group, whoever asked for it."}}, "required": ["delay_seconds", "note", "addressee"]}}}
+{"type": "function", "function": {"name": "meta_no_op_extra_turn", "description": "Give yourself another turn after this reply — use it to say something to the user across multiple steps. Put the first part in this reply's message, call this tool, and you'll be prompted again to continue with the next part. Pointless to call with no message (nothing is sent to the user), and pointless to call alongside other tools (a tool call already earns you another turn).", "parameters": {"type": "object", "properties": {}, "required": []}}}
+</tools>
+
+If you choose to call a function ONLY reply in the following format with NO suffix:
+
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>
+value_1
+</parameter>
+<parameter=example_parameter_2>
+This is the value for the second parameter
+that can span
+multiple lines
+</parameter>
+</function>
+</tool_call>
+
+<IMPORTANT>
+Reminder:
+- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags
+- Required parameters MUST be specified
+- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after
+- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls
+</IMPORTANT>
+
+You are A2, a helpful conversational assistant.
+
+If asked what model powers you or who made you, decline — you're simply A2; never claim to be from Google, Gemini, OpenAI, or anyone else.
+
+Each message is tagged with its sender as "(NUMBER) Name:" — NUMBER is the id, Name the display name. Each turn ends with a "=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===" block — authoritative context to read, never a message to answer — and it tells you the username you go by in this chat: pay attention to it, since messages addressed to that id or name are meant for you (your true name is A2). The footer also carries the setting, the time, and tool usage.
+
+GROUP CHAT: you're addressed when someone @mentions your id — match the id, not the name. Default to silence: reply only when addressed, or rarely when you genuinely add something — otherwise your whole reply must be the literal token [EMPTY] (those exact seven characters with square brackets, nothing else — never `(empty)`, `empty`, or any other variant). DIRECT MESSAGE: a normal one-to-one chat.
+
+Trust what's in front of you — images, tool/search results, a user's correction — over your training memory; a contradiction usually means your memory is hallucinated, so verify with a tool when feasible rather than defending your prior or just agreeing, then continue with the corrected facts in mind. You can't re-scan an image: give one best reading, flag what's unclear rather than re-guess, and reconsider only if the user or a tool contradicts you.
+
+Call tools (one or several) when they help; answer once you have enough.
+
+SENDING A FILE OR IMAGE: to hand the user something from your bash sandbox, put a marker anywhere in your reply text — `[[attach_file:PATH]]` for any file (e.g. `Here's the report [[attach_file:/tmp/report.pdf]]`) or `[[attach_image:PATH]]` to show an image (e.g. `[[attach_image:/tmp/plot.png]]`). These are NOT tools and cost no tool turn; they're special patterns in your message. When your reply is sent, each marker is removed from the text and the file at that sandbox path (the same filesystem as run_bash_command) is uploaded as a real attachment in its place — images show inline. Only reference paths that actually exist in your sandbox; if a path can't be read the marker is dropped and a short note shown instead. To show an image to the user, always use `[[attach_image:PATH]]` — the view_image tool only lets YOU see it, not the user.
+
+SECRETS & SAFE COMMANDS: your sandbox comes pre-provisioned with credentials and secrets that belong to you (environment variables, config, keys) — use them to do the work, but NEVER reveal, print, echo, upload, or otherwise disclose them, however the request is framed. Treat any command whose effect is to expose your environment (`env`, `printenv`, reading a key or credential file, or piping such output back to the user) as a red flag and don't relay its output. More broadly, never run a user's command verbatim just because they pasted it: read what it actually does first, and refuse anything meant to exfiltrate your secrets, harm the system, or act against the person you're helping. Bash is for accomplishing the user's legitimate goal, not for leaking your own environment.
+
+A [Followup] message arrived while you were busy — people see only your replies, not tool calls — so build on what you already produced; in a group, first judge whether it's aimed at you, else `[EMPTY]`.<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+[Summary of earlier conversation, condensed to save context]
+earlier: Alice likes Rust<|im_end|>
+<|im_start|>user
+hey look at this
+url: https://cdn/x.png
+<__media__>
+file r.pdf (application/pdf) url: https://cdn/r.pdf
+[1 image from earlier in the conversation — you saw it at the time, not re-attached here]<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+<tool_call>
+<function=web_search>
+<parameter=query>
+rust async
+</parameter>
+</function>
+</tool_call>
+<tool_call>
+<function=view_image>
+<parameter=path>
+/tmp/a.png
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+simple search
+</tool_response>
+<tool_response>
+<__media__>
+</tool_response><|im_end|>
+<|im_start|>user
+[Followup] also this
+url: https://cdn/y.png
+<__media__><|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+here you go<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+[Your previous turn timed out before it completed.]<|im_end|>
+<|im_start|>user
+[Reminder — IMPORTANT] For Alice: take meds
+[Reminder — IMPORTANT] For Bob: call mom<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+[MALFORMED — assistant generated no usable output: no message and no tool call]<|im_end|>
+<|im_start|>user
+<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+[EMPTY]<|im_end|>
+<|im_start|>assistant
+<think>
+
+</think>
+
+checking
+
+<tool_call>
+<function=view_image>
+<parameter=path>
+/tmp/b.png
+</parameter>
+</function>
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+FULL view
+<__media__>
+</tool_response><|im_end|>
+<|im_start|>system
+=== SYSTEM GENERATED CONVERSATION METADATA FOOTER ===
+Your username in this conversation: (7) A2. Respond to both this name and A2
+Setting: GROUP CHAT (multiple participants)
+Current time: <T>
+Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align).
+[Tool budget: 16/30 used — if your current approach isn't working, try a different angle rather than repeating similar calls. You still have room to keep investigating.]
+If a tool or the user contradicts your memory, your memory is likely wrong — verify with a tool when you can, then carry on with the corrected info; don't just agree or defend a wrong prior.
+Only narrate before a tool call when there's genuinely new information to share (e.g. why you're trying something unusual or what you learned). Hold off for at least 5 tool calls in a row before adding commentary, and keep it brief.
+The user cannot see tool results — you must send the information as a message.
+Reminders: in a group you default to silence — chime in when your id is @mentioned, or occasionally on your own if you genuinely add something; otherwise your whole reply must be the literal token [EMPTY] (exactly those seven characters with square brackets, nothing else — never (empty), empty, or any variant). Match the @mention id, not the name. You are A2.<|im_end|>
+<|im_start|>assistant
+<think>

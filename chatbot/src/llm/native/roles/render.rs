@@ -50,7 +50,7 @@ fn prepare_tools(tools: &[ToolDefinition]) -> Vec<String> {
     tools.iter().map(json_spaced).collect()
 }
 
-pub(super) fn render(
+pub(crate) fn render(
     template: &str,
     inputs: &RenderInputs,
     flags: FormatFlags,

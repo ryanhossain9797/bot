@@ -221,7 +221,8 @@ pub async fn get_llm_decision(
         &platform,
     );
 
-    match Arc::clone(&env.llm)
+    match env
+        .llm
         .complete(ModelRole::Primary, request)
         .await
     {
@@ -251,5 +252,80 @@ mod tests {
         assert!(report.contains("did NOT run"));
         assert!(report.contains("missing field delay_seconds"));
         assert!(!report.contains("[[attach_file"));
+    }
+    fn fx() -> (Vec<crate::types::conversation::HistoryEntry>, crate::types::conversation::LLMInput) {
+        use crate::types::conversation::*;
+        use crate::types::media::{Attachment, Image, MessageImage};
+        use std::sync::Arc;
+        let img = |b: Vec<u8>| MessageImage::Hydrated(Image { bytes: Arc::new(b), mime: "image/png".into() });
+        let msg = |text: &str, queued: bool, attachments: Vec<Attachment>| ConversationMessage {
+            text: text.into(), queued, user_id: "42".into(), name: "(42) Alice".into(), attachments,
+        };
+        let e = |kind| HistoryEntry { id: HistoryId::new(), kind };
+        let c0 = ToolCall { id: "call_0".into(), tool_type: ToolType::WebSearch { query: "rust async".into() } };
+        let c1 = ToolCall { id: "call_1".into(), tool_type: ToolType::ViewImage { path: "/tmp/a.png".into() } };
+        let c2 = ToolCall { id: "call_0".into(), tool_type: ToolType::ViewImage { path: "/tmp/b.png".into() } };
+        let history = vec![
+            e(HistoryEntryKind::Summary("earlier: Alice likes Rust".into())),
+            e(HistoryEntryKind::Input(LLMInput::ConversationMessage(msg("hey look at this", false, vec![
+                Attachment::Image { image: img(vec![1, 1, 1]), filename: "x.png".into(), url: "https://cdn/x.png".into() },
+                Attachment::File { filename: "r.pdf".into(), content_type: Some("application/pdf".into()), url: "https://cdn/r.pdf".into() },
+                Attachment::Image { image: MessageImage::Dehydrated { byte_size: 9 }, filename: "old.png".into(), url: "https://cdn/old.png".into() },
+            ])))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "hmm".into(), reply: Reply::Empty, tool_calls: vec![c0.clone(), c1.clone()] })),
+            e(HistoryEntryKind::Input(LLMInput::ToolResults(vec![
+                ToolResult { call: c0, data: ToolResultData { actual: "FULL search".into(), simplified: "simple search".into(), image_for_assistant: None } },
+                ToolResult { call: c1, data: ToolResultData { actual: "".into(), simplified: "".into(), image_for_assistant: Some(img(vec![2, 2])) } },
+            ], Some(msg("also this", true, vec![Attachment::Image { image: img(vec![3]), filename: "y.png".into(), url: "https://cdn/y.png".into() }]))))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Said("here you go".into()), tool_calls: vec![] })),
+            e(HistoryEntryKind::OutputInterrupted(InterruptionReason::TimedOut)),
+            e(HistoryEntryKind::Input(LLMInput::SystemMessage(vec![
+                SystemMessage { note: "take meds".into(), addressee: "Alice".into() },
+                SystemMessage { note: "call mom".into(), addressee: "Bob".into() },
+            ]))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Malformed, tool_calls: vec![] })),
+            e(HistoryEntryKind::Input(LLMInput::ConversationMessage(msg("", false, vec![])))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Empty, tool_calls: vec![] })),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Said("checking".into()), tool_calls: vec![c2.clone()] })),
+        ];
+        let live = LLMInput::ToolResults(vec![
+            ToolResult { call: c2, data: ToolResultData { actual: "FULL view".into(), simplified: "simple view".into(), image_for_assistant: Some(img(vec![4, 4, 4, 4])) } },
+        ], None);
+        (history, live)
+    }
+
+    #[test]
+    fn primary_prompt_matches_golden() {
+        let (history, live) = fx();
+        let recent = crate::types::conversation::RecentConversation::new(String::new(), history);
+        let request = super::build_request(
+            &live,
+            Some(recent),
+            16,
+            30,
+            true,
+            true,
+            "(7) A2",
+            &crate::types::conversation::Platform::Discord,
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let (prompt, images) =
+            crate::llm::render_with_pack(&root.join("models/qwen3-8-27b"), &request).unwrap();
+        let time = regex::Regex::new(r"Current time: [0-9: -]+UTC").unwrap();
+        let prompt = time.replace_all(&prompt, "Current time: <T>");
+
+        let golden_path = root.join("src/externals/testdata/primary_prompt.txt");
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::write(&golden_path, prompt.as_bytes()).unwrap();
+        }
+        let golden = std::fs::read_to_string(&golden_path).unwrap();
+        assert!(
+            prompt == golden,
+            "rendered primary prompt differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended",
+            golden_path.display()
+        );
+
+        let images: Vec<&[u8]> = images.iter().map(|b| b.as_slice()).collect();
+        assert_eq!(images, [&[1u8, 1, 1][..], &[2, 2], &[3], &[4, 4, 4, 4]]);
     }
 }

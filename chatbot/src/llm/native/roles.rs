@@ -10,6 +10,8 @@ use std::sync::Arc;
 use crate::llm::native::chat_format::{ChatMessage, ToolDefinition};
 
 pub use primary_role::PrimaryRole;
+#[cfg(test)]
+pub(crate) use render::render as render_template;
 pub use utility_role::UtilityRole;
 
 pub trait Role: Send + Sync {
