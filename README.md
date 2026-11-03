@@ -112,8 +112,10 @@ what serves them:
   host the endpoint is Halogen (`http://127.0.0.1:8731`, model `halogen-qwen3.8-flash-next`),
   which serves both roles; the template has that config commented out.
 
-Images are normalized when they arrive: anything that doesn't decode is passed on as a file
-mention instead, so one bad attachment can't fail every later turn.
+Before either backend sees a request, its images are checked: each gets the media type its bytes
+actually have, formats other than PNG, JPEG, GIF and WebP are re-encoded as JPEG, and one that
+doesn't decode is replaced by a short note, so a single bad attachment can't fail every later
+turn.
 
 One field isn't part of the API: the per-turn footer (time, chat setting, tool budget). Native
 renders it after the conversation; remote appends it to the last user turn, so the system prompt

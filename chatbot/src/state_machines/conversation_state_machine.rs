@@ -314,7 +314,7 @@ fn conversation_transition(
                 queued,
                 user_id: user_id.clone(),
                 name: name.clone(),
-                attachments: attachments.iter().map(Attachment::normalized).collect(),
+                attachments: attachments.iter().map(Attachment::downscaled).collect(),
             }));
 
             Ok(Conversation {

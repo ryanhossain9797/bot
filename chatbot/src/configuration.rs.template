@@ -31,6 +31,6 @@ pub mod llm {
     //     api_version: "2023-06-01",
     //     primary_model: "halogen-qwen3.8-flash-next",
     //     utility_model: Some("halogen-qwen3.8-flash-next"),
-    //     timeout_secs: 900,
+    //     timeout_secs: 840,
     // });
 }

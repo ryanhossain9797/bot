@@ -1,8 +1,9 @@
 pub mod anthropic;
+mod images;
 mod native;
 mod remote;
 
-use anthropic::{MessagesRequest, MessagesResponse};
+use anthropic::{MessagesRequest, MessagesResponse, StopReason};
 
 pub use native::NativeLlm;
 #[cfg(test)]
@@ -47,11 +48,19 @@ impl LlmBackend {
     pub async fn complete(
         &self,
         role: ModelRole,
-        request: MessagesRequest,
+        mut request: MessagesRequest,
     ) -> anyhow::Result<MessagesResponse> {
-        match self {
+        images::sanitize(&mut request.messages);
+        let max_tokens = request.max_tokens;
+        let response = match self {
             LlmBackend::Native(native) => native.complete(role, request).await,
             LlmBackend::Remote(remote) => remote.complete(role, request).await,
+        }?;
+        if response.stop_reason == Some(StopReason::MaxTokens) {
+            eprintln!(
+                "[llm] {role:?} reply hit max_tokens ({max_tokens}); it may be cut off, or hold only thinking"
+            );
         }
+        Ok(response)
     }
 }
