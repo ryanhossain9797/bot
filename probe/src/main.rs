@@ -21,6 +21,7 @@ struct Config {
     api_key: Option<String>,
     max_tokens: u32,
     stream: bool,
+    drop_thinking: bool,
     scenario: String,
 }
 
@@ -36,6 +37,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_MAX_TOKENS),
             stream: args.iter().any(|a| a == "--stream"),
+            drop_thinking: args.iter().any(|a| a == "--drop-thinking"),
             scenario: args
                 .iter()
                 .find(|a| !a.starts_with("--"))
@@ -337,7 +339,12 @@ async fn run_turn(client: &Client, messages: &mut Vec<Value>, png: &[u8]) -> any
     for round in 0..=MAX_TOOL_ROUNDS {
         let reply = client.send(messages).await?;
         let calls = reply.tool_uses();
-        messages.push(json!({"role": "assistant", "content": reply.content}));
+        let replayed: Vec<Value> = reply
+            .content
+            .into_iter()
+            .filter(|b| !(client.config.drop_thinking && b["type"] == "thinking"))
+            .collect();
+        messages.push(json!({"role": "assistant", "content": replayed}));
         if calls.is_empty() {
             return Ok(());
         }
@@ -355,11 +362,12 @@ async fn run_turn(client: &Client, messages: &mut Vec<Value>, png: &[u8]) -> any
 async fn main() -> anyhow::Result<()> {
     let config = Config::load();
     println!(
-        "probe: {} model={} scenario={} stream={} api_key={}",
+        "probe: {} model={} scenario={} stream={} drop_thinking={} api_key={}",
         config.base_url,
         config.model,
         config.scenario,
         config.stream,
+        config.drop_thinking,
         if config.api_key.is_some() { "set" } else { "none" }
     );
     let client = Client {

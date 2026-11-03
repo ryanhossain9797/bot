@@ -20,6 +20,7 @@ Scenarios:
   signature, text, `tool_use`) are sent back unchanged.
 
 `--stream` uses SSE, the way Claude Code does. Without it, requests are plain JSON.
+`--drop-thinking` replays the model's turns without their thinking blocks, as the bot's history does.
 
 For each request it prints the size and the shape of the history (`user[text,image]
 assistant[thinking,tool_use] …`), then the status, latency, time to first token when
