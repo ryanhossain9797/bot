@@ -17,8 +17,6 @@ Thumbs.db
 *.md
 !models/README.md
 
-bot_hive/models/
-
 
 flycheck0/
 
