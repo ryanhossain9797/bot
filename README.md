@@ -153,8 +153,9 @@ just deploy_local    # build the app image and (re)start the `bot` container
 ```
 
 The container uses host networking and mounts the Docker socket, so it can run the bash
-sandboxes and SearxNG as sibling containers. Merging to `main` deploys through the self-hosted
-`deploy` workflow.
+sandboxes and SearxNG as sibling containers. Deploys are manual for now: run `just deploy_local`
+from an up-to-date `main` checkout on the bot's host. The `deploy` workflow's self-hosted runner
+is down.
 
 ### Web search
 
