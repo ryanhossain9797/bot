@@ -1,7 +1,3 @@
-//! Remote backend: an Anthropic-compatible `POST {base_url}/v1/messages` endpoint.
-//!
-//! STUB — `complete` builds the wire body but does not send it yet.
-
 use serde::Serialize;
 
 use super::anthropic::{ContentBlock, Message, MessagesRequest, MessagesResponse, Role};
@@ -36,9 +32,6 @@ impl RemoteLlm {
             .model(role)
             .ok_or_else(|| anyhow::anyhow!("no remote model configured for {role:?}"))?;
         let _body = wire_request(model, request);
-        // TODO: POST `_body` to `{base_url}/v1/messages` with `x-api-key: {api_key}`,
-        // `anthropic-version: {api_version}`, a `timeout_secs` timeout, and deserialize the
-        // `MessagesResponse`; map non-2xx / `error` bodies to an anyhow error.
         anyhow::bail!(
             "remote LLM backend is not implemented yet (would call {}/v1/messages with model {model})",
             self.config.base_url.trim_end_matches('/')
@@ -53,9 +46,6 @@ struct WireRequest {
     request: MessagesRequest,
 }
 
-/// The request as the API expects it: `model` added, and the footer (not an API field) appended
-/// as a trailing text block on the last user turn — or as a new user turn if the conversation
-/// ends on an assistant turn.
 fn wire_request(model: &'static str, mut request: MessagesRequest) -> WireRequest {
     if let Some(footer) = request.footer.take() {
         let block = ContentBlock::text(footer);

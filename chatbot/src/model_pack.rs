@@ -47,8 +47,6 @@ pub struct Thinking {
     pub close_marker: String,
 }
 
-/// MTP (multi-token prediction) speculative decoding. Used only when the GGUF ships an MTP head
-/// (`<arch>.nextn_predict_layers > 0`); `mtp = false` opts a capable pack out.
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Speculative {

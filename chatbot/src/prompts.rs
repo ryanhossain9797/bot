@@ -1,6 +1,3 @@
-//! System prompts and sampling settings per task. These travel in the LLM request, so they're
-//! the same whichever backend (native or remote) serves it.
-
 use std::sync::LazyLock;
 
 const PRIMARY_SYSTEM_PROMPT_TEMPLATE: &str = "You are {name}, a helpful conversational assistant.\n\n\
@@ -66,7 +63,5 @@ pub const SUMMARIZER_SYSTEM_PROMPT: &str = "You are a summarization engine. You 
 
 pub const SUMMARIZER_TEMPERATURE: f32 = 0.3;
 
-/// Output caps for remote requests (`max_tokens` is required by the API). The native backend
-/// ignores them; its model packs set `max_generation_tokens` instead (8192 / 2048).
 pub const PRIMARY_MAX_TOKENS: u32 = 8192;
 pub const SUMMARIZER_MAX_TOKENS: u32 = 2048;

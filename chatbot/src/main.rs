@@ -83,8 +83,6 @@ async fn load_native() -> anyhow::Result<NativeLlm> {
     Ok(NativeLlm::new(primary, utility))
 }
 
-/// `chatbot bench [message] [image]`: load the primary pack and compare standard vs MTP decoding
-/// on one prompt, without touching the store or Discord.
 fn bench(message: Option<String>, image_path: Option<String>) -> anyhow::Result<()> {
     send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
     let image = image_path.map(std::fs::read).transpose()?;

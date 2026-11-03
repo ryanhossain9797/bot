@@ -1,12 +1,3 @@
-//! Native backend: runs an Anthropic-shaped request on the in-process llama.cpp roles.
-//!
-//! Request → the chat-template inputs the roles already understand (`ChatMessage`s with image
-//! markers + a parallel image list, OpenAI-style tool definitions); the raw completion is parsed
-//! back into Anthropic content blocks. The translation is lossless for everything the app sends,
-//! so the rendered prompt is byte-for-byte what it was before this layer existed.
-//!
-//! Ignored request fields: `max_tokens` (the model pack's `max_generation_tokens` caps output).
-
 use std::sync::Arc;
 
 use llama_cpp_2::mtmd::mtmd_default_marker;
@@ -22,7 +13,6 @@ use crate::chat_format::{
 };
 use crate::roles::{PrimaryRole, RenderInputs, Role, UtilityRole};
 
-/// Anthropic's default when `temperature` is omitted.
 const DEFAULT_TEMPERATURE: f32 = 1.0;
 
 pub struct NativeLlm {
@@ -148,8 +138,6 @@ fn to_tool_definition(tool: &Tool) -> ToolDefinition {
     }
 }
 
-/// Text renders as itself, an image as `marker` (its bytes appended to `images`, in prompt
-/// order); a message's parts are joined with newlines.
 fn part(block: &ContentBlock, marker: &str, images: &mut Vec<Arc<Vec<u8>>>) -> Option<String> {
     match block {
         ContentBlock::Text { text } => Some(text.clone()),
@@ -165,9 +153,6 @@ fn part(block: &ContentBlock, marker: &str, images: &mut Vec<Arc<Vec<u8>>>) -> O
     }
 }
 
-/// One `Message` becomes one `ChatMessage`, except that each `tool_result` block in a user
-/// message becomes its own `tool` message (text/image blocks around them stay `user` messages,
-/// in order).
 fn to_chat_messages(
     messages: &[Message],
     marker: &str,

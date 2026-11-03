@@ -1,8 +1,3 @@
-//! The conversation's LLM external: builds an Anthropic Messages request from the history,
-//! runs it on whichever backend `Env::llm` is (native llama.cpp or remote), and maps the reply
-//! back to a `ConversationAction`. Like every external it never fails — errors become
-//! `LLMDecisionResult(Err(..))`.
-
 use crate::{
     llm::{
         anthropic::{Message, MessagesRequest, MessagesResponse},

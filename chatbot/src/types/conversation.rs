@@ -197,8 +197,6 @@ impl ConversationMessage {
         }
     }
 
-    /// The message as content blocks, one per line of what the model sees: the text, then each
-    /// attachment (an image as its `url:` line followed by the image itself).
     pub fn content_blocks(&self) -> Vec<ContentBlock> {
         let mut blocks: Vec<ContentBlock> = Vec::new();
         let base = self.to_content();
@@ -276,8 +274,6 @@ impl LLMInput {
         }
     }
 
-    /// The input as API messages. `full` picks a tool result's full text over its simplified
-    /// one (the live turn sees full output; history keeps the simplified form).
     pub fn to_messages(&self, full: bool) -> Vec<Message> {
         match self {
             LLMInput::ConversationMessage(msg) => vec![Message::user(msg.content_blocks())],

@@ -81,7 +81,6 @@ struct MtpConfig {
     p_min: f32,
 }
 
-/// MTP is chosen per model: on when the GGUF carries an MTP head and the pack doesn't opt out.
 fn detect_mtp(model: &LlamaModel, pack: &Pack) -> Option<MtpConfig> {
     let n_nextn = model
         .meta_val_str("general.architecture")
@@ -205,7 +204,6 @@ fn run_with(
     }
 }
 
-/// Dev-only comparison: the same prompt with standard decoding, then with MTP if the model has it.
 pub(super) fn bench(
     model: &LocalModel,
     prompt: &str,
@@ -260,7 +258,6 @@ fn log_prompt(prompt: &str) {
     }
 }
 
-/// Tokenize the prompt, dropping middle tokens if it would leave less than `reserve` positions.
 fn prompt_tokens(
     llama: &LlamaModel,
     cfg: &GenConfig,
@@ -360,8 +357,6 @@ fn run_generation_mtmd(
     generate(llama, &mut ctx, n_past, temperature, cfg, thinking)
 }
 
-/// Target context with recurrent-state snapshots so a hybrid model can roll back rejected draft
-/// tokens, plus a same-model MTP draft context.
 fn new_mtp<'m>(model: &'m LocalModel, mtp: MtpConfig) -> anyhow::Result<MtpSpeculative<'m>> {
     let llama = &model.model;
     let target = llama.new_context(
@@ -400,7 +395,6 @@ fn run_generation_text_mtp(
     };
 
     let llama = &model.model;
-    // A verification batch can run draft_max + 1 positions past the generation budget.
     let reserve = cfg.max_generation_tokens + mtp.draft_max as usize + 1;
     let tokens = prompt_tokens(llama, cfg, prompt, reserve)?;
 
@@ -421,10 +415,6 @@ fn run_generation_text_mtp(
     generate_mtp(llama, &mut spec, tokens, n_past, temperature, cfg, thinking)
 }
 
-/// Image prompts: mtmd prefills the target exactly as the standard path does, then the MTP loop
-/// runs. The drafter never sees the prompt (its process() hook skips mtmd's batches), but its
-/// input is the target's hidden state, which already carries the image — so drafts still land
-/// about as often as on text, and the output is identical to standard decoding.
 #[allow(clippy::too_many_arguments)]
 fn run_generation_mtmd_mtp(
     model: &LocalModel,
@@ -487,7 +477,6 @@ fn sampler_chain(model: &LlamaModel, temperature: f32, cfg: &GenConfig) -> Llama
     LlamaSampler::chain_simple(samplers)
 }
 
-/// Generated text plus the thinking-budget bookkeeping shared by both decode paths.
 struct Output<'a> {
     model: &'a LlamaModel,
     bytes: Vec<u8>,
@@ -515,7 +504,6 @@ impl<'a> Output<'a> {
         !self.thinking_closed && self.sampled >= thinking.max_tokens
     }
 
-    /// A token the sampler chose; counts toward the generation and thinking budgets.
     fn push_sampled(&mut self, tok: LlamaToken) -> anyhow::Result<()> {
         let before = self.bytes.len();
         self.push(tok)?;
@@ -532,7 +520,6 @@ impl<'a> Output<'a> {
         Ok(())
     }
 
-    /// A token injected by the thinking budget.
     fn push_forced(&mut self, tok: LlamaToken) -> anyhow::Result<()> {
         self.push(tok)
     }
@@ -613,10 +600,6 @@ fn generate(
     Ok(out.finish())
 }
 
-/// Speculative loop: `pending` is the latest sampled token — already in the output, not yet in
-/// the target KV. Each step drafts after it, verifies `[pending, draft..]` in one target batch,
-/// keeps the longest prefix the sampler agrees with plus the sampler's own next token, and rolls
-/// both contexts back past the rejected drafts.
 fn generate_mtp(
     model: &LlamaModel,
     spec: &mut MtpSpeculative,
@@ -662,8 +645,6 @@ fn generate_mtp(
         }
 
         let draft = spec.draft(n_past, pending, &history)?;
-        // Drafting wrote [pending, draft..] into the draft KV; process() below re-decodes those
-        // positions from the verified batch, so clear them first.
         spec.draft_context_mut()
             .kv_cache_seq_rm(0, Some(n_past as u32), None)?;
 

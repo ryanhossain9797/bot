@@ -1,11 +1,3 @@
-//! Anthropic Messages API (`POST /v1/messages`) types — the request/response shape every LLM
-//! backend speaks. The native backend translates these to and from the local chat template; the
-//! remote backend sends them over the wire as-is.
-//!
-//! Serialization matches the public API, so a serialized request is a valid request body once a
-//! `model` is added (see `llm::remote`). One extension: `MessagesRequest::footer`, which isn't part
-//! of the API and is never serialized — see its doc.
-
 use std::sync::Arc;
 
 use base64::Engine;
@@ -22,10 +14,6 @@ pub struct MessagesRequest {
     pub tools: Vec<Tool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    /// Per-turn context rendered *after* the conversation (time, setting, tool budget). Kept out
-    /// of `system` so the stable prefix stays cacheable. The native backend feeds it to the chat
-    /// template's trailing system block; the remote backend appends it as a final text block on
-    /// the last user turn.
     #[serde(skip)]
     pub footer: Option<String>,
 }
@@ -37,8 +25,6 @@ pub enum Role {
     Assistant,
 }
 
-/// Consecutive messages with the same role are allowed: the API merges them into one turn, and
-/// the native backend renders each as its own turn (exactly as before this layer existed).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
@@ -115,7 +101,6 @@ impl ContentBlock {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
-    /// Raw bytes in memory; base64-encoded only when serialized for the wire.
     Base64 {
         media_type: String,
         #[serde(serialize_with = "ser_base64", deserialize_with = "de_base64")]
@@ -154,7 +139,6 @@ pub struct MessagesResponse {
 }
 
 impl MessagesResponse {
-    /// Concatenated `thinking` blocks.
     pub fn thinking(&self) -> String {
         self.content
             .iter()
@@ -166,7 +150,6 @@ impl MessagesResponse {
             .join("\n")
     }
 
-    /// Concatenated `text` blocks.
     pub fn text(&self) -> String {
         self.content
             .iter()
@@ -178,7 +161,6 @@ impl MessagesResponse {
             .join("\n")
     }
 
-    /// `(id, name, input)` of every `tool_use` block, in order.
     pub fn tool_uses(&self) -> impl Iterator<Item = (&str, &str, &Value)> {
         self.content.iter().filter_map(|b| match b {
             ContentBlock::ToolUse { id, name, input } => Some((id.as_str(), name.as_str(), input)),

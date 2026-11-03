@@ -32,7 +32,6 @@ impl PrimaryRole {
         Ok(PrimaryRole { model: local_model::load_model(backend, &pack)? })
     }
 
-    /// Dev-only: time one prompt with standard decoding and, if the model has an MTP head, with MTP.
     pub fn bench(&self, user_message: &str, image: Option<Vec<u8>>) -> anyhow::Result<()> {
         let content = match image {
             Some(_) => format!("{user_message}\n{}", mtmd_default_marker()),

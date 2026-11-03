@@ -1,7 +1,3 @@
-//! The LLM backend behind `externals::llm_external`. Callers speak the Anthropic Messages API
-//! (`anthropic`); `configuration::llm::BACKEND` picks whether that runs on the in-process
-//! llama.cpp models (`Native`) or an Anthropic-compatible HTTP endpoint (`Remote`).
-
 pub mod anthropic;
 mod native;
 mod remote;
@@ -13,8 +9,6 @@ use anthropic::{MessagesRequest, MessagesResponse};
 pub use native::NativeLlm;
 pub use remote::RemoteLlm;
 
-/// Which model a request is for. Native maps these to the primary/utility model packs; remote
-/// maps them to `RemoteLlmConfig::{primary_model, utility_model}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRole {
     Primary,
@@ -30,15 +24,10 @@ pub enum LlmBackendConfig {
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct RemoteLlmConfig {
-    /// Base URL of an Anthropic-compatible API, e.g. `https://api.anthropic.com`;
-    /// requests go to `{base_url}/v1/messages`.
     pub base_url: &'static str,
-    /// Sent as `x-api-key`.
     pub api_key: &'static str,
-    /// Sent as `anthropic-version`.
     pub api_version: &'static str,
     pub primary_model: &'static str,
-    /// `None` disables compaction, as a missing utility pack does natively.
     pub utility_model: Option<&'static str>,
     pub timeout_secs: u64,
 }
