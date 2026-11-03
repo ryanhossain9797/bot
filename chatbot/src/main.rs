@@ -1,25 +1,20 @@
 #![feature(never_type)]
 
-mod chat_format;
 mod configuration;
 mod externals;
 mod llm;
-mod model_pack;
 mod prompts;
-mod roles;
 mod services;
 mod state_machines;
 mod tools;
 mod types;
 
-use llama_cpp_2::{llama_backend::LlamaBackend, send_logs_to_tracing, LogOptions};
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
 use crate::llm::{LlmBackend, LlmBackendConfig, NativeLlm, RemoteLlm};
-use crate::roles::{PrimaryRole, UtilityRole};
 use crate::state_machines::conversation_state_machine::ConversationMachine;
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
@@ -37,7 +32,7 @@ async fn init_env() -> anyhow::Result<Env> {
     let discord_token = configuration::client_tokens::DISCORD_TOKEN;
 
     let llm = match configuration::llm::BACKEND {
-        LlmBackendConfig::Native => LlmBackend::Native(load_native().await?),
+        LlmBackendConfig::Native => LlmBackend::Native(NativeLlm::load().await?),
         LlmBackendConfig::Remote(config) => {
             println!(
                 "[startup] remote LLM backend: {} (primary {}, utility {})",
@@ -58,49 +53,12 @@ async fn init_env() -> anyhow::Result<Env> {
     })
 }
 
-async fn load_native() -> anyhow::Result<NativeLlm> {
-    send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
-    let backend = Arc::new(LlamaBackend::init()?);
-    let primary = Arc::new(
-        tokio::task::spawn_blocking({
-            let backend = Arc::clone(&backend);
-            move || PrimaryRole::load(backend)
-        })
-        .await??,
-    );
-
-    let utility = match tokio::task::spawn_blocking(move || UtilityRole::load(backend)).await? {
-        Ok(role) => {
-            println!("[startup] utility model ready");
-            Some(Arc::new(role))
-        }
-        Err(e) => {
-            eprintln!("[startup] utility model not loaded: {e:#} — compaction disabled");
-            None
-        }
-    };
-
-    Ok(NativeLlm::new(primary, utility))
-}
-
-fn bench(message: Option<String>, image_path: Option<String>) -> anyhow::Result<()> {
-    send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
-    let image = image_path.map(std::fs::read).transpose()?;
-    let backend = Arc::new(LlamaBackend::init()?);
-    let primary = PrimaryRole::load(backend)?;
-    let message = message.unwrap_or_else(|| {
-        "Write a Python function that returns the first n prime numbers, then explain how it works."
-            .to_string()
-    });
-    primary.bench(&message, image)
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<!> {
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some("bench") {
         let (message, image) = (args.next(), args.next());
-        tokio::task::spawn_blocking(move || bench(message, image)).await??;
+        tokio::task::spawn_blocking(move || NativeLlm::bench(message, image)).await??;
         std::process::exit(0);
     }
 

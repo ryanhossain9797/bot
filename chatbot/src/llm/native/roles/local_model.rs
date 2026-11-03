@@ -21,7 +21,7 @@ use std::{
 
 use super::parsers::{self, Parser};
 use super::{FormatFlags, ParsedResponse, RenderInputs, ThinkingPolicy};
-use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, model_pack::Pack};
+use crate::{configuration::debug::DEBUG_LIVE_LLM_OUTPUT, llm::native::model_pack::Pack};
 
 const ADD_BOS_REEVAL_WHEN_CACHING_HITS: bool = false;
 const DRY_BREAKS_LONG_STRINGS: bool = true;

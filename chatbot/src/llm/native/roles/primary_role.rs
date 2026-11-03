@@ -7,8 +7,8 @@ use tokio::task::spawn_blocking;
 
 use super::local_model::{self, LocalModel};
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
-use crate::chat_format::ChatMessage;
-use crate::model_pack::Pack;
+use crate::llm::native::chat_format::ChatMessage;
+use crate::llm::native::model_pack::Pack;
 use crate::prompts::{PRIMARY_SYSTEM_PROMPT, PRIMARY_TEMPERATURE};
 
 const THINKING_NUDGE: &str =

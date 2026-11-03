@@ -46,8 +46,8 @@ Inside `chatbot/src/`:
 |------|----------|
 | `state_machines/` | `ConversationMachine`, `MemoryManagerMachine`, `ReminderForConversationMachine` |
 | `externals/` | Side effects the machines enqueue: LLM calls, tools, sending messages, summarizing |
-| `llm/` | The LLM backend: Anthropic Messages API types, the native adapter, the remote client |
-| `roles/` | The native path: render prompt → run `llama.cpp` → parse output |
+| `llm/` | The LLM backend: Anthropic Messages API types and the remote client |
+| `llm/native/` | Everything `llama.cpp`: model packs, prompt rendering, the decode loop, output parsers |
 | `prompts.rs` | System prompts and sampling settings |
 | `tools.rs` | Tool definitions and argument binding |
 | `services/discord.rs` | Discord gateway handling |

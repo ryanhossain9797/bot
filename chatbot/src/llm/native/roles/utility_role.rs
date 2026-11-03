@@ -6,7 +6,7 @@ use tokio::task::spawn_blocking;
 
 use super::local_model::{self, LocalModel};
 use super::{ParsedResponse, RenderInputs, Role, ThinkingPolicy};
-use crate::model_pack::Pack;
+use crate::llm::native::model_pack::Pack;
 
 const PACK_DIR_ENV: &str = "UTILITY_MODEL_PACK_DIR";
 const DEFAULT_PACK_DIR: &str = "./models/qwen3-4b";

@@ -7,7 +7,7 @@ mod utility_role;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::chat_format::{ChatMessage, ToolDefinition};
+use crate::llm::native::chat_format::{ChatMessage, ToolDefinition};
 
 pub use primary_role::PrimaryRole;
 pub use utility_role::UtilityRole;

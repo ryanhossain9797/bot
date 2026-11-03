@@ -1,6 +1,12 @@
 use std::sync::Arc;
 
+mod chat_format;
+mod model_pack;
+mod roles;
+
+use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::mtmd::mtmd_default_marker;
+use llama_cpp_2::{send_logs_to_tracing, LogOptions};
 use serde_json::Value;
 
 use super::anthropic::{
@@ -8,10 +14,10 @@ use super::anthropic::{
     StopReason, Tool, Usage,
 };
 use super::ModelRole;
-use crate::chat_format::{
+use self::chat_format::{
     ChatMessage, MessageToolCall, MessageToolCallFunction, ToolDefFunction, ToolDefinition,
 };
-use crate::roles::{PrimaryRole, RenderInputs, Role, UtilityRole};
+use self::roles::{PrimaryRole, RenderInputs, Role, UtilityRole};
 
 const DEFAULT_TEMPERATURE: f32 = 1.0;
 
@@ -21,8 +27,41 @@ pub struct NativeLlm {
 }
 
 impl NativeLlm {
-    pub fn new(primary: Arc<PrimaryRole>, utility: Option<Arc<UtilityRole>>) -> Self {
-        NativeLlm { primary, utility }
+    pub async fn load() -> anyhow::Result<Self> {
+        send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
+        let backend = Arc::new(LlamaBackend::init()?);
+        let primary = Arc::new(
+            tokio::task::spawn_blocking({
+                let backend = Arc::clone(&backend);
+                move || PrimaryRole::load(backend)
+            })
+            .await??,
+        );
+
+        let utility = match tokio::task::spawn_blocking(move || UtilityRole::load(backend)).await? {
+            Ok(role) => {
+                println!("[startup] utility model ready");
+                Some(Arc::new(role))
+            }
+            Err(e) => {
+                eprintln!("[startup] utility model not loaded: {e:#} — compaction disabled");
+                None
+            }
+        };
+
+        Ok(NativeLlm { primary, utility })
+    }
+
+    pub fn bench(message: Option<String>, image_path: Option<String>) -> anyhow::Result<()> {
+        send_logs_to_tracing(LogOptions::default().with_logs_enabled(false));
+        let image = image_path.map(std::fs::read).transpose()?;
+        let backend = Arc::new(LlamaBackend::init()?);
+        let primary = PrimaryRole::load(backend)?;
+        let message = message.unwrap_or_else(|| {
+            "Write a Python function that returns the first n prime numbers, then explain how it works."
+                .to_string()
+        });
+        primary.bench(&message, image)
     }
 
     pub fn has(&self, role: ModelRole) -> bool {
@@ -218,7 +257,7 @@ fn to_chat_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat_format::ChatRole;
+    use super::chat_format::ChatRole;
     use serde_json::json;
 
     #[test]

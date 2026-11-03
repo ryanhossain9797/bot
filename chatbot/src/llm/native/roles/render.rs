@@ -5,7 +5,7 @@ use minijinja::{value::Value, Environment, Error, ErrorKind};
 use serde::Serialize;
 
 use super::{FormatFlags, RenderInputs};
-use crate::chat_format::{ChatMessage, ToolDefinition};
+use crate::llm::native::chat_format::{ChatMessage, ToolDefinition};
 
 struct Spaced;
 impl serde_json::ser::Formatter for Spaced {
@@ -84,10 +84,10 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat_format::ChatMessage;
+    use crate::llm::native::chat_format::ChatMessage;
 
     const PRIMARY_TEMPLATE: &str =
-        include_str!("../../models/qwen3-8-27b/chat_template.jinja");
+        include_str!("../../../../models/qwen3-8-27b/chat_template.jinja");
 
     fn flags() -> FormatFlags {
         FormatFlags {

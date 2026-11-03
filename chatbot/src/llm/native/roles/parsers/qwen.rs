@@ -5,7 +5,7 @@ use regex::Regex;
 use serde_json::Value as Json;
 
 use super::Parser;
-use crate::roles::{ParsedResponse, ParsedToolCall};
+use crate::llm::native::roles::{ParsedResponse, ParsedToolCall};
 
 static CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").expect("CALL_RE is a valid regex")
