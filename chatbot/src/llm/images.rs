@@ -41,10 +41,7 @@ fn checked(data: &Arc<Vec<u8>>) -> Option<(String, Arc<Vec<u8>>)> {
     let decoded = image::load_from_memory_with_format(data, format).ok()?;
     if matches!(
         format,
-        image::ImageFormat::Png
-            | image::ImageFormat::Jpeg
-            | image::ImageFormat::Gif
-            | image::ImageFormat::WebP
+        image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::Gif
     ) {
         return Some((format.to_mime_type().to_string(), Arc::clone(data)));
     }
@@ -88,15 +85,20 @@ mod tests {
     }
 
     #[test]
-    fn unaccepted_format_is_reencoded_as_jpeg() {
-        let mut messages = vec![Message::user(vec![ContentBlock::image(
-            "image/bmp",
-            Arc::new(encoded(image::ImageFormat::Bmp)),
-        )])];
-        sanitize(&mut messages);
-        let (media_type, bytes) = image_of(&messages[0], 0);
-        assert_eq!(media_type, "image/jpeg");
-        assert_eq!(image::guess_format(bytes).unwrap(), image::ImageFormat::Jpeg);
+    fn formats_native_cannot_decode_are_reencoded_as_jpeg() {
+        for (format, mime) in [
+            (image::ImageFormat::WebP, "image/webp"),
+            (image::ImageFormat::Bmp, "image/bmp"),
+        ] {
+            let mut messages = vec![Message::user(vec![ContentBlock::image(
+                mime,
+                Arc::new(encoded(format)),
+            )])];
+            sanitize(&mut messages);
+            let (media_type, bytes) = image_of(&messages[0], 0);
+            assert_eq!(media_type, "image/jpeg", "{mime}");
+            assert_eq!(image::guess_format(bytes).unwrap(), image::ImageFormat::Jpeg, "{mime}");
+        }
     }
 
     #[test]

@@ -33,4 +33,4 @@ streaming, every content block, `stop_reason` and `usage`.
 | `PROBE_BASE_URL` | `http://127.0.0.1:8731` |
 | `PROBE_MODEL` | `halogen-qwen3.8-flash-next` |
 | `PROBE_MAX_TOKENS` | `2048` |
-| `ANTHROPIC_API_KEY` | none; sent as `x-api-key` when set |
+| `PROBE_API_KEY` | none; sent as `x-api-key` when set |

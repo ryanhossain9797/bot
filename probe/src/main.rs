@@ -32,7 +32,7 @@ impl Config {
         Config {
             base_url: env("PROBE_BASE_URL").unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
             model: env("PROBE_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-            api_key: env("ANTHROPIC_API_KEY"),
+            api_key: env("PROBE_API_KEY"),
             max_tokens: env("PROBE_MAX_TOKENS")
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_MAX_TOKENS),

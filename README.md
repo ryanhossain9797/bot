@@ -113,8 +113,8 @@ what serves them:
   which serves both roles; the template has that config commented out.
 
 Before either backend sees a request, its images are checked: each gets the media type its bytes
-actually have, formats other than PNG, JPEG, GIF and WebP are re-encoded as JPEG, and one that
-doesn't decode is replaced by a short note, so a single bad attachment can't fail every later
+actually have, formats other than PNG, JPEG and GIF (WebP included, which llama.cpp can't read)
+are re-encoded as JPEG, and one that doesn't decode is replaced by a short note, so a single bad attachment can't fail every later
 turn.
 
 One field isn't part of the API: the per-turn footer (time, chat setting, tool budget). Native

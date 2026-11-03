@@ -50,7 +50,12 @@ impl LlmBackend {
         role: ModelRole,
         mut request: MessagesRequest,
     ) -> anyhow::Result<MessagesResponse> {
-        images::sanitize(&mut request.messages);
+        let mut messages = std::mem::take(&mut request.messages);
+        request.messages = tokio::task::spawn_blocking(move || {
+            images::sanitize(&mut messages);
+            messages
+        })
+        .await?;
         let max_tokens = request.max_tokens;
         let response = match self {
             LlmBackend::Native(native) => native.complete(role, request).await,
