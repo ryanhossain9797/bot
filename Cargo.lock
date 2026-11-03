@@ -561,6 +561,7 @@ name = "chatbot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "encoding_rs",
  "image",
  "llama-cpp-2",
@@ -2962,9 +2963,11 @@ name = "probe"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "encoding_rs",
- "llama-cpp-2",
+ "base64 0.22.1",
+ "image",
+ "reqwest 0.13.1",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
