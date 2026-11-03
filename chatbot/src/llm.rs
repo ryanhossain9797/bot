@@ -21,7 +21,6 @@ pub enum LlmBackendConfig {
     Remote(RemoteLlmConfig),
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct RemoteLlmConfig {
     pub base_url: &'static str,

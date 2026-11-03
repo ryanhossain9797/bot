@@ -37,7 +37,7 @@ keeps every conversation as a persistent state machine that survives restarts.
 | [`chatbot/`](chatbot/) | The bot |
 | [`re_framework/`](re_framework/) | The persistent state-machine framework the bot is built on |
 | [`sample_framework_project/`](sample_framework_project/) | A minimal replica of the bot used to test the framework |
-| [`probe/`](probe/) | Dev scratchpad for watching raw model output |
+| [`probe/`](probe/) | Drives a synthetic, bot-shaped conversation through an Anthropic-compatible endpoint |
 | [`extractor/`](extractor/) | Dev tool that dumps a GGUF's chat template and metadata |
 
 Inside `chatbot/src/`:
@@ -104,9 +104,16 @@ what serves them:
 
 - **`Native`** loads the model packs and runs them in-process. The request is translated to the
   pack's chat template and the raw output parsed back into blocks.
-- **`Remote`** sends the request to an Anthropic-compatible endpoint (`base_url`, `api_key`,
-  `api_version`, `primary_model`, `utility_model`, `timeout_secs`). It is a stub for now and
-  every call fails.
+- **`Remote`** posts the request to an Anthropic-compatible `/v1/messages` endpoint
+  (`base_url`, `api_key`, `api_version`, `primary_model`, `utility_model`, `timeout_secs`), all
+  checked at startup. History is normalized for the API first: same-role turns merged, repeated
+  `tool_use` ids renamed, orphaned `tool_result`s turned into text, unanswered `tool_use`s given
+  error results, empty text dropped, and a user turn first. No local model is loaded. On this
+  host the endpoint is Halogen (`http://127.0.0.1:8731`, model `halogen-qwen3.8-flash-next`),
+  which serves both roles; the template has that config commented out.
+
+Images are normalized when they arrive: anything that doesn't decode is passed on as a file
+mention instead, so one bad attachment can't fail every later turn.
 
 One field isn't part of the API: the per-turn footer (time, chat setting, tool budget). Native
 renders it after the conversation; remote appends it to the last user turn, so the system prompt
@@ -181,6 +188,13 @@ docker build --target builder -t chatbot-builder -f chatbot/Dockerfile .
 docker run --rm -v "$PWD/chatbot/src:/app/chatbot/src:ro" -v "$PWD/chatbot/models:/app/chatbot/models:ro" \
     -w /app chatbot-builder cargo test --release --package chatbot
 ```
+
+`primary_request_round_trips_through_a_live_remote` is ignored by default. It sends the golden-test
+conversation through the real remote client; run it against Halogen with
+`--network host -e REMOTE_LLM_URL=http://127.0.0.1:8731 -e REMOTE_LLM_KEY=… -e
+REMOTE_LLM_MODEL=halogen-qwen3.8-flash-next` and `cargo test … live_remote -- --ignored`.
+For a quicker look at an endpoint, `cargo run -p probe -- conversation --stream` builds on the
+host.
 
 The toolchain is pinned to `nightly-2026-10-02` because `branches` 0.4.x, pulled in by turso,
 calls `core::intrinsics::abort`, which later nightlies removed

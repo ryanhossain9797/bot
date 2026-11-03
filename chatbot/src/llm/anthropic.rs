@@ -81,6 +81,8 @@ pub enum ContentBlock {
         #[serde(default)]
         signature: String,
     },
+    #[serde(other, skip_serializing)]
+    Unknown,
 }
 
 impl ContentBlock {
@@ -186,6 +188,8 @@ pub struct Usage {
     pub input_tokens: u32,
     #[serde(default)]
     pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
 }
 
 #[cfg(test)]

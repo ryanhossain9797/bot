@@ -212,7 +212,8 @@ fn part(block: &ContentBlock, marker: &str, images: &mut Vec<Arc<Vec<u8>>>) -> O
         }
         ContentBlock::ToolUse { .. }
         | ContentBlock::ToolResult { .. }
-        | ContentBlock::Thinking { .. } => None,
+        | ContentBlock::Thinking { .. }
+        | ContentBlock::Unknown => None,
     }
 }
 

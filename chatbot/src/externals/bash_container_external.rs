@@ -167,7 +167,10 @@ pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImag
         bytes: Arc::new(bytes),
         mime: format.to_mime_type().to_string(),
     };
-    Ok(MessageImage::Hydrated(image).downscaled())
+    image
+        .normalized()
+        .map(MessageImage::Hydrated)
+        .ok_or_else(|| format!("'{path}' could not be decoded as an image"))
 }
 
 pub struct PulledFile {

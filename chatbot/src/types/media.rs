@@ -20,30 +20,40 @@ impl std::fmt::Debug for Image {
 }
 
 impl Image {
-    pub fn downscaled(&self) -> Image {
-        let Ok(decoded) = image::load_from_memory(&self.bytes) else {
-            return self.clone();
-        };
-        if decoded.width().max(decoded.height()) <= MAX_IMAGE_EDGE {
-            return self.clone();
-        }
-        let resized = image::DynamicImage::ImageRgb8(
-            decoded
-                .resize(
-                    MAX_IMAGE_EDGE,
-                    MAX_IMAGE_EDGE,
-                    image::imageops::FilterType::Lanczos3,
-                )
-                .to_rgb8(),
+    pub fn normalized(&self) -> Option<Image> {
+        let format = image::guess_format(&self.bytes).ok()?;
+        let decoded = image::load_from_memory_with_format(&self.bytes, format).ok()?;
+        let fits = decoded.width().max(decoded.height()) <= MAX_IMAGE_EDGE;
+        let accepted = matches!(
+            format,
+            image::ImageFormat::Png
+                | image::ImageFormat::Jpeg
+                | image::ImageFormat::Gif
+                | image::ImageFormat::WebP
         );
-        let mut out = std::io::Cursor::new(Vec::new());
-        match resized.write_to(&mut out, image::ImageFormat::Jpeg) {
-            Ok(()) => Image {
-                bytes: Arc::new(out.into_inner()),
-                mime: "image/jpeg".to_string(),
-            },
-            Err(_) => self.clone(),
+        if fits && accepted {
+            return Some(Image {
+                bytes: Arc::clone(&self.bytes),
+                mime: format.to_mime_type().to_string(),
+            });
         }
+        let resized = if fits {
+            decoded
+        } else {
+            decoded.resize(
+                MAX_IMAGE_EDGE,
+                MAX_IMAGE_EDGE,
+                image::imageops::FilterType::Lanczos3,
+            )
+        };
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(resized.to_rgb8())
+            .write_to(&mut out, image::ImageFormat::Jpeg)
+            .ok()?;
+        Some(Image {
+            bytes: Arc::new(out.into_inner()),
+            mime: "image/jpeg".to_string(),
+        })
     }
 }
 
@@ -62,18 +72,28 @@ pub enum Attachment {
 }
 
 impl Attachment {
-    pub fn downscaled(&self) -> Attachment {
+    pub fn normalized(&self) -> Attachment {
         match self {
             Attachment::Image {
-                image,
+                image: MessageImage::Hydrated(image),
                 filename,
                 url,
-            } => Attachment::Image {
-                image: image.downscaled(),
-                filename: filename.clone(),
-                url: url.clone(),
+            } => match image.normalized() {
+                Some(normalized) => Attachment::Image {
+                    image: MessageImage::Hydrated(normalized),
+                    filename: filename.clone(),
+                    url: url.clone(),
+                },
+                None => {
+                    eprintln!("[media] {filename} ({}) does not decode as an image; passing it on as a file", image.mime);
+                    Attachment::File {
+                        filename: filename.clone(),
+                        content_type: (!image.mime.is_empty()).then(|| image.mime.clone()),
+                        url: url.clone(),
+                    }
+                }
             },
-            Attachment::File { .. } => self.clone(),
+            Attachment::Image { .. } | Attachment::File { .. } => self.clone(),
         }
     }
 
@@ -130,20 +150,78 @@ impl MessageImage {
             MessageImage::Dehydrated { .. } => None,
         }
     }
-
-    pub fn downscaled(&self) -> MessageImage {
-        match self {
-            MessageImage::Hydrated(image) => MessageImage::Hydrated(image.downscaled()),
-            MessageImage::Dehydrated { byte_size } => MessageImage::Dehydrated {
-                byte_size: *byte_size,
-            },
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encoded(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(width, height, image::Rgb([9, 99, 199])))
+            .write_to(&mut out, format)
+            .unwrap();
+        out.into_inner()
+    }
+
+    fn attachment(bytes: Vec<u8>, mime: &str) -> Attachment {
+        Attachment::Image {
+            image: MessageImage::Hydrated(Image {
+                bytes: Arc::new(bytes),
+                mime: mime.to_string(),
+            }),
+            filename: "pic".to_string(),
+            url: "https://cdn/pic".to_string(),
+        }
+    }
+
+    fn normalized_image(attachment: Attachment) -> Image {
+        match attachment.normalized() {
+            Attachment::Image {
+                image: MessageImage::Hydrated(image),
+                ..
+            } => image,
+            other => panic!("expected a hydrated image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn small_accepted_image_keeps_its_bytes_and_gets_its_real_mime() {
+        let png = encoded(10, 10, image::ImageFormat::Png);
+        let image = normalized_image(attachment(png.clone(), "image/jpeg"));
+        assert_eq!(image.mime, "image/png");
+        assert_eq!(*image.bytes, png);
+    }
+
+    #[test]
+    fn large_image_is_downscaled_to_jpeg() {
+        let image = normalized_image(attachment(encoded(2048, 512, image::ImageFormat::Png), "image/png"));
+        assert_eq!(image.mime, "image/jpeg");
+        let decoded = image::load_from_memory(&image.bytes).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (1024, 256));
+    }
+
+    #[test]
+    fn decodable_but_unaccepted_format_is_reencoded() {
+        let image = normalized_image(attachment(encoded(8, 8, image::ImageFormat::Bmp), "image/bmp"));
+        assert_eq!(image.mime, "image/jpeg");
+    }
+
+    #[test]
+    fn undecodable_image_becomes_a_file_attachment() {
+        match attachment(vec![1, 2, 3], "image/heic").normalized() {
+            Attachment::File {
+                filename,
+                content_type,
+                url,
+            } => {
+                assert_eq!(filename, "pic");
+                assert_eq!(content_type.as_deref(), Some("image/heic"));
+                assert_eq!(url, "https://cdn/pic");
+            }
+            other => panic!("expected a file attachment, got {other:?}"),
+        }
+    }
 
     #[test]
     fn hydrated_serializes_as_dehydrated_and_round_trips() {
