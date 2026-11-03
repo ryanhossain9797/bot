@@ -294,6 +294,65 @@ mod tests {
         (history, live)
     }
 
+    #[tokio::test]
+    #[ignore = "needs a live endpoint: REMOTE_LLM_URL, REMOTE_LLM_KEY, REMOTE_LLM_MODEL"]
+    async fn primary_request_round_trips_through_a_live_remote() {
+        let var = |name: &str| -> &'static str {
+            Box::leak(std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set")).into_boxed_str())
+        };
+        let remote = crate::llm::RemoteLlm::new(crate::llm::RemoteLlmConfig {
+            base_url: var("REMOTE_LLM_URL"),
+            api_key: var("REMOTE_LLM_KEY"),
+            api_version: "2023-06-01",
+            primary_model: var("REMOTE_LLM_MODEL"),
+            utility_model: None,
+            timeout_secs: 600,
+        })
+        .unwrap();
+        let (history, live) = fx();
+        let recent = crate::types::conversation::RecentConversation::new(String::new(), history);
+        let request = super::build_request(
+            &live,
+            Some(recent),
+            16,
+            30,
+            true,
+            true,
+            "(7) A2",
+            &crate::types::conversation::Platform::Discord,
+        );
+        let mut request = request;
+        let png = {
+            let square = image::RgbImage::from_pixel(64, 64, image::Rgb([20, 120, 220]));
+            let mut out = std::io::Cursor::new(Vec::new());
+            square.write_to(&mut out, image::ImageFormat::Png).unwrap();
+            std::sync::Arc::new(out.into_inner())
+        };
+        fn real_images(blocks: &mut [crate::llm::anthropic::ContentBlock], png: &std::sync::Arc<Vec<u8>>) {
+            use crate::llm::anthropic::{ContentBlock, ImageSource};
+            for block in blocks {
+                match block {
+                    ContentBlock::Image { source: ImageSource::Base64 { data, .. } } => *data = std::sync::Arc::clone(png),
+                    ContentBlock::ToolResult { content, .. } => real_images(content, png),
+                    _ => {}
+                }
+            }
+        }
+        for message in &mut request.messages {
+            real_images(&mut message.content, &png);
+        }
+        let response = remote
+            .complete(crate::llm::ModelRole::Primary, request)
+            .await
+            .unwrap();
+        let decision = super::to_llm_response(&response);
+        println!("{decision:#?}");
+        assert!(
+            !matches!(decision.reply, crate::types::conversation::Reply::Malformed),
+            "{response:#?}"
+        );
+    }
+
     #[test]
     fn primary_prompt_matches_golden() {
         let (history, live) = fx();

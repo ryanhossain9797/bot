@@ -63,5 +63,5 @@ pub const SUMMARIZER_SYSTEM_PROMPT: &str = "You are a summarization engine. You 
 
 pub const SUMMARIZER_TEMPERATURE: f32 = 0.3;
 
-pub const PRIMARY_MAX_TOKENS: u32 = 8192;
-pub const SUMMARIZER_MAX_TOKENS: u32 = 2048;
+pub const PRIMARY_MAX_TOKENS: u32 = 16384;
+pub const SUMMARIZER_MAX_TOKENS: u32 = 8192;

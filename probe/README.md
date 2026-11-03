@@ -1,48 +1,36 @@
 # probe
 
-A tiny, throwaway CLI for poking at the local model and **visualizing raw behavior**. It's
-deliberately minimal (one `main.rs`, everything hardcoded) — edit the constants/conversation,
-rebuild, run. Not part of the bot; it's a developer scratchpad for the chat-harness overhaul.
-
-## What it does
-
-Loads the GGUF onto the GPU, drives it with the model's **native chat template** (+ a hardcoded
-fake tool), and prints four things:
-
-1. **`RAW PROMPT`** — the full rendered ChatML string sent to the model (tools injected).
-2. **`RAW OUTPUT`** — streamed live as the model generates, stops on `<|im_end|>` (EOS).
-3. **`OAICOMPAT JSON`** — `parse_response_oaicompat` output: the binding's structured parse with
-   `reasoning_content` / `content` / `tool_calls` already separated.
-
-(It renders via `apply_chat_template_oaicompat` with `reasoning_format` set, so `<think>` lands in
-`reasoning_content` instead of leaking into `content`.)
+A small CLI that drives a synthetic, bot-shaped conversation through an Anthropic-compatible
+`/v1/messages` endpoint (Halogen on localhost by default) and prints what comes back. It's a
+scratchpad for checking a remote model before the bot's remote backend talks to it. It has no
+llama.cpp dependency, so it builds on the host.
 
 ## Run it
 
 ```bash
-cargo run -p probe          # or: ./target/debug/probe  (release: cargo run -p probe --release)
+cargo run -p probe -- conversation --stream
 ```
 
-Edit the hardcoded bits at the top of [`src/main.rs`](src/main.rs):
-- `MODEL` — path to the GGUF (defaults to the chatbot's Qwen3.6-35B-A3B).
-- `TOOLS` — the fake tool definition (OpenAI-compatible JSON array).
-- `REASONING_FORMAT` — `"auto"` | `"deepseek"` | `"deepseek-legacy"` | `"none"`.
-- the `messages_json` conversation.
+Scenarios:
 
-## Build dependencies (local)
+- `hello`: one user message, no tools.
+- `conversation` (default): an image and a question that needs a tool, fake tool results fed back
+  until the model answers, then a follow-up turn in the same conversation. Every user turn ends
+  with a bot-style metadata footer block, and the model's own blocks (thinking with its
+  signature, text, `tool_use`) are sent back unchanged.
 
-The `vulkan` feature compiles llama.cpp from source, so the host needs (Debian/Ubuntu):
+`--stream` uses SSE, the way Claude Code does. Without it, requests are plain JSON.
+`--drop-thinking` replays the model's turns without their thinking blocks, as the bot's history does.
 
-```bash
-sudo apt-get install -y glslc libvulkan-dev libclang-dev
-```
+For each request it prints the size and the shape of the history (`user[text,image]
+assistant[thinking,tool_use] …`), then the status, latency, time to first token when
+streaming, every content block, `stop_reason` and `usage`.
 
-- `glslc` — compiles the Vulkan shaders.
-- `libvulkan-dev` — Vulkan headers + loader dev symlink (CMake `FindVulkan`).
-- `libclang-dev` — bindgen's clang builtin headers (else `stdbool.h not found`).
+## Settings
 
-(`cmake`, a C/C++ compiler, and the Vulkan driver are also required but usually already present.)
-GPU offload is forced via `with_n_gpu_layers(999)`.
-
-> If a build fails on stale CMake state (`gmake: Makefile: No such file`), run
-> `cargo clean -p llama-cpp-sys-2` and rebuild.
+| Variable | Default |
+|----------|---------|
+| `PROBE_BASE_URL` | `http://127.0.0.1:8731` |
+| `PROBE_MODEL` | `halogen-qwen3.8-flash-next` |
+| `PROBE_MAX_TOKENS` | `2048` |
+| `PROBE_API_KEY` | none; sent as `x-api-key` when set |

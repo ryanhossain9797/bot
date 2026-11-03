@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::Env;
 use crate::llm::ModelRole;
-use crate::llm::anthropic::{Message, MessagesRequest};
+use crate::llm::anthropic::{Message, MessagesRequest, MessagesResponse};
 use crate::prompts::{SUMMARIZER_MAX_TOKENS, SUMMARIZER_SYSTEM_PROMPT, SUMMARIZER_TEMPERATURE};
 use crate::types::conversation::{
     CompactionOutput, ConversationMessage, HistoryEntry, HistoryEntryKind, InterruptionReason,
@@ -89,6 +89,11 @@ fn history_to_transcript(history: &[HistoryEntry]) -> String {
     lines.join("\n")
 }
 
+fn usable_summary(response: &MessagesResponse) -> Option<String> {
+    let summary = response.text().trim().to_string();
+    (!summary.is_empty()).then_some(summary)
+}
+
 pub async fn summarize(env: Arc<Env>, history: Vec<HistoryEntry>) -> MemoryManagerAction {
     if !env.llm.has(ModelRole::Utility) {
         eprintln!("[compact] utility model unavailable — skipping compaction");
@@ -114,13 +119,57 @@ pub async fn summarize(env: Arc<Env>, history: Vec<HistoryEntry>) -> MemoryManag
         .complete(ModelRole::Utility, request)
         .await
     {
-        Ok(response) => {
-            let summary = response.text().trim().to_string();
-            MemoryManagerAction::CompactionDone(Ok(CompactionOutput { summary, through }))
-        }
+        Ok(response) => match usable_summary(&response) {
+            Some(summary) => {
+                MemoryManagerAction::CompactionDone(Ok(CompactionOutput { summary, through }))
+            }
+            None => {
+                eprintln!(
+                    "[compact] summarizer returned no summary text (stop {:?}); keeping the history uncompacted",
+                    response.stop_reason
+                );
+                MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed))
+            }
+        },
         Err(e) => {
             eprintln!("[compact] summarization failed: {e:#}");
             MemoryManagerAction::CompactionDone(Err(InterruptionReason::Failed))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::usable_summary;
+    use crate::llm::anthropic::{ContentBlock, MessagesResponse, Role, StopReason, Usage};
+
+    fn response(content: Vec<ContentBlock>, stop_reason: StopReason) -> MessagesResponse {
+        MessagesResponse {
+            id: "msg".into(),
+            model: "m".into(),
+            role: Role::Assistant,
+            content,
+            stop_reason: Some(stop_reason),
+            usage: Usage::default(),
+        }
+    }
+
+    #[test]
+    fn thinking_only_reply_is_not_a_summary() {
+        let reply = response(
+            vec![ContentBlock::Thinking {
+                thinking: "long think".into(),
+                signature: String::new(),
+            }],
+            StopReason::MaxTokens,
+        );
+        assert_eq!(usable_summary(&reply), None);
+        assert_eq!(usable_summary(&response(vec![ContentBlock::text("  \n ")], StopReason::EndTurn)), None);
+    }
+
+    #[test]
+    fn text_is_the_summary_even_if_cut_off() {
+        let reply = response(vec![ContentBlock::text(" Alice likes Rust. ")], StopReason::MaxTokens);
+        assert_eq!(usable_summary(&reply).as_deref(), Some("Alice likes Rust."));
     }
 }

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -7,11 +8,41 @@ use super::{ModelRole, RemoteLlmConfig};
 
 pub struct RemoteLlm {
     config: RemoteLlmConfig,
+    endpoint: reqwest::Url,
+    http: reqwest::Client,
 }
 
 impl RemoteLlm {
-    pub fn new(config: RemoteLlmConfig) -> Self {
-        RemoteLlm { config }
+    pub fn new(config: RemoteLlmConfig) -> anyhow::Result<Self> {
+        for (field, value) in [
+            ("base_url", config.base_url),
+            ("api_key", config.api_key),
+            ("api_version", config.api_version),
+            ("primary_model", config.primary_model),
+        ] {
+            anyhow::ensure!(
+                !value.trim().is_empty(),
+                "remote LLM config: `{field}` is empty"
+            );
+        }
+        anyhow::ensure!(
+            config.utility_model.is_none_or(|m| !m.trim().is_empty()),
+            "remote LLM config: `utility_model` is Some(\"\"); use None to disable compaction"
+        );
+        anyhow::ensure!(config.timeout_secs > 0, "remote LLM config: `timeout_secs` is 0");
+        let endpoint = reqwest::Url::parse(&format!(
+            "{}/v1/messages",
+            config.base_url.trim().trim_end_matches('/')
+        ))
+        .map_err(|e| anyhow::anyhow!("remote LLM config: bad `base_url` {:?}: {e}", config.base_url))?;
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.timeout_secs))
+            .build()?;
+        Ok(RemoteLlm {
+            config,
+            endpoint,
+            http,
+        })
     }
 
     fn model(&self, role: ModelRole) -> Option<&'static str> {
@@ -33,12 +64,54 @@ impl RemoteLlm {
         let model = self
             .model(role)
             .ok_or_else(|| anyhow::anyhow!("no remote model configured for {role:?}"))?;
-        let _body = wire_request(model, request);
-        anyhow::bail!(
-            "remote LLM backend is not implemented yet (would call {}/v1/messages with model {model})",
-            self.config.base_url.trim_end_matches('/')
-        )
+        let body = serde_json::to_vec(&wire_request(model, request))?;
+        let bytes = body.len();
+        let started = Instant::now();
+
+        let response = self
+            .http
+            .post(self.endpoint.clone())
+            .header("content-type", "application/json")
+            .header("x-api-key", self.config.api_key)
+            .header("anthropic-version", self.config.api_version)
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("remote LLM request to {} failed: {e}", self.endpoint))?;
+
+        let status = response.status();
+        let text = response.text().await?;
+        let elapsed = started.elapsed().as_secs_f32();
+        if !status.is_success() {
+            anyhow::bail!(
+                "remote LLM returned HTTP {status} after {elapsed:.1}s: {}",
+                api_error(&text)
+            );
+        }
+        let parsed: MessagesResponse = serde_json::from_str(&text).map_err(|e| {
+            anyhow::anyhow!("remote LLM response did not parse: {e}: {}", api_error(&text))
+        })?;
+        println!(
+            "[llm] remote {model} ({role:?}): {bytes} B request, {elapsed:.1}s, stop {:?}, tokens in {} (+{} cached) out {}",
+            parsed.stop_reason,
+            parsed.usage.input_tokens,
+            parsed.usage.cache_read_input_tokens,
+            parsed.usage.output_tokens
+        );
+        Ok(parsed)
     }
+}
+
+fn api_error(body: &str) -> String {
+    let detail = serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| {
+        let error = v.get("error")?;
+        Some(format!(
+            "{}: {}",
+            error.get("type").and_then(|t| t.as_str()).unwrap_or("error"),
+            error.get("message").and_then(|m| m.as_str()).unwrap_or_default()
+        ))
+    });
+    detail.unwrap_or_else(|| body.chars().take(500).collect())
 }
 
 #[derive(Serialize)]
@@ -141,6 +214,7 @@ fn normalize(messages: Vec<Message>) -> Vec<Message> {
 fn strip_empty(block: ContentBlock) -> Option<ContentBlock> {
     match block {
         ContentBlock::Text { text } if text.trim().is_empty() => None,
+        ContentBlock::Unknown => None,
         ContentBlock::ToolResult {
             tool_use_id,
             content,
@@ -188,6 +262,108 @@ mod tests {
             temperature: None,
             footer: Some("FOOTER".into()),
         }
+    }
+
+    fn config(base_url: &'static str) -> RemoteLlmConfig {
+        RemoteLlmConfig {
+            base_url,
+            api_key: "test-key",
+            api_version: "2023-06-01",
+            primary_model: "primary-model",
+            utility_model: None,
+            timeout_secs: 5,
+        }
+    }
+
+    async fn serve_once(status: &'static str, body: &'static str) -> (String, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&raw).to_string();
+                if let Some(head_end) = text.find("\r\n\r\n") {
+                    let length = text[..head_end]
+                        .lines()
+                        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap()))
+                        .unwrap_or(0);
+                    if raw.len() >= head_end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let reply = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&raw).to_string()
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn new_rejects_incomplete_config() {
+        assert!(RemoteLlm::new(config("http://127.0.0.1:1")).is_ok());
+        assert!(RemoteLlm::new(RemoteLlmConfig { api_key: " ", ..config("http://x") }).is_err());
+        assert!(RemoteLlm::new(RemoteLlmConfig { primary_model: "", ..config("http://x") }).is_err());
+        assert!(RemoteLlm::new(RemoteLlmConfig { utility_model: Some(""), ..config("http://x") }).is_err());
+        assert!(RemoteLlm::new(config("not a url")).is_err());
+        assert!(RemoteLlm::new(config("")).is_err());
+    }
+
+    #[tokio::test]
+    async fn complete_posts_the_wire_request_and_parses_the_reply() {
+        let (url, server) = serve_once(
+            "200 OK",
+            r#"{"id":"msg_1","type":"message","role":"assistant","model":"primary-model",
+                "content":[{"type":"thinking","thinking":"hm","signature":"s"},
+                           {"type":"mystery_block","x":1},
+                           {"type":"text","text":"hello"}],
+                "stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2,"cache_read_input_tokens":7}}"#,
+        )
+        .await;
+        let remote = RemoteLlm::new(config(Box::leak(url.into_boxed_str()))).unwrap();
+        let response = remote
+            .complete(ModelRole::Primary, request(vec![Message::user_text("hi")]))
+            .await
+            .unwrap();
+        assert_eq!(response.text(), "hello");
+        assert_eq!(response.thinking(), "hm");
+        assert_eq!(response.usage.cache_read_input_tokens, 7);
+
+        let raw = server.await.unwrap();
+        let lower = raw.to_ascii_lowercase();
+        assert!(raw.starts_with("POST /v1/messages HTTP/1.1"), "{raw}");
+        assert!(lower.contains("x-api-key: test-key"));
+        assert!(lower.contains("anthropic-version: 2023-06-01"));
+        let body: serde_json::Value =
+            serde_json::from_str(&raw[raw.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+        assert_eq!(body["model"], "primary-model");
+        assert_eq!(body["messages"][0]["content"][1]["text"], "FOOTER");
+    }
+
+    #[tokio::test]
+    async fn complete_surfaces_api_errors() {
+        let (url, _server) = serve_once(
+            "400 Bad Request",
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"messages: bad"}}"#,
+        )
+        .await;
+        let remote = RemoteLlm::new(config(Box::leak(url.into_boxed_str()))).unwrap();
+        let error = remote
+            .complete(ModelRole::Primary, request(vec![Message::user_text("hi")]))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("HTTP 400"), "{error}");
+        assert!(error.contains("invalid_request_error: messages: bad"), "{error}");
+        assert!(remote.complete(ModelRole::Utility, request(Vec::new())).await.is_err());
     }
 
     #[test]

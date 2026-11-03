@@ -40,7 +40,7 @@ async fn init_env() -> anyhow::Result<Env> {
                 config.primary_model,
                 config.utility_model.unwrap_or("none — compaction disabled")
             );
-            LlmBackend::Remote(RemoteLlm::new(config))
+            LlmBackend::Remote(RemoteLlm::new(config)?)
         }
     };
 
