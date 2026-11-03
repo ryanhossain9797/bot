@@ -124,9 +124,9 @@ impl MessageImage {
         }
     }
 
-    pub fn hydrated_bytes(&self) -> Option<Arc<Vec<u8>>> {
+    pub fn hydrated(&self) -> Option<&Image> {
         match self {
-            MessageImage::Hydrated(image) => Some(Arc::clone(&image.bytes)),
+            MessageImage::Hydrated(image) => Some(image),
             MessageImage::Dehydrated { .. } => None,
         }
     }

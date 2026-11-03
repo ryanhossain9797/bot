@@ -5,7 +5,7 @@ use regex::Regex;
 use serde_json::Value as Json;
 
 use super::Parser;
-use crate::roles::{ParsedResponse, ParsedToolCall};
+use crate::llm::native::roles::{ParsedResponse, ParsedToolCall};
 
 static CALL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<tool_call>\s*(.*?)\s*</tool_call>").expect("CALL_RE is a valid regex")
@@ -20,10 +20,12 @@ static PARAM_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub(super) struct QwenParser;
 
 impl Parser for QwenParser {
-    fn parse(&self, raw: &str, close_marker: &str) -> ParsedResponse {
-        let (reasoning, body) = raw
-            .split_once(close_marker)
-            .map_or_else(|| (raw.trim(), ""), |(r, b)| (r.trim(), b));
+    fn parse(&self, raw: &str, close_marker: &str, thinking: bool) -> ParsedResponse {
+        let (reasoning, body) = match raw.split_once(close_marker) {
+            Some((r, b)) => (r.trim(), b),
+            None if thinking => (raw.trim(), ""),
+            None => ("", raw),
+        };
 
         let tool_calls = CALL_RE
             .captures_iter(body)

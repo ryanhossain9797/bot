@@ -5,7 +5,7 @@ use minijinja::{value::Value, Environment, Error, ErrorKind};
 use serde::Serialize;
 
 use super::{FormatFlags, RenderInputs};
-use crate::chat_format::{ChatMessage, ToolDefinition};
+use crate::llm::native::chat_format::{ChatMessage, ToolDefinition};
 
 struct Spaced;
 impl serde_json::ser::Formatter for Spaced {
@@ -50,13 +50,15 @@ fn prepare_tools(tools: &[ToolDefinition]) -> Vec<String> {
     tools.iter().map(json_spaced).collect()
 }
 
-pub(super) fn render(
+pub(crate) fn render(
     template: &str,
-    system_prompt: &str,
     inputs: &RenderInputs,
     flags: FormatFlags,
 ) -> anyhow::Result<String> {
-    let messages: Vec<ChatMessage> = std::iter::once(ChatMessage::system(system_prompt))
+    let messages: Vec<ChatMessage> = inputs
+        .system
+        .map(ChatMessage::system)
+        .into_iter()
         .chain(inputs.messages.iter().cloned())
         .collect();
 
@@ -82,10 +84,10 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat_format::ChatMessage;
+    use crate::llm::native::chat_format::ChatMessage;
 
     const PRIMARY_TEMPLATE: &str =
-        include_str!("../../models/qwen3-8-27b/chat_template.jinja");
+        include_str!("../../../../models/qwen3-8-27b/chat_template.jinja");
 
     fn flags() -> FormatFlags {
         FormatFlags {
@@ -102,11 +104,12 @@ mod tests {
             ChatMessage::tool("call_0", "cargo: command not found"),
         ];
         let inputs = RenderInputs {
+            system: Some("system prompt"),
             messages: &messages,
             tools: None,
             footer: Some("footer"),
         };
-        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+        let out = render(PRIMARY_TEMPLATE, &inputs, flags())
             .expect("must anchor to the oldest message, not raise 'No user query found'");
         assert!(out.contains("system prompt"));
     }
@@ -120,11 +123,12 @@ mod tests {
             messages.push(ChatMessage::tool(format!("call_{i}"), "ok"));
         }
         let inputs = RenderInputs {
+            system: Some("system prompt"),
             messages: &messages,
             tools: None,
             footer: Some("footer"),
         };
-        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+        let out = render(PRIMARY_TEMPLATE, &inputs, flags())
             .expect("long no-user-query history clamps and renders");
         assert!(out.contains("system prompt"));
     }
@@ -136,11 +140,12 @@ mod tests {
             ChatMessage::assistant("on it"),
         ];
         let inputs = RenderInputs {
+            system: Some("system prompt"),
             messages: &messages,
             tools: None,
             footer: Some("footer"),
         };
-        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+        let out = render(PRIMARY_TEMPLATE, &inputs, flags())
             .expect("normal conversation renders");
         assert!(out.contains("make it compile"));
     }
@@ -152,11 +157,12 @@ mod tests {
             ChatMessage::assistant("hello"),
         ];
         let inputs = RenderInputs {
+            system: Some("system prompt"),
             messages: &messages,
             tools: None,
             footer: Some("SYSTEM METADATA FOOTER"),
         };
-        let out = render(PRIMARY_TEMPLATE, "system prompt", &inputs, flags())
+        let out = render(PRIMARY_TEMPLATE, &inputs, flags())
             .expect("renders with footer");
         assert!(
             out.contains("SYSTEM METADATA FOOTER"),

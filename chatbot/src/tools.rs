@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 
-use crate::chat_format::{ToolDefFunction, ToolDefinition};
+use crate::llm::anthropic::Tool;
 use crate::types::conversation::{ToolKind, ToolType};
 
 fn git_note() -> Option<String> {
@@ -163,7 +163,7 @@ impl ToolKind {
         }
     }
 
-    fn definition(&self) -> Option<ToolDefinition> {
+    fn definition(&self) -> Option<Tool> {
         let (description, parameters): (&'static str, Value) = match self {
             ToolKind::WebSearch => (
                 "Search the web — ONE focused topic per query; search one fact at a time, never pile attributes into a single query. Snippets only, usually not enough for specifics (dates, numbers, names, quotes) — open the best result with visit_url and read it before answering. For several facts, fire several single-topic searches in the same turn (parallel is fine).",
@@ -262,19 +262,16 @@ impl ToolKind {
             ),
             ToolKind::MetaMalformed => return None,
         };
-        Some(ToolDefinition {
-            kind: "function",
-            function: ToolDefFunction {
-                name: self.wire_name(),
-                description,
-                parameters,
-            },
+        Some(Tool {
+            name: self.wire_name().to_string(),
+            description: description.to_string(),
+            input_schema: parameters,
         })
     }
 }
 
 impl ToolType {
-    pub fn tool_definitions() -> Vec<ToolDefinition> {
+    pub fn tool_definitions() -> Vec<Tool> {
         ToolKind::iter().filter_map(|k| k.definition()).collect()
     }
 
@@ -411,10 +408,11 @@ mod tests {
 
     #[test]
     fn meta_malformed_is_internal_not_advertised() {
-        let names: Vec<&str> = ToolType::tool_definitions()
-            .iter()
-            .map(|d| d.function.name)
+        let names: Vec<String> = ToolType::tool_definitions()
+            .into_iter()
+            .map(|d| d.name)
             .collect();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
         assert!(
             !names.contains(&"meta_malformed_tool_call"),
             "internal tool must not be advertised to the model"

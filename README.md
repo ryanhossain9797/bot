@@ -1,226 +1,205 @@
-# Bot Hive — AI Chatbot with a Local LLM
+# A2
 
-A Rust Discord chatbot powered by a **local** Large Language Model, built on a homegrown,
-persistent, actor-style state-machine framework.
+A2 is a Discord chatbot written in Rust. It runs its LLM in-process with `llama.cpp` (or, behind
+a config switch, against an Anthropic-compatible API), calls tools over many rounds per turn, and
+keeps every conversation as a persistent state machine that survives restarts.
 
-## Overview
+## What it does
 
-- **Discord Integration**: Responds to direct messages and to @mentions in group channels
-- **Local LLM**: Runs Qwen3.8-27B in-process via `llama.cpp` (Vulkan/ROCm), no external API, with
-  Qwen3-4B as a utility model for history compaction
-- **Multimodal**: Accepts image attachments and can inspect or send images back
-- **Tool Calling**: Multi-round tool execution (web search, page fetch, a private bash sandbox,
-  file read/edit)
-- **Memory**: A 30-entry rolling window of recent conversation, persisted per conversation
-- **Event-sourced actors**: Each conversation is a state machine whose state is persisted to disk
-  on every transition (persist-then-effect), so it survives restarts and self-recovers
+- **Chats in DMs and servers.** In a DM every message is for the bot. In a channel it stays quiet
+  unless @mentioned, or occasionally when it has something to add; staying quiet is the literal
+  reply `[EMPTY]`.
+- **Sees images** attached to messages, and can send files and images back.
+- **Uses tools**, up to 30 rounds per turn:
 
-## Project Structure
+  | Tool | What it does |
+  |------|--------------|
+  | `web_search` | Searches the web through a self-managed SearxNG instance (snippets only) |
+  | `visit_url` | Fetches a page and extracts its readable text |
+  | `run_bash_command` | Runs a command in a private, per-conversation Docker sandbox |
+  | `reset_bash_container` | Wipes that sandbox |
+  | `read_file` | Reads a sandbox file, line-numbered and sliceable |
+  | `edit_file` | Exact-string replace in a sandbox file, with concurrency checks |
+  | `view_image` | Lets the model look at a sandbox image (the user does not see it) |
+  | `use_skill` | Loads a how-to from [`chatbot/skills/`](chatbot/skills/) |
+  | `set_reminder` | Schedules a reminder, up to about a year out |
+  | `meta_no_op_extra_turn` | Gives the model another turn to keep talking |
 
-```
-bot/
-├── chatbot/                      # Main Discord chatbot application
-│   ├── src/
-│   │   ├── roles/                # The render → infer → parse pipeline behind a Role trait
-│   │   │   ├── primary_role.rs   #   PrimaryRole — the "A2" persona
-│   │   │   ├── local_model.rs    #   Loaded GGUF model + the llama.cpp decode loop
-│   │   │   ├── render.rs         #   Prompt assembly (minijinja over the pack's chat template)
-│   │   │   └── parsers/          #   Per-family output parsers (e.g. qwen.rs), picked by name
-│   │   ├── externals/            # Async side effects: LLM inference, tools, message sending
-│   │   ├── services/             # Platform integrations (discord.rs)
-│   │   ├── state_machines/       # ConversationMachine — the conversation lifecycle
-│   │   ├── types/                # Domain types (conversation, media)
-│   │   ├── model_pack.rs         # Loads a "model pack" folder (weights + template + manifest)
-│   │   ├── chat_format.rs        # OpenAI-ish wire shapes the chat template renders from
-│   │   ├── tools.rs              # Tool definitions + argument binding
-│   │   ├── configuration.rs      # Tokens / feature flags (gitignored; see .template)
-│   │   └── main.rs               # Entry point
-│   ├── models/                   # Model packs (GGUF weights + mmproj + template + manifest.toml)
-│   ├── Dockerfile / Dockerfile.base
-│   └── Justfile                  # Build & deploy automation
-│
-├── re_framework/                 # The state-machine framework (actors + persistence)
-├── probe/                        # Dev tool: visualize raw model behavior
-└── extractor/                    # Dev tool: dump a GGUF's chat template + metadata
-```
+  Sending a file or image to the user is not a tool. The model writes `[[attach_file:PATH]]` or
+  `[[attach_image:PATH]]` in its reply, and the sandbox file is uploaded in its place.
+- **Remembers** a 30-entry window per conversation. Once 24 entries that aren't summaries pile
+  up, a smaller utility model summarizes everything but the latest 12.
 
-## Components
+## Repository
 
-### Chatbot (`chatbot/`)
+| Path | Contents |
+|------|----------|
+| [`chatbot/`](chatbot/) | The bot |
+| [`re_framework/`](re_framework/) | The persistent state-machine framework the bot is built on |
+| [`sample_framework_project/`](sample_framework_project/) | A minimal replica of the bot used to test the framework |
+| [`probe/`](probe/) | Dev scratchpad for watching raw model output |
+| [`extractor/`](extractor/) | Dev tool that dumps a GGUF's chat template and metadata |
 
-- **DiscordService** ([services/discord.rs](chatbot/src/services/discord.rs)): handles gateway
-  events via `serenity`, normalizes mentions to `(id) Name` form, downloads image attachments, and
-  routes each message into the conversation state machine.
-- **ConversationMachine** ([state_machines/](chatbot/src/state_machines/conversation_state_machine.rs)):
-  the single state machine, keyed by `(Platform, channel_id)`. Drives the whole turn.
-- **PrimaryRole** ([roles/](chatbot/src/roles.rs)): owns the model and the full render →
-  infer → parse pipeline. A single model decides and emits its tool calls directly — there is no
-  separate translation/executor agent.
+Inside `chatbot/src/`:
 
-#### Model packs
+| Path | Contents |
+|------|----------|
+| `state_machines/` | `ConversationMachine`, `MemoryManagerMachine`, `ReminderForConversationMachine` |
+| `externals/` | Side effects the machines enqueue: LLM calls, tools, sending messages, summarizing |
+| `llm/` | The LLM backend: Anthropic Messages API types and the remote client |
+| `llm/native/` | Everything `llama.cpp`: model packs, prompt rendering, the decode loop, output parsers |
+| `prompts.rs` | System prompts and sampling settings |
+| `tools.rs` | Tool definitions and argument binding |
+| `services/discord.rs` | Discord gateway handling |
+| `configuration.rs` | Tokens and switches (gitignored, copy from `configuration.rs.template`) |
 
-Everything model-specific lives in a **model pack**: a self-contained folder holding the GGUF
-weights, the multimodal projector, our chat template, and a `manifest.toml` of knobs (sampling,
-context size, reasoning marker, which parser to use). Nothing model-specific is compiled in. Packs
-— weights included — are baked into the `bot-base` image by `Dockerfile.base`; `MODEL_PACK_DIR`
-and `UTILITY_MODEL_PACK_DIR` select which baked pack to load. To change models, put the files in
-the pack folder (real files or hard links — `docker build` won't follow symlinks), then rebuild
-the base and app images. See [chatbot/models/qwen3-8-27b/](chatbot/models/qwen3-8-27b/) and
-[chatbot/models/qwen3-4b/](chatbot/models/qwen3-4b/).
-
-**MTP speculative decoding** is chosen per model: if the GGUF ships an MTP head
-(`<arch>.nextn_predict_layers > 0`, e.g. Qwen3.8-27B), every turn drafts up to `draft_max` tokens
-per step through the MTP head and verifies them in one batch. Output is identical to standard
-decoding, only faster (≈2× on Qwen3.8-27B, text or images). Image prompts are still prefilled by
-mtmd; the drafter just doesn't see that prefill, and drafts nearly as well from the target's hidden
-state. An optional `[speculative]` section in `manifest.toml` tunes it (`mtp = false` opts out;
-defaults `draft_max = 3`, `p_min = 0.0`). The startup log says which mode was picked, and each
-generation logs its tok/s. `chatbot bench [message] [image]` compares both modes on one prompt.
-
-#### Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `web_search` | Search the web (SearxNG backend) — snippets only |
-| `visit_url` | Fetch a page and extract its readable text |
-| `run_bash_command` | Run a command in a private, per-conversation Linux (Docker) sandbox |
-| `reset_bash_container` | Wipe the sandbox and start fresh |
-| `read_file` | Read a text file from the sandbox (line-numbered, sliceable) |
-| `edit_file` | Exact-string replace in a sandbox file, with optimistic-concurrency checks |
-| `view_image` | Privately inspect a sandbox image (the user does **not** see it) |
-| `send_image_to_user` | Send a sandbox image into the chat (the user sees it) |
-
-The user-facing reply itself is **not** a tool — the model emits it as its message content
-directly; tool calls run alongside or after it.
-
-### Framework (`re_framework/`)
-
-A minimal typed actor system. You implement the `StateMachine` trait with associated types
-(`State`, `Id`, `Action`, `Construction`, `Env`) and four functions (`construct`, `transition`,
-`schedule`, `name`).
-
-- **`StateMachineHandle`**: per-machine actor registry (`DashMap<id → mailbox>`); `maybe_construct`
-  / `act` / `act_maybe_construct` / `delete`. Machines register once at startup
-  (`re_framework::register::<SM>(env)`) and are reached via `re_framework::handle::<SM>()`. Each
-  live entity is a `tokio` task with an mpsc mailbox; entities lazily rehydrate from the store on
-  first access.
-- **`Effects`**: transitions don't perform side effects directly — they *enqueue* them.
-  `enqueue_action` sends a durable action to another machine (serialized into a transactional
-  outbox, redelivered across crashes, deduped at the receiver); `enqueue_external(future)` runs
-  an async op at-most-once and feeds its result back as an action. Effects fire only *after*
-  the transition commits.
-- **Persistence** (#186): the store is the source of truth — one transaction per transition
-  commits {state CAS + outbox rows + dedup marker}. A CAS conflict drops the in-memory actor,
-  which rebuilds from the store on its next message.
-- **`Scheduled`**: an entity can declare a timed wakeup (used here for a force-reset watchdog).
-
-The persistence layer sits behind the `Store` trait (`store.rs`); `TursoStore` (`turso_store.rs`,
-Turso/SQLite, `init_turso_store`) is the only backend today. Any backend must honor the
-contract — the runtime's correctness proofs assume every clause, and `store::contract` encodes
-them as a reusable test suite any new backend must pass:
-
-- `save` commits {state CAS + outbox inserts + dedup upsert} atomically, or nothing; the CAS
-  predicate is `version` **and** `generation`, so a zombie actor from a deleted incarnation can
-  never commit onto a recreated row.
-- `insert` is insert-if-absent with its outbox rows in the same transaction.
-- `generation` is an entity's incarnation id: assigned at construct, immutable, strictly
-  increasing across lives of the same `(machine, id)` (`new_generation()` — atomic counter
-  seeded from boot time in µs; sound while a process constructs slower than one entity per
-  elapsed µs).
-- `ack_outbox` / `fail_outbox` only touch rows of the given generation — a dead life's wedged
-  ack cannot delete or poison its successor's rows.
-- `is_duplicate` is two-tier: caller generation older than the slot ⇒ duplicate (revoked
-  history), newer ⇒ fresh, equal ⇒ `seq <= last_seq`. The slot's `last_seq` never regresses
-  within a generation (enforced in the upsert, not just by the serial mailbox).
-- `pending_outbox` returns un-poisoned rows in seq order; `stalled_outbox_senders` /
-  `due_timers` support cutoff + stable-order paging.
-- `delete` purges the entity row, its outbox, and dedup slots in **both** directions (as
-  receiver and as caller) in one transaction.
-
-Two invariants the *runtime* relies on around the store: each live actor's loop is the sole
-writer of its in-memory state (the pre-computed `schedule()` action is only safe to fire
-because nothing can change state between deriving and firing — out-of-loop tick delivery must
-recompute), and a dispatcher never advances past an outbox row without a definitive
-Applied/Duplicate/Rejected verdict (what makes monotonic dedup sound).
-
-## Architecture
-
-### Conversation flow
+## How a turn runs
 
 ```
 Discord message
-     │
-     ▼
-ConversationMachine ── NewMessage ──▶ (queue into `pending`)
-     │
-     ▼
-AwaitingLLMDecision ──▶ get_llm_decision (render prompt, run inference, parse)
-     │
-     ▼
-LLMDecisionResult
-     ├── reply text ─▶ SendingMessage ─▶ Discord
-     └── tool calls ─▶ RunningTools ─▶ (execute concurrently)
-                             │
-                             ▼
-                   feed results back ─▶ AwaitingLLMDecision  (up to MAX_TOOL_ROUNDS = 10)
-                             │
-                             ▼
-                           Idle
+      │
+      ▼
+ConversationMachine ── queued in `pending`
+      │
+      ▼
+AwaitingLLMDecision ──▶ llm_external: build request → LLM backend → parse
+      │
+      ├── reply text ──▶ SendingMessage ──▶ Discord
+      └── tool calls ──▶ RunningTools ──▶ results fed back ──▶ AwaitingLLMDecision
+                                                               (until no tools, or 30 rounds)
+      ▼
+    Idle
 ```
 
-The state machine persists after each step and schedules a 10-minute `ForceReset` watchdog for any
-non-idle state, so a stuck conversation self-recovers.
+Every state that waits on something has a deadline: 15 minutes for the LLM, 1 minute to send a
+message, and a per-tool limit while tools run. When a deadline passes, the machine receives a
+timeout result and moves on.
 
-### Roles: render → infer → parse
+## The framework (`re_framework`)
 
-The `Role` trait is deliberately location-agnostic — `generate` takes a prompt and returns text,
-with no mention of a backend. `PrimaryRole` holds identity (system prompt, temperature, thinking
-policy); the `LocalModel` under it holds the model's own facts (template, sampling, reasoning
-marker, parser) loaded from the pack. A future remote role could satisfy the same contract with an
-HTTP call.
+You implement `StateMachine`: `construct`, `transition`, `schedule` and `name`, over your own
+`State`, `Id`, `Action`, `Construction`, `Failure` and `Env` types. Each live entity is a Tokio
+task with a mailbox, reloaded from the store when first touched.
 
-## Building
+Transitions are pure. Instead of doing I/O they return effects:
 
-### Prerequisites
+- `enqueue_action` sends a durable action to another machine. It's written to an outbox in the
+  same transaction as the new state, redelivered after crashes and deduplicated at the receiver.
+- `enqueue_external(future)` runs async work once the transition has committed. The future
+  resolves to one of the machine's own actions, which is fed back in. It can't fail: errors
+  have to come back as actions.
+- `schedule(state)` returns the next timed action (a deadline or a reminder), and the runtime
+  fires it when due.
 
-- Docker (with a GPU runtime; the Justfile targets an AMD/ROCm host). The container mounts the Docker socket and self-manages its `web_search` SearxNG instance and bash sandbox as sibling containers.
-- A Discord bot token
-- Model packs under `chatbot/models/` with their GGUF files present (weights + mmproj + template
-  + `manifest.toml`) — they are copied into the base image at build time
+The store is the source of truth: each transition commits the state (compare-and-swap on
+version and generation), its outbox rows and its dedup marker together, or none of them. Turso
+(SQLite) is the only store today. `store::contract` is the test suite any new store must pass.
 
-### Configuration
+## The LLM backend
 
-1. Copy `chatbot/src/configuration.rs.template` to `chatbot/src/configuration.rs`
-2. Fill in your `DISCORD_TOKEN`, `SEARXNG_URL`, and feature flags
-3. Rebuild the image
+The externals speak the Anthropic Messages API: a request has a system prompt, messages made
+of text, image, `tool_use` and `tool_result` blocks, and tools with JSON schemas. The response
+comes back as `thinking`, `text` and `tool_use` blocks. `configuration::llm::BACKEND` picks
+what serves them:
 
-### Build & deploy (from `chatbot/`)
+- **`Native`** loads the model packs and runs them in-process. The request is translated to the
+  pack's chat template and the raw output parsed back into blocks.
+- **`Remote`** sends the request to an Anthropic-compatible endpoint (`base_url`, `api_key`,
+  `api_version`, `primary_model`, `utility_model`, `timeout_secs`). It is a stub for now and
+  every call fails.
+
+One field isn't part of the API: the per-turn footer (time, chat setting, tool budget). Native
+renders it after the conversation; remote appends it to the last user turn, so the system prompt
+stays cacheable.
+
+### Model packs
+
+Everything model-specific lives in a pack folder under `chatbot/models/`: GGUF weights, an
+optional multimodal projector, the chat template and a `manifest.toml` (sampling, context size,
+thinking marker, output parser). The primary pack is
+[`qwen3-8-27b`](chatbot/models/qwen3-8-27b/), and [`qwen3-4b`](chatbot/models/qwen3-4b/)
+handles summaries. `MODEL_PACK_DIR` and `UTILITY_MODEL_PACK_DIR` choose which packs to load.
+
+When the GGUF has an MTP head, generation uses MTP speculative decoding: it drafts up to
+`draft_max` tokens per step and verifies them in one batch. The output is the same as standard
+decoding, roughly twice as fast on Qwen3.8-27B. An optional `[speculative]` section in the
+manifest tunes it (`mtp = false` turns it off). `chatbot bench [message] [image]` times both
+modes on one prompt.
+
+## Running it
+
+### You need
+
+- Docker. The deploy targets an AMD GPU (Vulkan) host.
+- A Discord bot token, with the **Message Content** privileged intent enabled. Without it the
+  bot can't read channel messages that don't mention it.
+- The model packs' GGUF files in `chatbot/models/`. They're copied into the base image, not
+  mounted, so use real files or hard links; `docker build` doesn't follow symlinks.
+
+### Configure
 
 ```bash
-just build_base      # base image: runtime deps + the model packs (weights baked in)
+cp chatbot/src/configuration.rs.template chatbot/src/configuration.rs
+```
+
+Fill in `DISCORD_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
+means rebuilding.
+
+### Build and deploy (from `chatbot/`)
+
+```bash
+just build_base      # runtime deps + model packs
 just deploy_local    # build the app image and (re)start the `bot` container
 ```
 
-Models are not mounted — they live in the image, so changing weights means re-running
-`just build_base`. `run_local` sets `MODEL_PACK_DIR` / `UTILITY_MODEL_PACK_DIR` to the baked packs
-under `/app/models/`. The bot runs with host networking and mounts the Docker socket so it can spin
-up per-conversation bash sandboxes.
+The container uses host networking and mounts the Docker socket, so it can run the bash
+sandboxes and SearxNG as sibling containers. Deploys are manual for now: run `just deploy_local`
+from an up-to-date `main` checkout on the bot's host. The `deploy` workflow's self-hosted runner
+is down.
 
-### Environment Variables
+### Web search
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `MODEL_PACK_DIR` | Path to the primary model pack folder | `./models/qwen3-8-27b` |
-| `UTILITY_MODEL_PACK_DIR` | Path to the utility (compaction) model pack folder | `./models/qwen3-4b` |
-| `RUST_LOG` | Log level | `info` |
+When `SEARXNG_URL` points at localhost (the default `http://localhost:8080`), the bot builds and
+runs its own `bot-searxng` container (JSON output on, random secret) and restarts it whenever
+it's missing or stopped. A non-localhost URL is used as-is, and that instance must have JSON
+output enabled.
 
-## Dependencies
+### Environment variables
 
-- **llama-cpp-2**: local LLM inference with multimodal (`mtmd`) support
-- **serenity**: Discord client
-- **tokio**: async runtime
-- **minijinja**: chat-template rendering
-- **dashmap**: the framework's entity registry
+| Variable | Default |
+|----------|---------|
+| `MODEL_PACK_DIR` | `./models/qwen3-8-27b` |
+| `UTILITY_MODEL_PACK_DIR` | `./models/qwen3-4b` |
+
+## Development
+
+The crate needs `cmake`, `glslc`, `clang` and Vulkan headers to build `llama.cpp`, so build and
+test in the builder image:
+
+```bash
+docker build --target builder -t chatbot-builder -f chatbot/Dockerfile .
+docker run --rm -v "$PWD/chatbot/src:/app/chatbot/src:ro" -v "$PWD/chatbot/models:/app/chatbot/models:ro" \
+    -w /app chatbot-builder cargo test --release --package chatbot
+```
+
+The toolchain is pinned to `nightly-2026-10-02` because `branches` 0.4.x, pulled in by turso,
+calls `core::intrinsics::abort`, which later nightlies removed
+([fereidani/branches#10](https://github.com/fereidani/branches/issues/10)). Unpin once a turso
+release depends on a fixed `branches`.
+
+### No comments
+
+The code carries no comments; names, types and this README carry the explanation. CI runs
+[`uncomment`](https://crates.io/crates/uncomment) 3.10.3 on every pull request and fails if it
+finds any, doc comments included:
+
+```bash
+cargo install uncomment --version 3.10.3 --locked
+uncomment --check --remove-doc .
+```
+
+`uncomment --remove-doc .` strips them. A comment that truly has to stay (such as a `SAFETY:` note
+on an `unsafe` block) can end with `~keep`.
 
 ## License
 

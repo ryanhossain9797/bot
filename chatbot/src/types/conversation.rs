@@ -1,7 +1,8 @@
-use crate::chat_format::{ChatMessage, MessageToolCall, MessageToolCallFunction};
+use crate::llm::anthropic::{ContentBlock, Message};
 use crate::types::media::{Attachment, MessageImage};
 use re_framework::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::sync::Arc;
@@ -196,22 +197,20 @@ impl ConversationMessage {
         }
     }
 
-    pub fn content_and_media(&self, marker: &str) -> (String, Vec<Arc<Vec<u8>>>) {
-        let mut parts: Vec<String> = Vec::new();
+    pub fn content_blocks(&self) -> Vec<ContentBlock> {
+        let mut blocks: Vec<ContentBlock> = Vec::new();
         let base = self.to_content();
         if !base.is_empty() {
-            parts.push(base);
+            blocks.push(ContentBlock::text(base));
         }
 
-        let mut bytes = Vec::new();
         let mut dehydrated = 0usize;
         for attachment in &self.attachments {
             match attachment {
-                Attachment::Image { image, url, .. } => match image.hydrated_bytes() {
-                    Some(b) => {
-                        parts.push(format!("url: {url}"));
-                        parts.push(marker.to_string());
-                        bytes.push(b);
+                Attachment::Image { image, url, .. } => match image.hydrated() {
+                    Some(img) => {
+                        blocks.push(ContentBlock::text(format!("url: {url}")));
+                        blocks.push(ContentBlock::image(&img.mime, Arc::clone(&img.bytes)));
                     }
                     None => dehydrated += 1,
                 },
@@ -221,19 +220,21 @@ impl ConversationMessage {
                     url,
                 } => {
                     let kind = content_type.as_deref().unwrap_or("unknown type");
-                    parts.push(format!("file {filename} ({kind}) url: {url}"));
+                    blocks.push(ContentBlock::text(format!(
+                        "file {filename} ({kind}) url: {url}"
+                    )));
                 }
             }
         }
         if dehydrated > 0 {
-            parts.push(format!(
+            blocks.push(ContentBlock::text(format!(
                 "[{dehydrated} image{} from earlier in the conversation — you saw {} at the time, not re-attached here]",
                 if dehydrated == 1 { "" } else { "s" },
                 if dehydrated == 1 { "it" } else { "them" }
-            ));
+            )));
         }
 
-        (parts.join("\n"), bytes)
+        blocks
     }
 }
 
@@ -273,59 +274,51 @@ impl LLMInput {
         }
     }
 
-    pub fn messages_and_media(
-        &self,
-        marker: &str,
-        full: bool,
-    ) -> (Vec<ChatMessage>, Vec<Arc<Vec<u8>>>) {
+    pub fn to_messages(&self, full: bool) -> Vec<Message> {
         match self {
-            LLMInput::ConversationMessage(msg) => {
-                let (content, bytes) = msg.content_and_media(marker);
-                (vec![ChatMessage::user(content)], bytes)
-            }
+            LLMInput::ConversationMessage(msg) => vec![Message::user(msg.content_blocks())],
             LLMInput::SystemMessage(batch) => {
                 let content = batch
                     .iter()
                     .map(SystemMessage::to_content)
                     .collect::<Vec<_>>()
                     .join("\n");
-                (vec![ChatMessage::user(content)], Vec::new())
+                vec![Message::user_text(content)]
             }
             LLMInput::ToolResults(results, user_msg) => {
-                let mut messages: Vec<ChatMessage> = Vec::new();
-                let mut bytes: Vec<Arc<Vec<u8>>> = Vec::new();
-
-                for r in results {
-                    let mut parts: Vec<String> = Vec::new();
-                    let text = if full {
-                        &r.data.actual
-                    } else {
-                        &r.data.simplified
-                    };
-                    if !text.is_empty() {
-                        parts.push(text.clone());
-                    }
-                    if let Some(image) = &r.data.image_for_assistant {
-                        match image.hydrated_bytes() {
-                            Some(b) => {
-                                parts.push(marker.to_string());
-                                bytes.push(b);
-                            }
-                            None => parts.push(
-                                "[A tool-result image from earlier in the conversation — you saw it at the time, not re-attached here.]".to_string(),
-                            ),
+                let mut messages: Vec<Message> = results
+                    .iter()
+                    .map(|r| {
+                        let mut content: Vec<ContentBlock> = Vec::new();
+                        let text = if full {
+                            &r.data.actual
+                        } else {
+                            &r.data.simplified
+                        };
+                        if !text.is_empty() {
+                            content.push(ContentBlock::text(text.clone()));
                         }
-                    }
-                    messages.push(ChatMessage::tool(r.call.id.clone(), parts.join("\n")));
-                }
+                        if let Some(image) = &r.data.image_for_assistant {
+                            content.push(match image.hydrated() {
+                                Some(img) => ContentBlock::image(&img.mime, Arc::clone(&img.bytes)),
+                                None => ContentBlock::text(
+                                    "[A tool-result image from earlier in the conversation — you saw it at the time, not re-attached here.]",
+                                ),
+                            });
+                        }
+                        Message::user(vec![ContentBlock::ToolResult {
+                            tool_use_id: r.call.id.clone(),
+                            content,
+                            is_error: false,
+                        }])
+                    })
+                    .collect();
 
                 if let Some(msg) = user_msg {
-                    let (content, b) = msg.content_and_media(marker);
-                    messages.push(ChatMessage::user(content));
-                    bytes.extend(b);
+                    messages.push(Message::user(msg.content_blocks()));
                 }
 
-                (messages, bytes)
+                messages
             }
         }
     }
@@ -426,8 +419,8 @@ impl LLMResponse {
         }
     }
 
-    pub fn to_chat_message(&self) -> ChatMessage {
-        let content = match &self.reply {
+    pub fn to_message(&self) -> Message {
+        let text = match &self.reply {
             Reply::Said(text) => text.clone(),
             Reply::Empty if self.tool_calls.is_empty() => "[EMPTY]".to_string(),
             Reply::Empty => String::new(),
@@ -436,23 +429,16 @@ impl LLMResponse {
                     .to_string()
             }
         };
-        if self.tool_calls.is_empty() {
-            ChatMessage::assistant(content)
-        } else {
-            let calls = self
-                .tool_calls
-                .iter()
-                .map(|tc| MessageToolCall {
-                    id: tc.id.clone(),
-                    kind: "function",
-                    function: MessageToolCallFunction {
-                        name: tc.tool_type.wire_name(),
-                        arguments: tc.tool_type.arguments_map(),
-                    },
-                })
-                .collect();
-            ChatMessage::assistant_with_tools(content, calls)
+        let mut content = Vec::new();
+        if !text.is_empty() {
+            content.push(ContentBlock::text(text));
         }
+        content.extend(self.tool_calls.iter().map(|tc| ContentBlock::ToolUse {
+            id: tc.id.clone(),
+            name: tc.tool_type.wire_name().to_string(),
+            input: Value::Object(tc.tool_type.arguments_map()),
+        }));
+        Message::assistant(content)
     }
 }
 

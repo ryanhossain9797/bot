@@ -4,7 +4,7 @@ mod qwen;
 use super::ParsedResponse;
 
 pub(super) trait Parser: Send + Sync {
-    fn parse(&self, raw: &str, close_marker: &str) -> ParsedResponse;
+    fn parse(&self, raw: &str, close_marker: &str, thinking: bool) -> ParsedResponse;
 }
 
 static QWEN: qwen::QwenParser = qwen::QwenParser;

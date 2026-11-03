@@ -1,0 +1,31 @@
+name: checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  no-comments:
+    runs-on: ubuntu-latest
+    env:
+      UNCOMMENT_VERSION: 3.10.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ~/.cargo-tools
+          key: uncomment-${{ env.UNCOMMENT_VERSION }}-${{ runner.os }}
+
+      - name: install uncomment
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: ${{ runner.temp }}
+        run: cargo install uncomment --version "$UNCOMMENT_VERSION" --locked --root ~/.cargo-tools
+
+      - name: ban comments
+        run: ~/.cargo-tools/bin/uncomment --check --remove-doc .

@@ -1,13 +1,15 @@
 use crate::{
-    chat_format::ChatMessage,
-    roles::{PrimaryRole, RenderInputs, Role},
+    llm::{
+        anthropic::{Message, MessagesRequest, MessagesResponse},
+        ModelRole,
+    },
+    prompts::{PRIMARY_MAX_TOKENS, PRIMARY_SYSTEM_PROMPT, PRIMARY_TEMPERATURE},
     types::conversation::{
         ConversationAction, HistoryEntryKind, InterruptionReason, LLMInput, LLMResponse, Platform,
         RecentConversation, Reply, ToolCall, ToolType,
     },
     Env,
 };
-use llama_cpp_2::mtmd::mtmd_default_marker;
 use re_framework::Timestamp;
 
 use std::sync::Arc;
@@ -95,58 +97,8 @@ fn session_footer(
     lines.join("\n")
 }
 
-fn build_conversation(
+fn build_request(
     new_input: &LLMInput,
-    maybe_recent_conversation: Option<RecentConversation>,
-    tool_rounds: usize,
-    max_tool_rounds: usize,
-    is_group: bool,
-    bot_identity: &str,
-    platform: &Platform,
-) -> (Vec<ChatMessage>, String, Vec<Arc<Vec<u8>>>) {
-    let history = maybe_recent_conversation
-        .map(|rc| rc.history)
-        .unwrap_or_default();
-
-    let marker = mtmd_default_marker();
-    let mut messages: Vec<ChatMessage> = Vec::new();
-    let mut images: Vec<Arc<Vec<u8>>> = Vec::new();
-
-    for entry in &history {
-        match &entry.kind {
-            HistoryEntryKind::Input(input) => {
-                let (msgs, bytes) = input.messages_and_media(marker, false);
-                messages.extend(msgs);
-                images.extend(bytes);
-            }
-            HistoryEntryKind::Output(response) => messages.push(response.to_chat_message()),
-            HistoryEntryKind::OutputInterrupted(reason) => {
-                messages.push(ChatMessage::assistant(reason.note()))
-            }
-            HistoryEntryKind::Summary(summary) => messages.push(ChatMessage::assistant(format!(
-                "[Summary of earlier conversation, condensed to save context]\n{summary}"
-            ))),
-        }
-    }
-
-    let (live_msgs, live_bytes) = new_input.messages_and_media(marker, true);
-    messages.extend(live_msgs);
-    images.extend(live_bytes);
-
-    let footer = session_footer(
-        is_group,
-        bot_identity,
-        platform,
-        tool_rounds,
-        max_tool_rounds,
-    );
-
-    (messages, footer, images)
-}
-
-async fn get_response_from_llm(
-    role: Arc<PrimaryRole>,
-    current_input: &LLMInput,
     maybe_recent_conversation: Option<RecentConversation>,
     tool_rounds: usize,
     max_tool_rounds: usize,
@@ -154,65 +106,61 @@ async fn get_response_from_llm(
     is_group: bool,
     bot_identity: &str,
     platform: &Platform,
-) -> Result<LLMResponse, InterruptionReason> {
-    let (messages, footer, images) = build_conversation(
-        current_input,
-        maybe_recent_conversation,
-        tool_rounds,
-        max_tool_rounds,
-        is_group,
-        bot_identity,
-        platform,
-    );
+) -> MessagesRequest {
+    let history = maybe_recent_conversation
+        .map(|rc| rc.history)
+        .unwrap_or_default();
 
-    println!("\n\n------------------------ NEW ITERATION ------------------------\n\n");
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&messages).unwrap_or_default()
-    );
-    println!("---- footer ----\n{footer}");
-
-    if !images.is_empty() {
-        println!("[image] feeding {} image(s) to the model", images.len());
+    let mut messages: Vec<Message> = Vec::new();
+    for entry in &history {
+        match &entry.kind {
+            HistoryEntryKind::Input(input) => messages.extend(input.to_messages(false)),
+            HistoryEntryKind::Output(response) => messages.push(response.to_message()),
+            HistoryEntryKind::OutputInterrupted(reason) => {
+                messages.push(Message::assistant_text(reason.note()))
+            }
+            HistoryEntryKind::Summary(summary) => messages.push(Message::assistant_text(format!(
+                "[Summary of earlier conversation, condensed to save context]\n{summary}"
+            ))),
+        }
     }
+    messages.extend(new_input.to_messages(true));
 
-    let tools = allow_tools.then(ToolType::tool_definitions);
-    let prompt = role
-        .render_prompt(&RenderInputs {
-            messages: &messages,
-            tools: tools.as_deref(),
-            footer: Some(&footer),
-        })
-        .map_err(|e| {
-            eprintln!("[llm] prompt render failed: {e:#}");
-            InterruptionReason::Failed
-        })?;
+    MessagesRequest {
+        max_tokens: PRIMARY_MAX_TOKENS,
+        system: Some(PRIMARY_SYSTEM_PROMPT.to_string()),
+        messages,
+        tools: if allow_tools {
+            ToolType::tool_definitions()
+        } else {
+            Vec::new()
+        },
+        temperature: Some(PRIMARY_TEMPERATURE),
+        footer: Some(session_footer(
+            is_group,
+            bot_identity,
+            platform,
+            tool_rounds,
+            max_tool_rounds,
+        )),
+    }
+}
 
-    let raw = Arc::clone(&role)
-        .generate(prompt, images)
-        .await
-        .map_err(|e| {
-            eprintln!("[llm] generation failed: {e:#}");
-            InterruptionReason::Failed
-        })?;
-    let parsed = role.parse_response(&raw);
-
-    let thoughts = parsed.reasoning;
-    let content = parsed.content;
-    let tool_calls: Vec<ToolCall> = parsed
-        .tool_calls
-        .iter()
-        .enumerate()
-        .map(|(i, call)| {
-            let id = format!("call_{i}");
-            match ToolType::bind(&call.name, &call.arguments) {
+fn to_llm_response(response: &MessagesResponse) -> LLMResponse {
+    let thoughts = response.thinking();
+    let content = response.text();
+    let tool_calls: Vec<ToolCall> = response
+        .tool_uses()
+        .map(|(id, name, input)| {
+            let id = id.to_string();
+            match ToolType::bind(name, &input.to_string()) {
                 Ok(tool_type) => ToolCall { id, tool_type },
                 Err(e) => {
                     eprintln!("[llm] tool call did not parse: {e:#}");
                     ToolCall {
                         id,
                         tool_type: ToolType::MetaMalformed {
-                            report: malformed_report(&call.name, &e),
+                            report: malformed_report(name, &e),
                         },
                     }
                 }
@@ -235,11 +183,11 @@ async fn get_response_from_llm(
         );
     }
 
-    Ok(LLMResponse {
+    LLMResponse {
         thoughts,
         reply,
         tool_calls,
-    })
+    }
 }
 
 pub async fn get_llm_decision(
@@ -262,8 +210,7 @@ pub async fn get_llm_decision(
         }
     );
 
-    let llama_cpp_result = get_response_from_llm(
-        Arc::clone(&env.primary),
+    let request = build_request(
         &current_input,
         maybe_recent_conversation,
         tool_rounds,
@@ -272,12 +219,18 @@ pub async fn get_llm_decision(
         is_group,
         &bot_identity,
         &platform,
-    )
-    .await;
+    );
 
-    match llama_cpp_result {
-        Ok(llama_cpp_response) => ConversationAction::LLMDecisionResult(Ok(llama_cpp_response)),
-        Err(reason) => ConversationAction::LLMDecisionResult(Err(reason)),
+    match env
+        .llm
+        .complete(ModelRole::Primary, request)
+        .await
+    {
+        Ok(response) => ConversationAction::LLMDecisionResult(Ok(to_llm_response(&response))),
+        Err(e) => {
+            eprintln!("[llm] {e:#}");
+            ConversationAction::LLMDecisionResult(Err(InterruptionReason::Failed))
+        }
     }
 }
 
@@ -299,5 +252,80 @@ mod tests {
         assert!(report.contains("did NOT run"));
         assert!(report.contains("missing field delay_seconds"));
         assert!(!report.contains("[[attach_file"));
+    }
+    fn fx() -> (Vec<crate::types::conversation::HistoryEntry>, crate::types::conversation::LLMInput) {
+        use crate::types::conversation::*;
+        use crate::types::media::{Attachment, Image, MessageImage};
+        use std::sync::Arc;
+        let img = |b: Vec<u8>| MessageImage::Hydrated(Image { bytes: Arc::new(b), mime: "image/png".into() });
+        let msg = |text: &str, queued: bool, attachments: Vec<Attachment>| ConversationMessage {
+            text: text.into(), queued, user_id: "42".into(), name: "(42) Alice".into(), attachments,
+        };
+        let e = |kind| HistoryEntry { id: HistoryId::new(), kind };
+        let c0 = ToolCall { id: "call_0".into(), tool_type: ToolType::WebSearch { query: "rust async".into() } };
+        let c1 = ToolCall { id: "call_1".into(), tool_type: ToolType::ViewImage { path: "/tmp/a.png".into() } };
+        let c2 = ToolCall { id: "call_0".into(), tool_type: ToolType::ViewImage { path: "/tmp/b.png".into() } };
+        let history = vec![
+            e(HistoryEntryKind::Summary("earlier: Alice likes Rust".into())),
+            e(HistoryEntryKind::Input(LLMInput::ConversationMessage(msg("hey look at this", false, vec![
+                Attachment::Image { image: img(vec![1, 1, 1]), filename: "x.png".into(), url: "https://cdn/x.png".into() },
+                Attachment::File { filename: "r.pdf".into(), content_type: Some("application/pdf".into()), url: "https://cdn/r.pdf".into() },
+                Attachment::Image { image: MessageImage::Dehydrated { byte_size: 9 }, filename: "old.png".into(), url: "https://cdn/old.png".into() },
+            ])))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "hmm".into(), reply: Reply::Empty, tool_calls: vec![c0.clone(), c1.clone()] })),
+            e(HistoryEntryKind::Input(LLMInput::ToolResults(vec![
+                ToolResult { call: c0, data: ToolResultData { actual: "FULL search".into(), simplified: "simple search".into(), image_for_assistant: None } },
+                ToolResult { call: c1, data: ToolResultData { actual: "".into(), simplified: "".into(), image_for_assistant: Some(img(vec![2, 2])) } },
+            ], Some(msg("also this", true, vec![Attachment::Image { image: img(vec![3]), filename: "y.png".into(), url: "https://cdn/y.png".into() }]))))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Said("here you go".into()), tool_calls: vec![] })),
+            e(HistoryEntryKind::OutputInterrupted(InterruptionReason::TimedOut)),
+            e(HistoryEntryKind::Input(LLMInput::SystemMessage(vec![
+                SystemMessage { note: "take meds".into(), addressee: "Alice".into() },
+                SystemMessage { note: "call mom".into(), addressee: "Bob".into() },
+            ]))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Malformed, tool_calls: vec![] })),
+            e(HistoryEntryKind::Input(LLMInput::ConversationMessage(msg("", false, vec![])))),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Empty, tool_calls: vec![] })),
+            e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Said("checking".into()), tool_calls: vec![c2.clone()] })),
+        ];
+        let live = LLMInput::ToolResults(vec![
+            ToolResult { call: c2, data: ToolResultData { actual: "FULL view".into(), simplified: "simple view".into(), image_for_assistant: Some(img(vec![4, 4, 4, 4])) } },
+        ], None);
+        (history, live)
+    }
+
+    #[test]
+    fn primary_prompt_matches_golden() {
+        let (history, live) = fx();
+        let recent = crate::types::conversation::RecentConversation::new(String::new(), history);
+        let request = super::build_request(
+            &live,
+            Some(recent),
+            16,
+            30,
+            true,
+            true,
+            "(7) A2",
+            &crate::types::conversation::Platform::Discord,
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let (prompt, images) =
+            crate::llm::render_with_pack(&root.join("models/qwen3-8-27b"), &request).unwrap();
+        let time = regex::Regex::new(r"Current time: [0-9: -]+UTC").unwrap();
+        let prompt = time.replace_all(&prompt, "Current time: <T>");
+
+        let golden_path = root.join("src/externals/testdata/primary_prompt.txt");
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::write(&golden_path, prompt.as_bytes()).unwrap();
+        }
+        let golden = std::fs::read_to_string(&golden_path).unwrap();
+        assert!(
+            prompt == golden,
+            "rendered primary prompt differs from {}; rerun with UPDATE_GOLDEN=1 if the change is intended",
+            golden_path.display()
+        );
+
+        let images: Vec<&[u8]> = images.iter().map(|b| b.as_slice()).collect();
+        assert_eq!(images, [&[1u8, 1, 1][..], &[2, 2], &[3], &[4, 4, 4, 4]]);
     }
 }

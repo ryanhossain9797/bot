@@ -28,6 +28,7 @@ impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self::bare(ChatRole::User, content)
     }
+    #[cfg(test)]
     pub fn assistant(content: impl Into<String>) -> Self {
         Self::bare(ChatRole::Assistant, content)
     }
@@ -70,7 +71,7 @@ pub struct MessageToolCall {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MessageToolCallFunction {
-    pub name: &'static str,
+    pub name: String,
     pub arguments: Map<String, Value>,
 }
 
@@ -83,7 +84,7 @@ pub struct ToolDefinition {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ToolDefFunction {
-    pub name: &'static str,
-    pub description: &'static str,
+    pub name: String,
+    pub description: String,
     pub parameters: Value,
 }

@@ -1,8 +1,9 @@
 use crate::externals::{
-    llama_cpp_external::get_llm_decision,
+    llm_external::get_llm_decision,
     message_external::{OutboundMessage, send_message},
     tool_call_external::execute_tool,
 };
+use crate::llm::ModelRole;
 use crate::state_machines::memory_manager_state_machine::MemoryManagerMachine;
 use crate::state_machines::reminder_state_machine::ReminderForConversationMachine;
 use crate::types::conversation::{
@@ -686,7 +687,7 @@ fn maybe_fire_compaction(
     recent_conversation: &RecentConversation,
     effects: &mut ConversationEffects,
 ) {
-    if env.utility.is_none() || conversation.compaction_in_flight {
+    if !env.llm.has(ModelRole::Utility) || conversation.compaction_in_flight {
         return;
     }
 
@@ -830,10 +831,14 @@ mod tests {
         };
         assert_eq!(batch.len(), 2);
 
-        let (messages, _) = input.messages_and_media("<marker>", true);
-        let rendered = messages
+        let rendered = input
+            .to_messages(true)
             .iter()
-            .map(|m| m.content.as_str())
+            .flat_map(|m| &m.content)
+            .filter_map(|b| match b {
+                crate::llm::anthropic::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("For Alice: take meds"), "got: {rendered}");
