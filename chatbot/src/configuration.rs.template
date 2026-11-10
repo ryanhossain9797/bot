@@ -1,6 +1,6 @@
 pub const MONGODB_AUTH: &str = "FOO";
 pub mod client_tokens {
-    pub const TELEGRAM_TOKEN: &str = "FOO";
+    pub const TELEGRAM_TOKEN: &str = "";
     pub const DISCORD_TOKEN: &str = "FOO";
     pub const SEARXNG_URL: &str = "http://localhost:8080";
     #[allow(dead_code)]

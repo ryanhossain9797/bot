@@ -37,7 +37,7 @@ impl Platform {
                 "Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align)."
             }
             Platform::Telegram => {
-                "Platform: Telegram — supports a limited markdown subset (bold, italic, `code`, links); no tables, headers, or bullet lists. For tabular data use a ```code block```."
+                "Platform: Telegram — your reply is sent as plain text, so markdown is NOT rendered and its symbols show up literally. Write without markdown: no **bold**, headers, backticks or tables. Use line breaks and simple \"- \" lists."
             }
         }
     }
@@ -45,7 +45,7 @@ impl Platform {
     pub fn subtext(&self, text: &str) -> String {
         match self {
             Platform::Discord => format!("-# *{text}*"),
-            Platform::Telegram => format!("_{text}_"),
+            Platform::Telegram => format!("· {text}"),
         }
     }
 }

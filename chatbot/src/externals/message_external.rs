@@ -1,14 +1,18 @@
 use std::sync::{Arc, LazyLock};
 
 use crate::{
-    externals::bash_container_external::pull_file,
+    externals::bash_container_external::{pull_file, PulledFile},
+    services::telegram,
     types::conversation::{ConversationAction, Platform, ConversationId},
     Env,
 };
+use frankenstein::methods::{SendDocumentParams, SendMessageParams};
+use frankenstein::AsyncTelegramApi;
 use regex::Regex;
 use serenity::all::{CreateAttachment, CreateMessage};
 
 const DISCORD_MESSAGE_LIMIT: usize = 2000;
+const TELEGRAM_MESSAGE_LIMIT: usize = 2048;
 
 static ATTACH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[\[attach_(?:file|image):\s*(.*?)\s*\]\]").expect("ATTACH_RE is a valid regex")
@@ -30,14 +34,14 @@ fn extract_attach_paths(text: &str) -> (String, Vec<String>) {
     (collapsed, paths)
 }
 
-fn split_for_discord(content: &str) -> Vec<String> {
+fn split_message(content: &str, limit: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = content;
 
-    while remaining.chars().count() > DISCORD_MESSAGE_LIMIT {
+    while remaining.chars().count() > limit {
         let hard = remaining
             .char_indices()
-            .nth(DISCORD_MESSAGE_LIMIT)
+            .nth(limit)
             .map(|(i, _)| i)
             .unwrap_or(remaining.len());
         let split_at = remaining[..hard].rfind('\n').map(|i| i + 1).unwrap_or(hard);
@@ -111,7 +115,7 @@ pub async fn send_message(
                 }
             }
 
-            let chunks = split_for_discord(&text);
+            let chunks = split_message(&text, DISCORD_MESSAGE_LIMIT);
 
             if chunks.is_empty() {
                 if !files.is_empty() {
@@ -142,13 +146,92 @@ pub async fn send_message(
             }
             ConversationAction::MessageSent(Ok(()))
         }
-        _ => panic!("Telegram not yet implemented"),
+        Platform::Telegram => {
+            let result = send_telegram(&env, &container_key, &conversation_id.1, text).await;
+            if let Err(err) = &result {
+                eprintln!("[send] Telegram send failed: {err}");
+            }
+            ConversationAction::MessageSent(result)
+        }
     }
+}
+
+async fn send_telegram(
+    env: &Env,
+    container_key: &str,
+    key: &str,
+    text: String,
+) -> Result<(), String> {
+    let bot = env
+        .telegram
+        .as_ref()
+        .ok_or("Telegram is not configured")?;
+    let (chat_id, thread_id) = telegram::parse_conversation_key(key)
+        .ok_or_else(|| format!("invalid Telegram conversation key {key:?}"))?;
+
+    let (mut text, attach_paths) = extract_attach_paths(&text);
+    let mut files: Vec<PulledFile> = Vec::new();
+    for path in &attach_paths {
+        match pull_file(container_key, path).await {
+            Ok(file) => files.push(file),
+            Err(err) => {
+                eprintln!("[send] attach '{path}' failed: {err}");
+                let note = Platform::Telegram.subtext(&format!("couldn't attach {path}: {err}"));
+                text = if text.is_empty() { note } else { format!("{text}\n{note}") };
+            }
+        }
+    }
+
+    for chunk in split_message(&text, TELEGRAM_MESSAGE_LIMIT) {
+        let params = SendMessageParams::builder()
+            .chat_id(chat_id)
+            .maybe_message_thread_id(thread_id)
+            .text(chunk)
+            .build();
+        bot.send_message(&params)
+            .await
+            .map_err(|err| telegram::describe(&err))?;
+    }
+
+    for file in files {
+        let dir = std::env::temp_dir().join(format!("a2-upload-{}", uuid::Uuid::new_v4().simple()));
+        let path = dir.join(&file.filename);
+        let sent = async {
+            tokio::fs::create_dir_all(&dir)
+                .await
+                .map_err(|err| format!("staging {}: {err}", file.filename))?;
+            tokio::fs::write(&path, &file.bytes)
+                .await
+                .map_err(|err| format!("staging {}: {err}", file.filename))?;
+            let params = SendDocumentParams::builder()
+                .chat_id(chat_id)
+                .maybe_message_thread_id(thread_id)
+                .document(path.clone())
+                .build();
+            bot.send_document(&params)
+                .await
+                .map(|_| ())
+                .map_err(|err| telegram::describe(&err))
+        }
+        .await;
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        sent?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::extract_attach_paths;
+    use super::{extract_attach_paths, split_message};
+
+    #[test]
+    fn split_message_respects_the_limit_and_prefers_newlines() {
+        let text = format!("{}\n{}", "a".repeat(6), "b".repeat(6));
+        assert_eq!(split_message(&text, 10), vec!["aaaaaa\n", "bbbbbb"]);
+        assert_eq!(split_message(&"é".repeat(5), 2), vec!["éé", "éé", "é"]);
+        assert!(split_message("  \n ", 10).is_empty());
+    }
 
     #[test]
     fn strips_marker_and_captures_path() {

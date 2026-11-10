@@ -11,6 +11,7 @@ mod types;
 
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
+use services::telegram::{prepare_telegram_client, run_telegram};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -24,8 +25,13 @@ pub const BOT_NAME: &str = "A2";
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
+    telegram: Option<frankenstein::client_reqwest::Bot>,
     llm: Arc<LlmBackend>,
     announce_tool_use: bool,
+}
+
+fn telegram_token() -> Option<&'static str> {
+    Some(configuration::client_tokens::TELEGRAM_TOKEN).filter(|token| !token.is_empty())
 }
 
 async fn init_env() -> anyhow::Result<Env> {
@@ -46,8 +52,11 @@ async fn init_env() -> anyhow::Result<Env> {
 
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
+    let telegram = telegram_token().map(services::telegram::bot);
+
     Ok(Env {
         discord_http,
+        telegram,
         llm: Arc::new(llm),
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
     })
@@ -91,11 +100,13 @@ async fn main() -> anyhow::Result<!> {
 
     let mut set = JoinSet::new();
 
-    let clients = vec![run_discord(prepare_discord_client(discord_token).await?)];
-
-    clients.into_iter().for_each(|client| {
-        set.spawn(client);
-    });
+    set.spawn(run_discord(prepare_discord_client(discord_token).await?));
+    match telegram_token() {
+        Some(token) => {
+            set.spawn(run_telegram(prepare_telegram_client(token).await?));
+        }
+        None => println!("[startup] telegram disabled (no TELEGRAM_TOKEN)"),
+    }
 
     let _ = set.join_next().await;
 
