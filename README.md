@@ -1,6 +1,6 @@
 # A2
 
-A2 is a Discord chatbot written in Rust. It runs its LLM in-process with `llama.cpp` (or, behind
+A2 is a Discord and Telegram chatbot written in Rust. It runs its LLM in-process with `llama.cpp` (or, behind
 a config switch, against an Anthropic-compatible API), calls tools over many rounds per turn, and
 keeps every conversation as a persistent state machine that survives restarts.
 
@@ -51,12 +51,25 @@ Inside `chatbot/src/`:
 | `prompts.rs` | System prompts and sampling settings |
 | `tools.rs` | Tool definitions and argument binding |
 | `services/discord.rs` | Discord gateway handling |
+| `services/telegram.rs` | Telegram long polling (`getUpdates`) via `frankenstein` |
 | `configuration.rs` | Tokens and switches (gitignored, copy from `configuration.rs.template`) |
+
+## Telegram
+
+Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences from Discord:
+
+- **Conversations:** one per chat, and one per topic in forum groups (`ConversationId` is
+  `chat_id` or `chat_id/topic_id`).
+- **Replies:** sent as plain text (the prompt tells the model not to use markdown), split at
+  2,048 characters. `[[attach_…]]` files go out as documents after the text.
+- **Incoming files:** photos and image documents up to 20 MB are downloaded and shown to the
+  model. Other files are listed by name only: Telegram file URLs contain the bot token, so the
+  model never sees one.
 
 ## How a turn runs
 
 ```
-Discord message
+Discord / Telegram message
       │
       ▼
 ConversationMachine ── queued in `pending`
@@ -64,7 +77,7 @@ ConversationMachine ── queued in `pending`
       ▼
 AwaitingLLMDecision ──▶ llm_external: build request → LLM backend → parse
       │
-      ├── reply text ──▶ SendingMessage ──▶ Discord
+      ├── reply text ──▶ SendingMessage ──▶ Discord / Telegram
       └── tool calls ──▶ RunningTools ──▶ results fed back ──▶ AwaitingLLMDecision
                                                                (until no tools, or 30 rounds)
       ▼
@@ -142,6 +155,9 @@ modes on one prompt.
 - Docker. The deploy targets an AMD GPU (Vulkan) host.
 - A Discord bot token, with the **Message Content** privileged intent enabled. Without it the
   bot can't read channel messages that don't mention it.
+- Optionally, a Telegram bot token from @BotFather. Leave `TELEGRAM_TOKEN` empty to run without
+  Telegram. To let the bot read group messages that don't mention it, turn off privacy mode
+  (`/setprivacy`) before adding it to a group.
 - The model packs' GGUF files in `chatbot/models/`. They're copied into the base image, not
   mounted, so use real files or hard links; `docker build` doesn't follow symlinks.
 
@@ -151,7 +167,7 @@ modes on one prompt.
 cp chatbot/src/configuration.rs.template chatbot/src/configuration.rs
 ```
 
-Fill in `DISCORD_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
+Fill in `DISCORD_TOKEN`, optionally `TELEGRAM_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
 means rebuilding.
 
 ### Build and deploy (from `chatbot/`)
