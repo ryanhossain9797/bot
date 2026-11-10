@@ -42,6 +42,13 @@ impl Platform {
         }
     }
 
+    pub fn message_limit(&self) -> usize {
+        match self {
+            Platform::Discord => 2000,
+            Platform::Telegram => 2048,
+        }
+    }
+
     pub fn subtext(&self, text: &str) -> String {
         match self {
             Platform::Discord => format!("-# *{text}*"),

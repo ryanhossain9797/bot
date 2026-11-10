@@ -1,7 +1,11 @@
+use std::sync::LazyLock;
+
 use regex::Regex;
+use serenity::all::{ChannelId, CreateAttachment, CreateMessage, Http};
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
+    externals::bash_container_external::PulledFile,
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -28,6 +32,42 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
         .await?;
 
     Ok(client)
+}
+
+static WHITESPACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
+
+pub async fn send(
+    http: &Http,
+    channel_key: &str,
+    chunks: Vec<String>,
+    files: Vec<PulledFile>,
+) -> Result<(), String> {
+    let channel = channel_key
+        .parse::<u64>()
+        .map(ChannelId::new)
+        .map_err(|err| format!("invalid channel id {channel_key:?}: {err}"))?;
+    let files: Vec<CreateAttachment> = files
+        .into_iter()
+        .map(|file| CreateAttachment::bytes(file.bytes, file.filename))
+        .collect();
+
+    let mut messages: Vec<CreateMessage> = chunks
+        .iter()
+        .map(|chunk| CreateMessage::new().content(chunk))
+        .collect();
+    if !files.is_empty() {
+        let last = messages.pop().unwrap_or_default();
+        messages.push(last.files(files));
+    }
+
+    for message in messages {
+        channel
+            .send_message(http, message)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
@@ -148,9 +188,8 @@ fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String
             .replace(&format!("<@!{id}>"), &label);
     }
 
-    let text = text.trim().trim_start_matches('/').trim().to_string();
-    let space_trimmer = Regex::new(r"\s+").expect("static whitespace regex is valid");
-    let text: String = space_trimmer.replace_all(&text, " ").trim().to_string();
+    let text = text.trim().trim_start_matches('/').trim();
+    let text = WHITESPACE.replace_all(text, " ").trim().to_string();
 
     (!text.is_empty()).then_some(text)
 }

@@ -11,7 +11,7 @@ mod types;
 
 use serenity::all::{Http, HttpBuilder};
 use services::discord::*;
-use services::telegram::{prepare_telegram_client, run_telegram};
+use services::telegram::{Telegram, run_telegram};
 use std::sync::Arc;
 use tokio::task::JoinSet;
 
@@ -25,7 +25,7 @@ pub const BOT_NAME: &str = "A2";
 #[derive(Clone)]
 pub struct Env {
     discord_http: Arc<Http>,
-    telegram: Option<frankenstein::client_reqwest::Bot>,
+    telegram: Option<Telegram>,
     llm: Arc<LlmBackend>,
     announce_tool_use: bool,
 }
@@ -52,7 +52,7 @@ async fn init_env() -> anyhow::Result<Env> {
 
     let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
 
-    let telegram = telegram_token().map(services::telegram::bot);
+    let telegram = telegram_token().map(Telegram::new);
 
     Ok(Env {
         discord_http,
@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<!> {
 
     re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
+    let telegram = env.telegram.clone();
     re_framework::register::<ConversationMachine>(env.clone());
     re_framework::register::<MemoryManagerMachine>(env.clone());
     re_framework::register::<ReminderForConversationMachine>(env);
@@ -101,9 +102,9 @@ async fn main() -> anyhow::Result<!> {
     let mut set = JoinSet::new();
 
     set.spawn(run_discord(prepare_discord_client(discord_token).await?));
-    match telegram_token() {
-        Some(token) => {
-            set.spawn(run_telegram(prepare_telegram_client(token).await?));
+    match telegram {
+        Some(telegram) => {
+            set.spawn(run_telegram(telegram));
         }
         None => println!("[startup] telegram disabled (no TELEGRAM_TOKEN)"),
     }

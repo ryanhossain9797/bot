@@ -1,14 +1,15 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use frankenstein::client_reqwest::Bot;
-use frankenstein::methods::{GetFileParams, GetUpdatesParams};
-use frankenstein::types::{AllowedUpdate, ChatType, Message, MessageEntityType, User};
+use frankenstein::methods::{GetFileParams, GetUpdatesParams, SendDocumentParams, SendMessageParams};
+use frankenstein::types::{AllowedUpdate, ChatType, Message, MessageEntity, MessageEntityType, User};
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, Error};
 use regex::Regex;
 
 use crate::{
+    externals::bash_container_external::PulledFile,
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -16,51 +17,133 @@ use crate::{
 
 const POLL_TIMEOUT_SECS: u32 = 30;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 pub const NO_PUBLIC_URL: &str = "none (Telegram attachment)";
 
-pub struct TelegramClient {
+static WHITESPACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
+
+#[derive(Clone)]
+pub struct Telegram {
     bot: Bot,
-    token: String,
-    bot_user: User,
+    file_base: String,
 }
 
-pub fn bot(token: &str) -> Bot {
-    Bot::new(token)
+impl Telegram {
+    pub fn new(token: &str) -> Self {
+        Self {
+            bot: Bot::new(token),
+            file_base: format!("https://api.telegram.org/file/bot{token}"),
+        }
+    }
+
+    pub async fn send(
+        &self,
+        key: &str,
+        chunks: Vec<String>,
+        files: Vec<PulledFile>,
+    ) -> Result<(), String> {
+        let (chat_id, thread_id) = parse_conversation_key(key)
+            .ok_or_else(|| format!("invalid Telegram conversation key {key:?}"))?;
+
+        for chunk in chunks {
+            let params = SendMessageParams::builder()
+                .chat_id(chat_id)
+                .maybe_message_thread_id(thread_id)
+                .text(chunk)
+                .build();
+            self.bot
+                .send_message(&params)
+                .await
+                .map_err(|err| describe(&err))?;
+        }
+
+        for file in files {
+            let dir = std::env::temp_dir().join(format!("a2-upload-{}", uuid::Uuid::new_v4().simple()));
+            let sent = self.send_document(chat_id, thread_id, &dir, &file).await;
+            let _ = tokio::fs::remove_dir_all(&dir).await;
+            sent?;
+        }
+
+        Ok(())
+    }
+
+    async fn send_document(
+        &self,
+        chat_id: i64,
+        thread_id: Option<i32>,
+        dir: &std::path::Path,
+        file: &PulledFile,
+    ) -> Result<(), String> {
+        let staging = |err: std::io::Error| format!("staging {}: {err}", file.filename);
+        let path = dir.join(&file.filename);
+        tokio::fs::create_dir_all(dir).await.map_err(staging)?;
+        tokio::fs::write(&path, &file.bytes).await.map_err(staging)?;
+        let params = SendDocumentParams::builder()
+            .chat_id(chat_id)
+            .maybe_message_thread_id(thread_id)
+            .document(path)
+            .build();
+        self.bot
+            .send_document(&params)
+            .await
+            .map(drop)
+            .map_err(|err| describe(&err))
+    }
+
+    async fn download(&self, file_id: &str) -> Result<Vec<u8>, String> {
+        let file = self
+            .bot
+            .get_file(&GetFileParams::builder().file_id(file_id).build())
+            .await
+            .map_err(|err| describe(&err))?
+            .result;
+        let path = file.file_path.ok_or("Telegram returned no file path")?;
+        let bytes = self
+            .bot
+            .client
+            .get(format!("{}/{path}", self.file_base))
+            .send()
+            .await
+            .and_then(|response| response.error_for_status())
+            .map_err(|err| err.without_url().to_string())?
+            .bytes()
+            .await
+            .map_err(|err| err.without_url().to_string())?;
+        Ok(bytes.to_vec())
+    }
 }
 
-pub async fn prepare_telegram_client(token: &str) -> anyhow::Result<TelegramClient> {
-    let bot = bot(token);
-    let bot_user = bot
-        .get_me()
-        .await
-        .map_err(|err| anyhow::anyhow!("Telegram getMe failed: {}", describe(&err)))?
-        .result;
+pub async fn run_telegram(telegram: Telegram) -> anyhow::Result<()> {
+    let bot_user = loop {
+        match telegram.bot.get_me().await {
+            Ok(response) => break response.result,
+            Err(err) => {
+                eprintln!("[telegram] getMe failed: {}; retrying", describe(&err));
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+        }
+    };
     println!(
         "[startup] telegram bot @{} ({})",
         bot_user.username.as_deref().unwrap_or("?"),
         bot_user.id
     );
-    Ok(TelegramClient {
-        bot,
-        token: token.to_string(),
-        bot_user,
-    })
-}
+    let poller = Poller { telegram, bot_user };
 
-pub async fn run_telegram(client: TelegramClient) -> anyhow::Result<()> {
     let mut params = GetUpdatesParams::builder()
         .timeout(POLL_TIMEOUT_SECS)
         .allowed_updates(vec![AllowedUpdate::Message])
         .build();
 
     loop {
-        match client.bot.get_updates(&params).await {
+        match poller.telegram.bot.get_updates(&params).await {
             Ok(response) => {
                 for update in response.result {
                     params.offset = Some(i64::from(update.update_id) + 1);
                     if let UpdateContent::Message(message) = update.content {
-                        client.handle(*message).await;
+                        poller.handle(*message).await;
                     }
                 }
             }
@@ -79,7 +162,7 @@ pub async fn run_telegram(client: TelegramClient) -> anyhow::Result<()> {
     }
 }
 
-pub fn describe(err: &Error) -> String {
+fn describe(err: &Error) -> String {
     match err {
         Error::Api(response) => format!("{} {}", response.error_code, response.description),
         Error::JsonDecode { source, .. } => format!("bad JSON from Telegram: {source}"),
@@ -97,21 +180,26 @@ fn last_update_id(input: &str) -> Option<i64> {
         .max()
 }
 
-pub fn conversation_key(chat_id: i64, thread_id: Option<i32>) -> String {
+fn conversation_key(chat_id: i64, thread_id: Option<i32>) -> String {
     match thread_id {
         Some(thread) => format!("{chat_id}/{thread}"),
         None => chat_id.to_string(),
     }
 }
 
-pub fn parse_conversation_key(key: &str) -> Option<(i64, Option<i32>)> {
+fn parse_conversation_key(key: &str) -> Option<(i64, Option<i32>)> {
     match key.split_once('/') {
         Some((chat, thread)) => Some((chat.parse().ok()?, Some(thread.parse().ok()?))),
         None => Some((key.parse().ok()?, None)),
     }
 }
 
-impl TelegramClient {
+struct Poller {
+    telegram: Telegram,
+    bot_user: User,
+}
+
+impl Poller {
     async fn handle(&self, message: Message) {
         let Some(author) = message.from.as_deref() else {
             return;
@@ -120,9 +208,8 @@ impl TelegramClient {
             return;
         }
 
-        let bot_name = &self.bot_user.first_name;
         let attachments = self.collect_attachments(&message).await;
-        let text = filter(&message, &self.bot_user, bot_name);
+        let text = filter(&message, &self.bot_user);
         if text.is_none() && attachments.is_empty() {
             return;
         }
@@ -130,10 +217,8 @@ impl TelegramClient {
         let name = full_name(author);
         let msg = format!("{}: {}", identity(&name, author.id), text.unwrap_or_default());
         let thread_id = message
-            .is_topic_message
-            .unwrap_or(false)
-            .then_some(message.message_thread_id)
-            .flatten();
+            .message_thread_id
+            .filter(|_| message.is_topic_message == Some(true));
 
         let constructor = ConversationConstructor {
             id: ConversationId(
@@ -141,7 +226,7 @@ impl TelegramClient {
                 conversation_key(message.chat.id, thread_id),
             ),
             is_group: message.chat.type_field != ChatType::Private,
-            bot_identity: identity(bot_name, self.bot_user.id),
+            bot_identity: identity(&self.bot_user.first_name, self.bot_user.id),
         };
         let action = ConversationAction::NewMessage {
             msg,
@@ -175,21 +260,16 @@ impl TelegramClient {
                 .file_name
                 .clone()
                 .unwrap_or_else(|| format!("file_{}", document.file_unique_id));
-            let is_image = document
+            let image_mime = document
                 .mime_type
-                .as_deref()
-                .is_some_and(|mime| mime.starts_with("image/"));
-            attachments.push(match is_image {
-                true => {
-                    self.image_or_file(
-                        &document.file_id,
-                        document.file_size,
-                        filename,
-                        document.mime_type.clone().unwrap_or_default(),
-                    )
-                    .await
+                .clone()
+                .filter(|mime| mime.starts_with("image/"));
+            attachments.push(match image_mime {
+                Some(mime) => {
+                    self.image_or_file(&document.file_id, document.file_size, filename, mime)
+                        .await
                 }
-                false => Attachment::File {
+                None => Attachment::File {
                     filename,
                     content_type: document.mime_type.clone(),
                     url: NO_PUBLIC_URL.to_string(),
@@ -209,7 +289,9 @@ impl TelegramClient {
     ) -> Attachment {
         let downloaded = match size.is_some_and(|size| size > MAX_DOWNLOAD_BYTES) {
             true => Err("larger than the 20 MB Bot API download limit".to_string()),
-            false => self.download(file_id).await,
+            false => tokio::time::timeout(DOWNLOAD_TIMEOUT, self.telegram.download(file_id))
+                .await
+                .unwrap_or_else(|_| Err(format!("timed out after {DOWNLOAD_TIMEOUT:?}"))),
         };
         match downloaded {
             Ok(bytes) => Attachment::Image {
@@ -230,30 +312,6 @@ impl TelegramClient {
             }
         }
     }
-
-    async fn download(&self, file_id: &str) -> Result<Vec<u8>, String> {
-        let file = self
-            .bot
-            .get_file(&GetFileParams::builder().file_id(file_id).build())
-            .await
-            .map_err(|err| describe(&err))?
-            .result;
-        let path = file.file_path.ok_or("Telegram returned no file path")?;
-        let url = format!("https://api.telegram.org/file/bot{}/{path}", self.token);
-        let response = self
-            .bot
-            .client
-            .get(url)
-            .send()
-            .await
-            .and_then(|response| response.error_for_status())
-            .map_err(|err| err.without_url().to_string())?;
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| err.without_url().to_string())?;
-        Ok(bytes.to_vec())
-    }
 }
 
 fn full_name(user: &User) -> String {
@@ -267,7 +325,32 @@ fn identity(name: &str, id: u64) -> String {
     format!("({id}) {name}")
 }
 
-fn filter(message: &Message, bot_user: &User, bot_name: &str) -> Option<String> {
+fn is_bot_username(handle: &str, bot_user: &User) -> bool {
+    bot_user
+        .username
+        .as_deref()
+        .is_some_and(|username| handle.eq_ignore_ascii_case(username))
+}
+
+fn rewrite(entity: &MessageEntity, span: &str, bot_user: &User) -> Option<String> {
+    match entity.type_field {
+        MessageEntityType::Mention => span
+            .strip_prefix('@')
+            .filter(|handle| is_bot_username(handle, bot_user))
+            .map(|_| identity(&bot_user.first_name, bot_user.id)),
+        MessageEntityType::TextMention => {
+            let user = entity.user.as_ref()?;
+            Some(identity(&full_name(user), user.id))
+        }
+        MessageEntityType::BotCommand => {
+            let (command, handle) = span.split_once('@')?;
+            is_bot_username(handle, bot_user).then(|| command.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn filter(message: &Message, bot_user: &User) -> Option<String> {
     let (raw, entities) = match &message.text {
         Some(text) => (text.as_str(), message.entities.as_deref()),
         None => (
@@ -275,36 +358,24 @@ fn filter(message: &Message, bot_user: &User, bot_name: &str) -> Option<String> 
             message.caption_entities.as_deref(),
         ),
     };
-    let mut text = raw.to_string();
 
-    if let Some(username) = &bot_user.username {
-        let mention = Regex::new(&format!(r"(?i)@{}\b", regex::escape(username)))
-            .expect("escaped username is a valid regex");
-        text = mention
-            .replace_all(&text, regex::NoExpand(&identity(bot_name, bot_user.id)))
-            .into_owned();
-    }
-
-    let units: Vec<u16> = raw.encode_utf16().collect();
-    for entity in entities.unwrap_or_default() {
-        let Some(user) = entity
-            .user
-            .as_ref()
-            .filter(|_| entity.type_field == MessageEntityType::TextMention)
-        else {
-            continue;
-        };
+    let mut units: Vec<u16> = raw.encode_utf16().collect();
+    let mut entities: Vec<&MessageEntity> = entities.unwrap_or_default().iter().collect();
+    entities.sort_by_key(|entity| std::cmp::Reverse(entity.offset));
+    for entity in entities {
         let start = usize::from(entity.offset);
         let end = start + usize::from(entity.length);
-        let Some(shown) = units.get(start..end).map(String::from_utf16_lossy) else {
+        let Some(span) = units.get(start..end).map(String::from_utf16_lossy) else {
             continue;
         };
-        text = text.replacen(&shown, &identity(&full_name(user), user.id), 1);
+        if let Some(replacement) = rewrite(entity, &span, bot_user) {
+            units.splice(start..end, replacement.encode_utf16());
+        }
     }
+    let text = String::from_utf16_lossy(&units);
 
-    let text = text.trim().trim_start_matches('/').trim().to_string();
-    let space_trimmer = Regex::new(r"\s+").expect("static whitespace regex is valid");
-    let text: String = space_trimmer.replace_all(&text, " ").trim().to_string();
+    let text = text.trim().trim_start_matches('/').trim();
+    let text = WHITESPACE.replace_all(text, " ").trim().to_string();
 
     (!text.is_empty()).then_some(text)
 }
@@ -313,9 +384,9 @@ fn filter(message: &Message, bot_user: &User, bot_name: &str) -> Option<String> 
 mod tests {
     use super::*;
 
-    fn user(id: u64, first: &str, username: Option<&str>) -> User {
+    fn bot() -> User {
         serde_json::from_value(serde_json::json!({
-            "id": id, "is_bot": username.is_some(), "first_name": first, "username": username,
+            "id": 9, "is_bot": true, "first_name": "A2", "username": "a2bot",
         }))
         .unwrap()
     }
@@ -341,36 +412,44 @@ mod tests {
     }
 
     #[test]
-    fn bot_mentions_and_commands_become_identities() {
-        let bot = user(9, "A2", Some("a2bot"));
-        let m = message(serde_json::json!({"text": "/ask@A2Bot   hey @a2bot, what's up?"}));
+    fn bot_mentions_and_commands_use_entities() {
+        let m = message(serde_json::json!({
+            "text": "/ask@A2Bot   hey @a2bot, ask @someone",
+            "entities": [
+                {"type": "bot_command", "offset": 0, "length": 10},
+                {"type": "mention", "offset": 17, "length": 6},
+                {"type": "mention", "offset": 29, "length": 8},
+            ],
+        }));
         assert_eq!(
-            filter(&m, &bot, "A2").as_deref(),
-            Some("ask(9) A2 hey (9) A2, what's up?")
+            filter(&m, &bot()).as_deref(),
+            Some("ask hey (9) A2, ask @someone")
         );
     }
 
     #[test]
-    fn text_mentions_of_users_without_usernames_use_their_identity() {
-        let bot = user(9, "A2", Some("a2bot"));
+    fn text_mentions_rewrite_the_span_they_point_at() {
         let m = message(serde_json::json!({
-            "text": "ask Zoë 🍷 about it",
-            "entities": [{"type": "text_mention", "offset": 4, "length": 6,
-                          "user": {"id": 5, "is_bot": false, "first_name": "Zoë", "last_name": "🍷"}}],
+            "text": "Al, tell Zoë 🍷 and Al hi",
+            "entities": [
+                {"type": "text_mention", "offset": 9, "length": 6,
+                 "user": {"id": 5, "is_bot": false, "first_name": "Zoë", "last_name": "🍷"}},
+                {"type": "text_mention", "offset": 20, "length": 2,
+                 "user": {"id": 6, "is_bot": false, "first_name": "Al"}},
+            ],
         }));
         assert_eq!(
-            filter(&m, &bot, "A2").as_deref(),
-            Some("ask (5) Zoë 🍷 about it")
+            filter(&m, &bot()).as_deref(),
+            Some("Al, tell (5) Zoë 🍷 and (6) Al hi")
         );
     }
 
     #[test]
     fn caption_is_used_when_there_is_no_text_and_blank_is_none() {
-        let bot = user(9, "A2", None);
         let captioned = message(serde_json::json!({"caption": " look  at this "}));
-        assert_eq!(filter(&captioned, &bot, "A2").as_deref(), Some("look at this"));
+        assert_eq!(filter(&captioned, &bot()).as_deref(), Some("look at this"));
         let blank = message(serde_json::json!({"photo": []}));
-        assert_eq!(filter(&blank, &bot, "A2"), None);
+        assert_eq!(filter(&blank, &bot()), None);
     }
 
     #[test]
