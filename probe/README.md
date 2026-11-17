@@ -19,6 +19,10 @@ Scenarios:
   with a bot-style metadata footer block, and the model's own blocks (thinking with its
   signature, text, `tool_use`) are sent back unchanged.
 
+- `replay FILE...`: posts each saved request file (a full `/v1/messages` JSON body, e.g. one the
+  bot built) as-is, with only `model` replaced, and prints the reply including its full text.
+  Useful for comparing what the model does with real bot prompts.
+
 `--stream` uses SSE, the way Claude Code does. Without it, requests are plain JSON.
 `--drop-thinking` replays the model's turns without their thinking blocks, as the bot's history does.
 
