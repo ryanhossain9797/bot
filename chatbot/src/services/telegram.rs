@@ -492,6 +492,7 @@ impl Poller {
             });
         }
 
+        attachments.extend(listed_media(message));
         attachments
     }
 
@@ -527,6 +528,32 @@ impl Poller {
             }
         }
     }
+}
+
+fn listed_media(message: &Message) -> Vec<Attachment> {
+    let listed = |name: Option<&String>, mime: Option<&String>, unique: &str, kind: &str, default: (&str, &str)| {
+        Attachment::File {
+            filename: name.cloned().unwrap_or_else(|| format!("{kind}_{unique}.{}", default.1)),
+            content_type: Some(mime.cloned().unwrap_or_else(|| default.0.to_string())),
+            url: NO_PUBLIC_URL.to_string(),
+        }
+    };
+    let mp4 = ("video/mp4", "mp4");
+    [
+        message.video.as_deref().map(|v| {
+            listed(v.file_name.as_ref(), v.mime_type.as_ref(), &v.file_unique_id, "video", mp4)
+        }),
+        message.video_note.as_deref().map(|v| listed(None, None, &v.file_unique_id, "video_note", mp4)),
+        message.audio.as_deref().map(|a| {
+            listed(a.file_name.as_ref(), a.mime_type.as_ref(), &a.file_unique_id, "audio", ("audio/mpeg", "mp3"))
+        }),
+        message.voice.as_deref().map(|v| {
+            listed(None, v.mime_type.as_ref(), &v.file_unique_id, "voice", ("audio/ogg", "ogg"))
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 fn full_name(user: &User) -> String {
@@ -745,6 +772,34 @@ mod tests {
 
         assert_eq!(ids(albums.accept(part(13, None, 1), later)), vec![vec![10, 11, 12], vec![13]]);
         assert!(albums.is_empty());
+    }
+
+    #[test]
+    fn video_audio_voice_and_video_notes_are_listed_as_files() {
+        let m = message(serde_json::json!({
+            "caption": "lol look",
+            "video": {"file_id": "v", "file_unique_id": "V1", "width": 1, "height": 1, "duration": 3,
+                      "file_name": "clip.mov", "mime_type": "video/quicktime"},
+            "voice": {"file_id": "o", "file_unique_id": "O1", "duration": 4},
+        }));
+        let listed: Vec<(String, Option<String>, String)> = listed_media(&m)
+            .into_iter()
+            .map(|a| match a {
+                Attachment::File { filename, content_type, url } => (filename, content_type, url),
+                Attachment::Image { .. } => panic!("expected files"),
+            })
+            .collect();
+        assert_eq!(listed, vec![
+            ("clip.mov".into(), Some("video/quicktime".into()), NO_PUBLIC_URL.into()),
+            ("voice_O1.ogg".into(), Some("audio/ogg".into()), NO_PUBLIC_URL.into()),
+        ]);
+
+        let note = message(serde_json::json!({
+            "video_note": {"file_id": "n", "file_unique_id": "N1", "length": 240, "duration": 5},
+        }));
+        assert!(matches!(&listed_media(&note)[..],
+            [Attachment::File { filename, .. }] if filename == "video_note_N1.mp4"));
+        assert!(listed_media(&message(serde_json::json!({"text": "hi"}))).is_empty());
     }
 
     #[test]

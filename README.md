@@ -71,8 +71,9 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
   (keyed by chat and `media_group_id`) until none has arrived for a second, then delivers them as
   one message, as Discord does.
 - **Incoming files:** photos and image documents up to 20 MB are downloaded and shown to the
-  model. Other files are listed by name only: Telegram file URLs contain the bot token, so the
-  model never sees one.
+  model. Other files, videos, audio, voice messages and round video messages are listed by name
+  and type only: Telegram file URLs contain the bot token, so the model never sees one. Stickers,
+  polls, locations and contacts are ignored, as on Discord.
 
 ## How a turn runs
 
