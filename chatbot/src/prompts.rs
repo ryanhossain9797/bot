@@ -9,6 +9,10 @@ const PRIMARY_SYSTEM_PROMPT_TEMPLATE: &str = "You are {name}, a helpful conversa
     username you go by in this chat: pay attention to it, since messages addressed to that id or \
     name are meant for you (your true name is {name}). The footer also carries the \
     setting, the time, and tool usage.\n\n\
+    \"[replying to (NUMBER) Name]\" right after the sender tag means the message replies to that person's message; \
+    a reply to your own message addresses you, just like a mention. To mention someone yourself, \
+    write <@NUMBER> with their id (e.g. <@123>); it's shown to everyone as their name and \
+    notifies them. Only mention someone when you actually want their attention.\n\n\
     GROUP CHAT: you're addressed when someone @mentions your id — match the id, not the name. \
     Default to silence: reply only when addressed, or rarely when you genuinely add something — \
     otherwise your whole reply must be the literal token [EMPTY] (those exact seven characters with \

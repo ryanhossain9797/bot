@@ -1,11 +1,14 @@
 use std::sync::LazyLock;
 
 use regex::Regex;
-use serenity::all::{ChannelId, CreateAttachment, CreateMessage, Http};
+use serenity::all::{
+    ChannelId, CreateAllowedMentions, CreateAttachment, CreateMessage, Http, MessageType,
+};
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
     externals::bash_container_external::PulledFile,
+    services::{identity, with_reply_marker},
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -37,6 +40,10 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
 static WHITESPACE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
 
+fn new_message() -> CreateMessage {
+    CreateMessage::new().allowed_mentions(CreateAllowedMentions::new().all_users(true))
+}
+
 pub async fn send(
     http: &Http,
     channel_key: &str,
@@ -54,10 +61,10 @@ pub async fn send(
 
     let mut messages: Vec<CreateMessage> = chunks
         .iter()
-        .map(|chunk| CreateMessage::new().content(chunk))
+        .map(|chunk| new_message().content(chunk))
         .collect();
     if !files.is_empty() {
-        let last = messages.pop().unwrap_or_default();
+        let last = messages.pop().unwrap_or_else(new_message);
         messages.push(last.files(files));
     }
 
@@ -80,6 +87,21 @@ struct Handler {
     bot_name: String,
 }
 
+impl Handler {
+    fn replied_to(&self, message: &DMessage) -> Option<String> {
+        if message.kind != MessageType::InlineReply {
+            return None;
+        }
+        let author = &message.referenced_message.as_deref()?.author;
+        let id = author.id.get();
+        let name = match id == self.bot_user_id {
+            true => self.bot_name.clone(),
+            false => author.global_name.clone().unwrap_or_else(|| author.name.clone()),
+        };
+        Some(identity(&name, id))
+    }
+}
+
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, _ctx: Context, message: DMessage) {
@@ -94,7 +116,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let body = text.unwrap_or_default();
+        let body = with_reply_marker(text, self.replied_to(&message)).unwrap_or_default();
 
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
@@ -165,10 +187,6 @@ async fn collect_attachments(message: &DMessage) -> Vec<Attachment> {
         }
     }
     attachments
-}
-
-fn identity(name: &str, id: u64) -> String {
-    format!("({id}) {name}")
 }
 
 fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String> {

@@ -1,15 +1,21 @@
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use frankenstein::client_reqwest::Bot;
-use frankenstein::methods::{GetFileParams, GetUpdatesParams, SendDocumentParams, SendMessageParams};
-use frankenstein::types::{AllowedUpdate, ChatType, Message, MessageEntity, MessageEntityType, User};
+use frankenstein::methods::{
+    GetChatMemberParams, GetFileParams, GetUpdatesParams, SendDocumentParams, SendMessageParams,
+};
+use frankenstein::types::{
+    AllowedUpdate, ChatMember, ChatType, Message, MessageEntity, MessageEntityType, User,
+};
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, Error};
 use regex::Regex;
 
 use crate::{
     externals::bash_container_external::PulledFile,
+    services::{identity, with_reply_marker},
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -21,6 +27,9 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
 pub const NO_PUBLIC_URL: &str = "none (Telegram attachment)";
+
+static MENTION: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<@!?(\d+)>").expect("static mention regex is valid"));
 
 static WHITESPACE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
@@ -48,12 +57,24 @@ impl Telegram {
         let (chat_id, thread_id) = parse_conversation_key(key)
             .ok_or_else(|| format!("invalid Telegram conversation key {key:?}"))?;
         let mut waited = Duration::ZERO;
+        let mut users: HashMap<u64, User> = HashMap::new();
 
         for chunk in chunks {
+            let unknown: Vec<u64> = mentioned_ids(&chunk)
+                .into_iter()
+                .filter(|id| !users.contains_key(id))
+                .collect();
+            for id in unknown {
+                if let Some(user) = self.member(chat_id, id).await {
+                    users.insert(id, user);
+                }
+            }
+            let (text, entities) = render_mentions(&chunk, &users);
             let params = SendMessageParams::builder()
                 .chat_id(chat_id)
                 .maybe_message_thread_id(thread_id)
-                .text(chunk)
+                .text(text)
+                .maybe_entities((!entities.is_empty()).then_some(entities))
                 .build();
             with_rate_limit(&mut waited, || self.bot.send_message(&params)).await?;
         }
@@ -68,6 +89,20 @@ impl Telegram {
         }
 
         Ok(())
+    }
+
+    async fn member(&self, chat_id: i64, user_id: u64) -> Option<User> {
+        let params = GetChatMemberParams::builder()
+            .chat_id(chat_id)
+            .user_id(user_id)
+            .build();
+        match self.bot.get_chat_member(&params).await {
+            Ok(response) => Some(member_user(response.result)),
+            Err(err) => {
+                eprintln!("[telegram] can't mention {user_id}: {}", describe(&err));
+                None
+            }
+        }
     }
 
     async fn send_document(
@@ -194,6 +229,59 @@ fn retry_wait(err: &Error, waited: Duration) -> Option<Duration> {
     (waited + wait <= MAX_RATE_LIMIT_WAIT).then_some(wait)
 }
 
+fn member_user(member: ChatMember) -> User {
+    match member {
+        ChatMember::Creator(member) => member.user,
+        ChatMember::Administrator(member) => member.user,
+        ChatMember::Member(member) => member.user,
+        ChatMember::Restricted(member) => member.user,
+        ChatMember::Left(member) => member.user,
+        ChatMember::Kicked(member) => member.user,
+    }
+}
+
+fn mentioned_ids(text: &str) -> Vec<u64> {
+    let mut ids: Vec<u64> = MENTION
+        .captures_iter(text)
+        .filter_map(|cap| cap[1].parse().ok())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn render_mentions(text: &str, users: &HashMap<u64, User>) -> (String, Vec<MessageEntity>) {
+    let mut out = String::with_capacity(text.len());
+    let mut entities = Vec::new();
+    let mut last = 0;
+    for cap in MENTION.captures_iter(text) {
+        let whole = cap.get(0).expect("capture 0 is the whole match");
+        out.push_str(&text[last..whole.start()]);
+        last = whole.end();
+        let user = cap[1].parse::<u64>().ok().and_then(|id| users.get(&id));
+        let Some(user) = user else {
+            out.push_str(&format!("({})", &cap[1]));
+            continue;
+        };
+        let label = full_name(user);
+        let offset = u16::try_from(out.encode_utf16().count());
+        let length = u16::try_from(label.encode_utf16().count());
+        out.push_str(&label);
+        if let (Ok(offset), Ok(length)) = (offset, length) {
+            entities.push(
+                MessageEntity::builder()
+                    .type_field(MessageEntityType::TextMention)
+                    .offset(offset)
+                    .length(length)
+                    .user(user.clone())
+                    .build(),
+            );
+        }
+    }
+    out.push_str(&text[last..]);
+    (out, entities)
+}
+
 fn describe(err: &Error) -> String {
     match err {
         Error::Api(response) => format!("{} {}", response.error_code, response.description),
@@ -245,6 +333,7 @@ impl Poller {
         if text.is_none() && attachments.is_empty() {
             return;
         }
+        let text = with_reply_marker(text, self.replied_to(&message));
 
         let name = full_name(author);
         let msg = format!("{}: {}", identity(&name, author.id), text.unwrap_or_default());
@@ -270,6 +359,21 @@ impl Poller {
         re_framework::handle::<ConversationMachine>()
             .act_maybe_construct(constructor, action)
             .await;
+    }
+
+    fn replied_to(&self, message: &Message) -> Option<String> {
+        let replied = message.reply_to_message.as_deref()?;
+        if message.is_topic_message == Some(true)
+            && Some(replied.message_id) == message.message_thread_id
+        {
+            return None;
+        }
+        let author = replied.from.as_deref()?;
+        let name = match author.id == self.bot_user.id {
+            true => self.bot_user.first_name.clone(),
+            false => full_name(author),
+        };
+        Some(identity(&name, author.id))
     }
 
     async fn collect_attachments(&self, message: &Message) -> Vec<Attachment> {
@@ -351,10 +455,6 @@ fn full_name(user: &User) -> String {
         Some(last) => format!("{} {last}", user.first_name),
         None => user.first_name.clone(),
     }
-}
-
-fn identity(name: &str, id: u64) -> String {
-    format!("({id}) {name}")
 }
 
 fn is_bot_username(handle: &str, bot_user: &User) -> bool {
@@ -502,6 +602,42 @@ mod tests {
             "ok": false, "error_code": 400, "description": "Bad Request: chat not found",
         }));
         assert_eq!(retry_wait(&other, Duration::ZERO), None);
+    }
+
+    #[test]
+    fn mentions_become_text_mentions_with_utf16_offsets() {
+        let zoe: User = serde_json::from_value(serde_json::json!({
+            "id": 5, "is_bot": false, "first_name": "Zoë", "last_name": "🍷",
+        }))
+        .unwrap();
+        let users = HashMap::from([(5, zoe.clone())]);
+        let text = "🍷 hi <@5>, ask <@!5> or <@7>";
+        assert_eq!(mentioned_ids(text), vec![5, 7]);
+        let (out, entities) = render_mentions(text, &users);
+        assert_eq!(out, "🍷 hi Zoë 🍷, ask Zoë 🍷 or (7)");
+        let spans: Vec<(u16, u16, u64)> = entities
+            .iter()
+            .map(|e| (e.offset, e.length, e.user.as_ref().unwrap().id))
+            .collect();
+        assert_eq!(spans, vec![(6, 6, 5), (18, 6, 5)]);
+        assert!(entities.iter().all(|e| e.type_field == MessageEntityType::TextMention));
+    }
+
+    #[test]
+    fn replies_name_who_was_replied_to_but_not_the_topic_root() {
+        let poller = Poller { telegram: Telegram::new("0:test"), bot_user: bot() };
+        let reply = message(serde_json::json!({
+            "text": "and this?",
+            "reply_to_message": {"message_id": 3, "date": 0, "chat": {"id": -100, "type": "supergroup"},
+                                 "from": {"id": 9, "is_bot": true, "first_name": "A2"}},
+        }));
+        assert_eq!(poller.replied_to(&reply).as_deref(), Some("(9) A2"));
+        let in_topic = message(serde_json::json!({
+            "text": "hello", "is_topic_message": true, "message_thread_id": 3,
+            "reply_to_message": {"message_id": 3, "date": 0, "chat": {"id": -100, "type": "supergroup"},
+                                 "from": {"id": 4, "is_bot": false, "first_name": "Op"}},
+        }));
+        assert_eq!(poller.replied_to(&in_topic), None);
     }
 
     #[test]

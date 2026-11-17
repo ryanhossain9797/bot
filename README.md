@@ -62,6 +62,11 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
   `chat_id` or `chat_id/topic_id`).
 - **Replies:** sent as plain text (the prompt tells the model not to use markdown), split at
   2,048 characters. `[[attach_…]]` files go out as documents after the text.
+- **Mentions:** the model writes `<@ID>` on both platforms. Discord renders that natively, and
+  sends allow only user mentions, never roles or `@everyone`. On Telegram, `send` looks the user
+  up with `getChatMember` and replaces the tag with their name plus a `text_mention` entity.
+- **Replies:** on both platforms, a reply shows the model `[replying to (ID) Name]` after the
+  sender tag, so a reply to the bot counts as addressing it.
 - **Incoming files:** photos and image documents up to 20 MB are downloaded and shown to the
   model. Other files are listed by name only: Telegram file URLs contain the bot token, so the
   model never sees one.
