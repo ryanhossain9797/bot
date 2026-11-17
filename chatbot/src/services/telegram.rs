@@ -463,7 +463,7 @@ impl Poller {
         for part in &parts {
             attachments.extend(self.collect_attachments(part).await);
         }
-        let text = parts.iter().find_map(|part| filter(part, &self.bot_user));
+        let text = album_text(parts.iter().map(|part| filter(part, &self.bot_user)).collect());
         if text.is_none() && attachments.is_empty() {
             return;
         }
@@ -583,6 +583,24 @@ impl Poller {
                 }
             }
         }
+    }
+}
+
+fn album_text(captions: Vec<Option<String>>) -> Option<String> {
+    let numbered: Vec<(usize, String)> = captions
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, caption)| Some((index + 1, caption?)))
+        .collect();
+    match numbered.as_slice() {
+        [] => None,
+        [(_, only)] => Some(only.clone()),
+        many => Some(
+            many.iter()
+                .map(|(item, caption)| format!("[item {item}] {caption}"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
     }
 }
 
@@ -872,6 +890,18 @@ mod tests {
         assert_eq!(upload_kind(&encoded(image::ImageFormat::Gif)), Upload::Animation);
         assert_eq!(upload_kind(&encoded(image::ImageFormat::Bmp)), Upload::Document);
         assert_eq!(upload_kind(b"%PDF-1.7 report"), Upload::Document);
+    }
+
+    #[test]
+    fn album_captions_are_all_kept_and_numbered_when_there_are_several() {
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(album_text(vec![some("which is best?"), None, None]).as_deref(), Some("which is best?"));
+        assert_eq!(album_text(vec![None, some("only on two")]).as_deref(), Some("only on two"));
+        assert_eq!(
+            album_text(vec![some("sunset"), None, some("my dog")]).as_deref(),
+            Some("[item 1] sunset [item 3] my dog")
+        );
+        assert_eq!(album_text(vec![None, None]), None);
     }
 
     #[test]
