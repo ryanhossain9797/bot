@@ -61,7 +61,9 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
 - **Conversations:** one per chat, and one per topic in forum groups (`ConversationId` is
   `chat_id` or `chat_id/topic_id`).
 - **Replies:** sent as plain text (the prompt tells the model not to use markdown), split at
-  2,048 characters. `[[attach_…]]` files go out as documents after the text.
+  2,048 characters. `[[attach_…]]` files go out after the text: PNG, JPEG and WebP as photos and GIFs as
+  animations, so they show inline as on Discord; anything else, or an image Telegram rejects, as a
+  document.
 - **Mentions:** the model writes `<@ID>` on both platforms. Discord renders that natively, and
   sends allow only user mentions, never roles or `@everyone`. On Telegram, `send` looks the user
   up with `getChatMember` and replaces the tag with their name plus a `text_mention` entity.

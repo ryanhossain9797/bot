@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use frankenstein::client_reqwest::Bot;
 use frankenstein::methods::{
-    GetChatMemberParams, GetFileParams, GetUpdatesParams, SendDocumentParams, SendMessageParams,
+    GetChatMemberParams, GetFileParams, GetUpdatesParams, SendAnimationParams, SendDocumentParams,
+    SendMessageParams, SendPhotoParams,
 };
 use frankenstein::types::{
     AllowedUpdate, ChatMember, ChatType, Message, MessageEntity, MessageEntityType, User,
@@ -84,7 +85,7 @@ impl Telegram {
         for file in files {
             let dir = std::env::temp_dir().join(format!("a2-upload-{}", uuid::Uuid::new_v4().simple()));
             let sent = self
-                .send_document(chat_id, thread_id, &dir, &file, &mut waited)
+                .send_file(chat_id, thread_id, &dir, &file, &mut waited)
                 .await;
             let _ = tokio::fs::remove_dir_all(&dir).await;
             sent?;
@@ -107,7 +108,7 @@ impl Telegram {
         }
     }
 
-    async fn send_document(
+    async fn send_file(
         &self,
         chat_id: i64,
         thread_id: Option<i32>,
@@ -119,6 +120,36 @@ impl Telegram {
         let path = dir.join(&file.filename);
         tokio::fs::create_dir_all(dir).await.map_err(staging)?;
         tokio::fs::write(&path, &file.bytes).await.map_err(staging)?;
+
+        let kind = upload_kind(&file.bytes);
+        let shown = match kind {
+            Upload::Photo => {
+                let params = SendPhotoParams::builder()
+                    .chat_id(chat_id)
+                    .maybe_message_thread_id(thread_id)
+                    .photo(path.clone())
+                    .build();
+                Some(with_rate_limit(waited, || self.bot.send_photo(&params)).await.map(drop))
+            }
+            Upload::Animation => {
+                let params = SendAnimationParams::builder()
+                    .chat_id(chat_id)
+                    .maybe_message_thread_id(thread_id)
+                    .animation(path.clone())
+                    .build();
+                Some(with_rate_limit(waited, || self.bot.send_animation(&params)).await.map(drop))
+            }
+            Upload::Document => None,
+        };
+        match shown {
+            Some(Ok(())) => return Ok(()),
+            Some(Err(err)) => eprintln!(
+                "[telegram] sending {} as {kind:?} failed ({err}); sending it as a file",
+                file.filename
+            ),
+            None => {}
+        }
+
         let params = SendDocumentParams::builder()
             .chat_id(chat_id)
             .maybe_message_thread_id(thread_id)
@@ -299,6 +330,23 @@ fn retry_wait(err: &Error, waited: Duration) -> Option<Duration> {
     let seconds = response.parameters.as_ref()?.retry_after?;
     let wait = Duration::from_secs(u64::from(seconds).max(1));
     (waited + wait <= MAX_RATE_LIMIT_WAIT).then_some(wait)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Upload {
+    Photo,
+    Animation,
+    Document,
+}
+
+fn upload_kind(bytes: &[u8]) -> Upload {
+    match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP) => {
+            Upload::Photo
+        }
+        Ok(image::ImageFormat::Gif) => Upload::Animation,
+        _ => Upload::Document,
+    }
 }
 
 fn member_user(member: ChatMember) -> User {
@@ -800,6 +848,22 @@ mod tests {
         assert!(matches!(&listed_media(&note)[..],
             [Attachment::File { filename, .. }] if filename == "video_note_N1.mp4"));
         assert!(listed_media(&message(serde_json::json!({"text": "hi"}))).is_empty());
+    }
+
+    #[test]
+    fn images_upload_as_photos_gifs_as_animations_and_the_rest_as_documents() {
+        let encoded = |format: image::ImageFormat| {
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 4))
+                .write_to(&mut out, format)
+                .unwrap();
+            out.into_inner()
+        };
+        assert_eq!(upload_kind(&encoded(image::ImageFormat::Png)), Upload::Photo);
+        assert_eq!(upload_kind(&encoded(image::ImageFormat::Jpeg)), Upload::Photo);
+        assert_eq!(upload_kind(&encoded(image::ImageFormat::Gif)), Upload::Animation);
+        assert_eq!(upload_kind(&encoded(image::ImageFormat::Bmp)), Upload::Document);
+        assert_eq!(upload_kind(b"%PDF-1.7 report"), Upload::Document);
     }
 
     #[test]
