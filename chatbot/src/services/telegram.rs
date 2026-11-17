@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use frankenstein::client_reqwest::Bot;
 use frankenstein::methods::{
@@ -22,6 +22,8 @@ use crate::{
 };
 
 const POLL_TIMEOUT_SECS: u32 = 30;
+const ALBUM_POLL_TIMEOUT_SECS: u32 = 1;
+const ALBUM_QUIET: Duration = Duration::from_secs(1);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
@@ -172,13 +174,21 @@ pub async fn run_telegram(telegram: Telegram) -> anyhow::Result<()> {
         .allowed_updates(vec![AllowedUpdate::Message])
         .build();
 
+    let mut albums = Albums::default();
+
     loop {
+        params.timeout = Some(match albums.is_empty() {
+            true => POLL_TIMEOUT_SECS,
+            false => ALBUM_POLL_TIMEOUT_SECS,
+        });
         match poller.telegram.bot.get_updates(&params).await {
             Ok(response) => {
                 for update in response.result {
                     params.offset = Some(i64::from(update.update_id) + 1);
                     if let UpdateContent::Message(message) = update.content {
-                        poller.handle(*message).await;
+                        for parts in albums.accept(*message, Instant::now()) {
+                            poller.handle(parts).await;
+                        }
                     }
                 }
             }
@@ -194,6 +204,68 @@ pub async fn run_telegram(telegram: Telegram) -> anyhow::Result<()> {
                 tokio::time::sleep(RETRY_DELAY).await;
             }
         }
+        for parts in albums.take_quiet(Instant::now()) {
+            poller.handle(parts).await;
+        }
+    }
+}
+
+struct Album {
+    chat_id: i64,
+    group_id: String,
+    parts: Vec<Message>,
+    last_part: Instant,
+}
+
+#[derive(Default)]
+struct Albums(Vec<Album>);
+
+impl Albums {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn accept(&mut self, message: Message, now: Instant) -> Vec<Vec<Message>> {
+        let chat_id = message.chat.id;
+        let Some(group_id) = message.media_group_id.clone() else {
+            let mut ready = self.take_where(|album| album.chat_id == chat_id);
+            ready.push(vec![message]);
+            return ready;
+        };
+        match self
+            .0
+            .iter_mut()
+            .find(|album| album.chat_id == chat_id && album.group_id == group_id)
+        {
+            Some(album) => {
+                album.parts.push(message);
+                album.last_part = now;
+            }
+            None => self.0.push(Album {
+                chat_id,
+                group_id,
+                parts: vec![message],
+                last_part: now,
+            }),
+        }
+        Vec::new()
+    }
+
+    fn take_quiet(&mut self, now: Instant) -> Vec<Vec<Message>> {
+        self.take_where(|album| now.duration_since(album.last_part) >= ALBUM_QUIET)
+    }
+
+    fn take_where(&mut self, ready: impl Fn(&Album) -> bool) -> Vec<Vec<Message>> {
+        let (taken, waiting): (Vec<Album>, Vec<Album>) =
+            std::mem::take(&mut self.0).into_iter().partition(ready);
+        self.0 = waiting;
+        taken
+            .into_iter()
+            .map(|mut album| {
+                album.parts.sort_by_key(|part| part.message_id);
+                album.parts
+            })
+            .collect()
     }
 }
 
@@ -320,7 +392,10 @@ struct Poller {
 }
 
 impl Poller {
-    async fn handle(&self, message: Message) {
+    async fn handle(&self, parts: Vec<Message>) {
+        let Some(message) = parts.first() else {
+            return;
+        };
         let Some(author) = message.from.as_deref() else {
             return;
         };
@@ -328,12 +403,16 @@ impl Poller {
             return;
         }
 
-        let attachments = self.collect_attachments(&message).await;
-        let text = filter(&message, &self.bot_user);
+        let mut attachments = Vec::new();
+        for part in &parts {
+            attachments.extend(self.collect_attachments(part).await);
+        }
+        let text = parts.iter().find_map(|part| filter(part, &self.bot_user));
         if text.is_none() && attachments.is_empty() {
             return;
         }
-        let text = with_reply_marker(text, self.replied_to(&message));
+        let replied_to = parts.iter().find_map(|part| self.replied_to(part));
+        let text = with_reply_marker(text, replied_to);
 
         let name = full_name(author);
         let msg = format!("{}: {}", identity(&name, author.id), text.unwrap_or_default());
@@ -638,6 +717,34 @@ mod tests {
                                  "from": {"id": 4, "is_bot": false, "first_name": "Op"}},
         }));
         assert_eq!(poller.replied_to(&in_topic), None);
+    }
+
+    #[test]
+    fn album_parts_merge_once_quiet_and_flush_before_the_next_message() {
+        let part = |id: i32, group: Option<&str>, chat: i64| {
+            let mut m = message(serde_json::json!({"message_id": id, "photo": []}));
+            m.media_group_id = group.map(str::to_string);
+            m.chat.id = chat;
+            m
+        };
+        let ids = |batches: Vec<Vec<Message>>| -> Vec<Vec<i32>> {
+            batches.iter().map(|b| b.iter().map(|m| m.message_id).collect()).collect()
+        };
+        let start = Instant::now();
+        let mut albums = Albums::default();
+
+        assert!(ids(albums.accept(part(11, Some("g"), 1), start)).is_empty());
+        assert!(ids(albums.accept(part(10, Some("g"), 1), start)).is_empty());
+        assert!(ids(albums.accept(part(20, Some("g"), 2), start)).is_empty());
+        assert!(ids(albums.accept(part(30, None, 3), start)) == vec![vec![30]]);
+        assert!(ids(albums.take_quiet(start + Duration::from_millis(500))).is_empty());
+
+        let later = start + Duration::from_millis(700);
+        assert!(ids(albums.accept(part(12, Some("g"), 1), later)).is_empty());
+        assert_eq!(ids(albums.take_quiet(start + ALBUM_QUIET)), vec![vec![20]]);
+
+        assert_eq!(ids(albums.accept(part(13, None, 1), later)), vec![vec![10, 11, 12], vec![13]]);
+        assert!(albums.is_empty());
     }
 
     #[test]

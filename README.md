@@ -67,6 +67,9 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
   up with `getChatMember` and replaces the tag with their name plus a `text_mention` entity.
 - **Replies:** on both platforms, a reply shows the model `[replying to (ID) Name]` after the
   sender tag, so a reply to the bot counts as addressing it.
+- **Albums:** Telegram sends each album item as its own message. The poller holds the parts
+  (keyed by chat and `media_group_id`) until none has arrived for a second, then delivers them as
+  one message, as Discord does.
 - **Incoming files:** photos and image documents up to 20 MB are downloaded and shown to the
   model. Other files are listed by name only: Telegram file URLs contain the bot token, so the
   model never sees one.
