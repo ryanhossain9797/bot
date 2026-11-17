@@ -8,7 +8,7 @@ use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
     externals::bash_container_external::PulledFile,
-    services::{identity, with_reply_marker},
+    services::{Segment, identity, mention_segments, with_reply_marker},
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -44,6 +44,17 @@ fn new_message() -> CreateMessage {
     CreateMessage::new().allowed_mentions(CreateAllowedMentions::new().all_users(true))
 }
 
+fn render_mentions(text: &str) -> String {
+    mention_segments(text)
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Text(text) => text.to_string(),
+            Segment::Id(id) => format!("<@{id}>"),
+            Segment::Handle(handle) => format!("@{handle}"),
+        })
+        .collect()
+}
+
 pub async fn send(
     http: &Http,
     channel_key: &str,
@@ -61,7 +72,7 @@ pub async fn send(
 
     let mut messages: Vec<CreateMessage> = chunks
         .iter()
-        .map(|chunk| new_message().content(chunk))
+        .map(|chunk| new_message().content(render_mentions(chunk)))
         .collect();
     if !files.is_empty() {
         let last = messages.pop().unwrap_or_else(new_message);
@@ -210,4 +221,17 @@ fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String
     let text = WHITESPACE.replace_all(text, " ").trim().to_string();
 
     (!text.is_empty()).then_some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_mentions;
+
+    #[test]
+    fn ids_stay_native_and_handles_become_plain_text() {
+        assert_eq!(
+            render_mentions("<@!123> meet <@bob_k>, not <@everyone> <#5>"),
+            "<@123> meet @bob_k, not @everyone <#5>"
+        );
+    }
 }

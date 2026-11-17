@@ -64,9 +64,11 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
   2,048 characters. `[[attach_…]]` files go out after the text: PNG, JPEG and WebP as photos and GIFs as
   animations, so they show inline as on Discord; anything else, or an image Telegram rejects, as a
   document.
-- **Mentions:** the model writes `<@ID>` on both platforms. Discord renders that natively, and
-  sends allow only user mentions, never roles or `@everyone`. On Telegram, `send` looks the user
-  up with `getChatMember` and replaces the tag with their name plus a `text_mention` entity.
+- **Mentions:** the model writes `<@ID>`, or `<@handle>` when all it has is an @handle; parsing
+  is shared in `services.rs`. Discord keeps `<@ID>` native (sends allow only user mentions, never
+  roles or `@everyone`) and writes handles as plain `@handle`. Telegram looks each id up with
+  `getChatMember` and replaces the tag with the user's name plus a `text_mention` entity, and
+  writes handles as `@handle`, which Telegram links itself.
 - **Replies:** on both platforms, a reply shows the model `[replying to (ID) Name]` after the
   sender tag, so a reply to the bot counts as addressing it.
 - **Albums:** Telegram sends each album item as its own message. The poller holds the parts

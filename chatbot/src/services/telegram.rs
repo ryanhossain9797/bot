@@ -16,7 +16,7 @@ use regex::Regex;
 
 use crate::{
     externals::bash_container_external::PulledFile,
-    services::{identity, with_reply_marker},
+    services::{Segment, identity, mention_segments, with_reply_marker},
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -30,9 +30,6 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
 pub const NO_PUBLIC_URL: &str = "none (Telegram attachment)";
-
-static MENTION: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"<@!?(\d+)>").expect("static mention regex is valid"));
 
 static WHITESPACE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
@@ -361,9 +358,12 @@ fn member_user(member: ChatMember) -> User {
 }
 
 fn mentioned_ids(text: &str) -> Vec<u64> {
-    let mut ids: Vec<u64> = MENTION
-        .captures_iter(text)
-        .filter_map(|cap| cap[1].parse().ok())
+    let mut ids: Vec<u64> = mention_segments(text)
+        .into_iter()
+        .filter_map(|segment| match segment {
+            Segment::Id(id) => Some(id),
+            _ => None,
+        })
         .collect();
     ids.sort_unstable();
     ids.dedup();
@@ -373,15 +373,24 @@ fn mentioned_ids(text: &str) -> Vec<u64> {
 fn render_mentions(text: &str, users: &HashMap<u64, User>) -> (String, Vec<MessageEntity>) {
     let mut out = String::with_capacity(text.len());
     let mut entities = Vec::new();
-    let mut last = 0;
-    for cap in MENTION.captures_iter(text) {
-        let whole = cap.get(0).expect("capture 0 is the whole match");
-        out.push_str(&text[last..whole.start()]);
-        last = whole.end();
-        let user = cap[1].parse::<u64>().ok().and_then(|id| users.get(&id));
-        let Some(user) = user else {
-            out.push_str(&format!("({})", &cap[1]));
-            continue;
+    for segment in mention_segments(text) {
+        let user = match segment {
+            Segment::Text(text) => {
+                out.push_str(text);
+                continue;
+            }
+            Segment::Handle(handle) => {
+                out.push('@');
+                out.push_str(handle);
+                continue;
+            }
+            Segment::Id(id) => match users.get(&id) {
+                Some(user) => user,
+                None => {
+                    out.push_str(&format!("({id})"));
+                    continue;
+                }
+            },
         };
         let label = full_name(user);
         let offset = u16::try_from(out.encode_utf16().count());
@@ -398,7 +407,6 @@ fn render_mentions(text: &str, users: &HashMap<u64, User>) -> (String, Vec<Messa
             );
         }
     }
-    out.push_str(&text[last..]);
     (out, entities)
 }
 
@@ -765,10 +773,10 @@ mod tests {
         }))
         .unwrap();
         let users = HashMap::from([(5, zoe.clone())]);
-        let text = "🍷 hi <@5>, ask <@!5> or <@7>";
+        let text = "🍷 hi <@5>, ask <@!5> or <@7> and <@bob_k>";
         assert_eq!(mentioned_ids(text), vec![5, 7]);
         let (out, entities) = render_mentions(text, &users);
-        assert_eq!(out, "🍷 hi Zoë 🍷, ask Zoë 🍷 or (7)");
+        assert_eq!(out, "🍷 hi Zoë 🍷, ask Zoë 🍷 or (7) and @bob_k");
         let spans: Vec<(u16, u16, u64)> = entities
             .iter()
             .map(|e| (e.offset, e.length, e.user.as_ref().unwrap().id))
