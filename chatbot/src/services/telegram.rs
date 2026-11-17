@@ -19,6 +19,7 @@ const POLL_TIMEOUT_SECS: u32 = 30;
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
 pub const NO_PUBLIC_URL: &str = "none (Telegram attachment)";
 
 static WHITESPACE: LazyLock<Regex> =
@@ -46,6 +47,7 @@ impl Telegram {
     ) -> Result<(), String> {
         let (chat_id, thread_id) = parse_conversation_key(key)
             .ok_or_else(|| format!("invalid Telegram conversation key {key:?}"))?;
+        let mut waited = Duration::ZERO;
 
         for chunk in chunks {
             let params = SendMessageParams::builder()
@@ -53,15 +55,14 @@ impl Telegram {
                 .maybe_message_thread_id(thread_id)
                 .text(chunk)
                 .build();
-            self.bot
-                .send_message(&params)
-                .await
-                .map_err(|err| describe(&err))?;
+            with_rate_limit(&mut waited, || self.bot.send_message(&params)).await?;
         }
 
         for file in files {
             let dir = std::env::temp_dir().join(format!("a2-upload-{}", uuid::Uuid::new_v4().simple()));
-            let sent = self.send_document(chat_id, thread_id, &dir, &file).await;
+            let sent = self
+                .send_document(chat_id, thread_id, &dir, &file, &mut waited)
+                .await;
             let _ = tokio::fs::remove_dir_all(&dir).await;
             sent?;
         }
@@ -75,6 +76,7 @@ impl Telegram {
         thread_id: Option<i32>,
         dir: &std::path::Path,
         file: &PulledFile,
+        waited: &mut Duration,
     ) -> Result<(), String> {
         let staging = |err: std::io::Error| format!("staging {}: {err}", file.filename);
         let path = dir.join(&file.filename);
@@ -85,11 +87,9 @@ impl Telegram {
             .maybe_message_thread_id(thread_id)
             .document(path)
             .build();
-        self.bot
-            .send_document(&params)
+        with_rate_limit(waited, || self.bot.send_document(&params))
             .await
             .map(drop)
-            .map_err(|err| describe(&err))
     }
 
     async fn download(&self, file_id: &str) -> Result<Vec<u8>, String> {
@@ -160,6 +160,38 @@ pub async fn run_telegram(telegram: Telegram) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+async fn with_rate_limit<T, Fut>(
+    waited: &mut Duration,
+    mut call: impl FnMut() -> Fut,
+) -> Result<T, String>
+where
+    Fut: Future<Output = Result<T, Error>>,
+{
+    loop {
+        let err = match call().await {
+            Ok(value) => return Ok(value),
+            Err(err) => err,
+        };
+        match retry_wait(&err, *waited) {
+            Some(wait) => {
+                eprintln!("[telegram] rate limited; retrying in {wait:?}");
+                tokio::time::sleep(wait).await;
+                *waited += wait;
+            }
+            None => return Err(describe(&err)),
+        }
+    }
+}
+
+fn retry_wait(err: &Error, waited: Duration) -> Option<Duration> {
+    let Error::Api(response) = err else {
+        return None;
+    };
+    let seconds = response.parameters.as_ref()?.retry_after?;
+    let wait = Duration::from_secs(u64::from(seconds).max(1));
+    (waited + wait <= MAX_RATE_LIMIT_WAIT).then_some(wait)
 }
 
 fn describe(err: &Error) -> String {
@@ -450,6 +482,26 @@ mod tests {
         assert_eq!(filter(&captioned, &bot()).as_deref(), Some("look at this"));
         let blank = message(serde_json::json!({"photo": []}));
         assert_eq!(filter(&blank, &bot()), None);
+    }
+
+    fn api_error(body: serde_json::Value) -> Error {
+        Error::Api(serde_json::from_value(body).unwrap())
+    }
+
+    #[test]
+    fn rate_limits_are_retried_within_the_wait_budget() {
+        let limited = api_error(serde_json::json!({
+            "ok": false, "error_code": 429, "description": "Too Many Requests: retry after 7",
+            "parameters": {"retry_after": 7},
+        }));
+        assert_eq!(retry_wait(&limited, Duration::ZERO), Some(Duration::from_secs(7)));
+        assert_eq!(retry_wait(&limited, Duration::from_secs(38)), Some(Duration::from_secs(7)));
+        assert_eq!(retry_wait(&limited, Duration::from_secs(39)), None);
+
+        let other = api_error(serde_json::json!({
+            "ok": false, "error_code": 400, "description": "Bad Request: chat not found",
+        }));
+        assert_eq!(retry_wait(&other, Duration::ZERO), None);
     }
 
     #[test]
