@@ -1,7 +1,14 @@
+use std::sync::LazyLock;
+
 use regex::Regex;
+use serenity::all::{
+    ChannelId, CreateAllowedMentions, CreateAttachment, CreateMessage, Http, MessageType,
+};
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
+    externals::bash_container_external::PulledFile,
+    services::{Segment, identity, mention_segments, with_reply_marker},
     state_machines::conversation_state_machine::ConversationMachine,
     types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
     types::media::{Attachment, Image, MessageImage},
@@ -30,6 +37,57 @@ pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Clien
     Ok(client)
 }
 
+static WHITESPACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
+
+fn new_message() -> CreateMessage {
+    CreateMessage::new().allowed_mentions(CreateAllowedMentions::new().all_users(true))
+}
+
+fn render_mentions(text: &str) -> String {
+    mention_segments(text)
+        .into_iter()
+        .map(|segment| match segment {
+            Segment::Text(text) => text.to_string(),
+            Segment::Id(id) => format!("<@{id}>"),
+            Segment::Handle(handle) => format!("@{handle}"),
+        })
+        .collect()
+}
+
+pub async fn send(
+    http: &Http,
+    channel_key: &str,
+    chunks: Vec<String>,
+    files: Vec<PulledFile>,
+) -> Result<(), String> {
+    let channel = channel_key
+        .parse::<u64>()
+        .map(ChannelId::new)
+        .map_err(|err| format!("invalid channel id {channel_key:?}: {err}"))?;
+    let files: Vec<CreateAttachment> = files
+        .into_iter()
+        .map(|file| CreateAttachment::bytes(file.bytes, file.filename))
+        .collect();
+
+    let mut messages: Vec<CreateMessage> = chunks
+        .iter()
+        .map(|chunk| new_message().content(render_mentions(chunk)))
+        .collect();
+    if !files.is_empty() {
+        let last = messages.pop().unwrap_or_else(new_message);
+        messages.push(last.files(files));
+    }
+
+    for message in messages {
+        channel
+            .send_message(http, message)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
 pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
     client.start().await?;
     Err(anyhow::anyhow!("Discord failed"))
@@ -38,6 +96,21 @@ pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
 struct Handler {
     bot_user_id: u64,
     bot_name: String,
+}
+
+impl Handler {
+    fn replied_to(&self, message: &DMessage) -> Option<String> {
+        if message.kind != MessageType::InlineReply {
+            return None;
+        }
+        let author = &message.referenced_message.as_deref()?.author;
+        let id = author.id.get();
+        let name = match id == self.bot_user_id {
+            true => self.bot_name.clone(),
+            false => author.global_name.clone().unwrap_or_else(|| author.name.clone()),
+        };
+        Some(identity(&name, id))
+    }
 }
 
 #[async_trait]
@@ -54,7 +127,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let body = text.unwrap_or_default();
+        let body = with_reply_marker(text, self.replied_to(&message)).unwrap_or_default();
 
         let is_group = message.guild_id.is_some();
         let author_id = message.author.id.get();
@@ -127,10 +200,6 @@ async fn collect_attachments(message: &DMessage) -> Vec<Attachment> {
     attachments
 }
 
-fn identity(name: &str, id: u64) -> String {
-    format!("({id}) {name}")
-}
-
 fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String> {
     let mut text = message.content.clone();
     for user in &message.mentions {
@@ -148,9 +217,21 @@ fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String
             .replace(&format!("<@!{id}>"), &label);
     }
 
-    let text = text.trim().trim_start_matches('/').trim().to_string();
-    let space_trimmer = Regex::new(r"\s+").expect("static whitespace regex is valid");
-    let text: String = space_trimmer.replace_all(&text, " ").trim().to_string();
+    let text = text.trim().trim_start_matches('/').trim();
+    let text = WHITESPACE.replace_all(text, " ").trim().to_string();
 
     (!text.is_empty()).then_some(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_mentions;
+
+    #[test]
+    fn ids_stay_native_and_handles_become_plain_text() {
+        assert_eq!(
+            render_mentions("<@!123> meet <@bob_k>, not <@everyone> <#5>"),
+            "<@123> meet @bob_k, not @everyone <#5>"
+        );
+    }
 }

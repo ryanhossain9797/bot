@@ -23,12 +23,14 @@ struct Config {
     stream: bool,
     drop_thinking: bool,
     scenario: String,
+    files: Vec<String>,
 }
 
 impl Config {
     fn load() -> Self {
         let args: Vec<String> = std::env::args().skip(1).collect();
         let env = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+        let mut positional = args.iter().filter(|a| !a.starts_with("--")).cloned();
         Config {
             base_url: env("PROBE_BASE_URL").unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
             model: env("PROBE_MODEL").unwrap_or_else(|| DEFAULT_MODEL.to_string()),
@@ -38,11 +40,10 @@ impl Config {
                 .unwrap_or(DEFAULT_MAX_TOKENS),
             stream: args.iter().any(|a| a == "--stream"),
             drop_thinking: args.iter().any(|a| a == "--drop-thinking"),
-            scenario: args
-                .iter()
-                .find(|a| !a.starts_with("--"))
-                .cloned()
+            scenario: positional
+                .next()
                 .unwrap_or_else(|| "conversation".to_string()),
+            files: positional.collect(),
         }
     }
 }
@@ -200,13 +201,28 @@ struct Client {
 
 impl Client {
     async fn send(&self, messages: &[Value]) -> anyhow::Result<Reply> {
-        let mut body = json!({
+        let body = json!({
             "model": self.config.model,
             "max_tokens": self.config.max_tokens,
             "system": SYSTEM_PROMPT,
             "messages": messages,
             "tools": tools(),
         });
+        self.post(body).await
+    }
+
+    async fn replay(&self, path: &str) -> anyhow::Result<Reply> {
+        let raw = std::fs::read(path).with_context(|| format!("reading {path}"))?;
+        let mut body: Value = serde_json::from_slice(&raw).with_context(|| format!("parsing {path}"))?;
+        body["model"] = json!(self.config.model);
+        if let Some(object) = body.as_object_mut() {
+            object.remove("stream");
+        }
+        self.post(body).await
+    }
+
+    async fn post(&self, mut body: Value) -> anyhow::Result<Reply> {
+        let messages = body["messages"].as_array().cloned().unwrap_or_default();
         if self.config.stream {
             body["stream"] = json!(true);
         }
@@ -215,7 +231,7 @@ impl Client {
             "→ POST /v1/messages ({} bytes, stream={}) {}",
             payload.len(),
             self.config.stream,
-            describe_request(messages)
+            describe_request(&messages)
         );
 
         let mut request = self
@@ -400,7 +416,19 @@ async fn main() -> anyhow::Result<()> {
             println!("\n=== turn 2: follow-up in the same conversation ===");
             run_turn(&client, &mut messages, &png).await?;
         }
-        other => bail!("unknown scenario {other:?}; use hello or conversation"),
+        "replay" => {
+            if client.config.files.is_empty() {
+                bail!("replay needs one or more request JSON files");
+            }
+            for path in &client.config.files {
+                println!("\n=== {path} ===");
+                let reply = client.replay(path).await?;
+                for block in reply.content.iter().filter(|b| b["type"] == "text") {
+                    println!("  full text:\n{}", block["text"].as_str().unwrap_or_default());
+                }
+            }
+        }
+        other => bail!("unknown scenario {other:?}; use hello, conversation or replay"),
     }
     println!("\nprobe: done");
     Ok(())

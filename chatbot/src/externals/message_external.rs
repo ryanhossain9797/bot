@@ -1,14 +1,12 @@
 use std::sync::{Arc, LazyLock};
 
 use crate::{
-    externals::bash_container_external::pull_file,
+    externals::bash_container_external::{pull_file, PulledFile},
+    services::discord,
     types::conversation::{ConversationAction, Platform, ConversationId},
     Env,
 };
 use regex::Regex;
-use serenity::all::{CreateAttachment, CreateMessage};
-
-const DISCORD_MESSAGE_LIMIT: usize = 2000;
 
 static ATTACH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[\[attach_(?:file|image):\s*(.*?)\s*\]\]").expect("ATTACH_RE is a valid regex")
@@ -30,14 +28,14 @@ fn extract_attach_paths(text: &str) -> (String, Vec<String>) {
     (collapsed, paths)
 }
 
-fn split_for_discord(content: &str) -> Vec<String> {
+fn split_message(content: &str, limit: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut remaining = content;
 
-    while remaining.chars().count() > DISCORD_MESSAGE_LIMIT {
+    while remaining.chars().count() > limit {
         let hard = remaining
             .char_indices()
-            .nth(DISCORD_MESSAGE_LIMIT)
+            .nth(limit)
             .map(|(i, _)| i)
             .unwrap_or(remaining.len());
         let split_at = remaining[..hard].rfind('\n').map(|i| i + 1).unwrap_or(hard);
@@ -86,69 +84,47 @@ pub async fn send_message(
     conversation_id: ConversationId,
     outbound: OutboundMessage,
 ) -> ConversationAction {
-    let container_key = conversation_id.to_string();
-    let text = compose(&conversation_id.0, outbound.message, &outbound.tool_names);
-    match conversation_id.0 {
-        Platform::Discord => {
-            let channel = match conversation_id.1.parse::<u64>() {
-                Ok(id) => serenity::all::ChannelId::new(id),
-                Err(err) => {
-                    eprintln!("[send] invalid channel id {:?}: {err}", conversation_id.1);
-                    return ConversationAction::MessageSent(Err(err.to_string()));
-                }
-            };
+    let ConversationId(platform, key) = &conversation_id;
+    let text = compose(platform, outbound.message, &outbound.tool_names);
+    let (mut text, attach_paths) = extract_attach_paths(&text);
 
-            let (mut text, attach_paths) = extract_attach_paths(&text);
-            let mut files: Vec<CreateAttachment> = Vec::new();
-            for path in &attach_paths {
-                match pull_file(&container_key, path).await {
-                    Ok(file) => files.push(CreateAttachment::bytes(file.bytes, file.filename)),
-                    Err(err) => {
-                        eprintln!("[send] attach '{path}' failed: {err}");
-                        let note = Platform::Discord.subtext(&format!("couldn't attach {path}: {err}"));
-                        text = if text.is_empty() { note } else { format!("{text}\n{note}") };
-                    }
-                }
+    let mut files: Vec<PulledFile> = Vec::new();
+    for path in &attach_paths {
+        match pull_file(&conversation_id.to_string(), path).await {
+            Ok(file) => files.push(file),
+            Err(err) => {
+                eprintln!("[send] attach '{path}' failed: {err}");
+                let note = platform.subtext(&format!("couldn't attach {path}: {err}"));
+                text = if text.is_empty() { note } else { format!("{text}\n{note}") };
             }
-
-            let chunks = split_for_discord(&text);
-
-            if chunks.is_empty() {
-                if !files.is_empty() {
-                    if let Err(err) = channel
-                        .send_message(&env.discord_http, CreateMessage::new().files(files))
-                        .await
-                    {
-                        eprintln!("[send] Discord send failed: {err}");
-                        return ConversationAction::MessageSent(Err(err.to_string()));
-                    }
-                }
-                return ConversationAction::MessageSent(Ok(()));
-            }
-
-            let last = chunks.len() - 1;
-            let mut files = Some(files);
-            for (i, chunk) in chunks.into_iter().enumerate() {
-                let mut builder = CreateMessage::new().content(&chunk);
-                if i == last {
-                    if let Some(files) = files.take().filter(|f| !f.is_empty()) {
-                        builder = builder.files(files);
-                    }
-                }
-                if let Err(err) = channel.send_message(&env.discord_http, builder).await {
-                    eprintln!("[send] Discord send failed: {err}");
-                    return ConversationAction::MessageSent(Err(err.to_string()));
-                }
-            }
-            ConversationAction::MessageSent(Ok(()))
         }
-        _ => panic!("Telegram not yet implemented"),
     }
+
+    let chunks = split_message(&text, platform.message_limit());
+    let result = match platform {
+        Platform::Discord => discord::send(&env.discord_http, key, chunks, files).await,
+        Platform::Telegram => match &env.telegram {
+            Some(telegram) => telegram.send(key, chunks, files).await,
+            None => Err("Telegram is not configured".to_string()),
+        },
+    };
+    if let Err(err) = &result {
+        eprintln!("[send] {platform} send failed: {err}");
+    }
+    ConversationAction::MessageSent(result)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::extract_attach_paths;
+    use super::{extract_attach_paths, split_message};
+
+    #[test]
+    fn split_message_respects_the_limit_and_prefers_newlines() {
+        let text = format!("{}\n{}", "a".repeat(6), "b".repeat(6));
+        assert_eq!(split_message(&text, 10), vec!["aaaaaa\n", "bbbbbb"]);
+        assert_eq!(split_message(&"é".repeat(5), 2), vec!["éé", "éé", "é"]);
+        assert!(split_message("  \n ", 10).is_empty());
+    }
 
     #[test]
     fn strips_marker_and_captures_path() {
