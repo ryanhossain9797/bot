@@ -24,13 +24,9 @@ pub const BOT_NAME: &str = "A2";
 #[derive(Clone)]
 pub struct Env {
     discord: Discord,
-    telegram: Option<Telegram>,
+    telegram: Telegram,
     llm: Arc<LlmBackend>,
     announce_tool_use: bool,
-}
-
-fn telegram_token() -> Option<&'static str> {
-    Some(configuration::client_tokens::TELEGRAM_TOKEN).filter(|token| !token.is_empty())
 }
 
 async fn init_env() -> anyhow::Result<Env> {
@@ -48,7 +44,7 @@ async fn init_env() -> anyhow::Result<Env> {
     };
 
     let discord = Discord::new(configuration::client_tokens::DISCORD_TOKEN);
-    let telegram = telegram_token().map(Telegram::new);
+    let telegram = Telegram::new(configuration::client_tokens::TELEGRAM_TOKEN);
 
     Ok(Env {
         discord,
@@ -97,12 +93,7 @@ async fn main() -> anyhow::Result<!> {
     let mut set = JoinSet::new();
 
     set.spawn(run_discord(discord.client().await?));
-    match telegram {
-        Some(telegram) => {
-            set.spawn(run_telegram(telegram));
-        }
-        None => println!("[startup] telegram disabled (no TELEGRAM_TOKEN)"),
-    }
+    set.spawn(run_telegram(telegram.poller().await?));
 
     let _ = set.join_next().await;
 

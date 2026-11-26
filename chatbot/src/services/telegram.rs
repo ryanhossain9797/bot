@@ -84,6 +84,24 @@ impl Telegram {
         Ok(())
     }
 
+    pub async fn poller(&self) -> anyhow::Result<Poller> {
+        let bot_user = self
+            .bot
+            .get_me()
+            .await
+            .map_err(|err| anyhow::anyhow!("Telegram getMe failed: {}", describe(&err)))?
+            .result;
+        println!(
+            "[startup] telegram bot @{} ({})",
+            bot_user.username.as_deref().unwrap_or("?"),
+            bot_user.id
+        );
+        Ok(Poller {
+            telegram: self.clone(),
+            bot_user,
+        })
+    }
+
     async fn member(&self, chat_id: i64, user_id: u64) -> Option<User> {
         let params = GetChatMemberParams::builder()
             .chat_id(chat_id)
@@ -173,23 +191,7 @@ impl Telegram {
     }
 }
 
-pub async fn run_telegram(telegram: Telegram) -> anyhow::Result<()> {
-    let bot_user = loop {
-        match telegram.bot.get_me().await {
-            Ok(response) => break response.result,
-            Err(err) => {
-                eprintln!("[telegram] getMe failed: {}; retrying", describe(&err));
-                tokio::time::sleep(RETRY_DELAY).await;
-            }
-        }
-    };
-    println!(
-        "[startup] telegram bot @{} ({})",
-        bot_user.username.as_deref().unwrap_or("?"),
-        bot_user.id
-    );
-    let poller = Poller { telegram, bot_user };
-
+pub async fn run_telegram(poller: Poller) -> anyhow::Result<()> {
     let mut params = GetUpdatesParams::builder()
         .timeout(POLL_TIMEOUT_SECS)
         .allowed_updates(vec![AllowedUpdate::Message])
@@ -435,7 +437,7 @@ fn parse_conversation_key(key: &str) -> Option<(i64, Option<i32>)> {
     }
 }
 
-struct Poller {
+pub struct Poller {
     telegram: Telegram,
     bot_user: User,
 }

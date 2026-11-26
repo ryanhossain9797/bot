@@ -58,7 +58,7 @@ Inside `chatbot/src/`:
 
 ## Telegram
 
-Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences from Discord:
+Telegram runs alongside Discord. The differences from Discord:
 
 - **Conversations:** one per chat, and one per topic in forum groups (`ConversationId` is
   `chat_id` or `chat_id/topic_id`).
@@ -173,8 +173,7 @@ modes on one prompt.
 - Docker. The deploy targets an AMD GPU (Vulkan) host.
 - A Discord bot token, with the **Message Content** privileged intent enabled. Without it the
   bot can't read channel messages that don't mention it.
-- Optionally, a Telegram bot token from @BotFather. Leave `TELEGRAM_TOKEN` empty to run without
-  Telegram. To let the bot read group messages that don't mention it, turn off privacy mode
+- A Telegram bot token from @BotFather. To let the bot read group messages that don't mention it, turn off privacy mode
   (`/setprivacy`) before adding it to a group.
 - The model packs' GGUF files in `chatbot/models/`. They're copied into the base image, not
   mounted, so use real files or hard links; `docker build` doesn't follow symlinks.
@@ -185,7 +184,7 @@ modes on one prompt.
 cp chatbot/src/configuration.rs.template chatbot/src/configuration.rs
 ```
 
-Fill in `DISCORD_TOKEN`, optionally `TELEGRAM_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
+Fill in `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
 means rebuilding.
 
 ### Build and deploy (from `chatbot/`)

@@ -103,10 +103,7 @@ pub async fn send_message(
     let chunks = split_message(&text, platform.message_limit());
     let result = match platform {
         Platform::Discord => env.discord.send(key, chunks, files).await,
-        Platform::Telegram => match &env.telegram {
-            Some(telegram) => telegram.send(key, chunks, files).await,
-            None => Err("Telegram is not configured".to_string()),
-        },
+        Platform::Telegram => env.telegram.send(key, chunks, files).await,
     };
     if let Err(err) = &result {
         eprintln!("[send] {platform} send failed: {err}");
