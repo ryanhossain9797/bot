@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use frankenstein::client_reqwest::Bot;
@@ -11,6 +12,7 @@ use frankenstein::types::{
 };
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, Error};
+use tokio::sync::mpsc;
 
 use crate::{
     services::{Delivery, deliver, normalize_text},
@@ -26,6 +28,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
+const CHAT_QUEUE_IDLE: Duration = Duration::from_secs(300);
 
 #[derive(Clone)]
 pub struct Telegram {
@@ -198,19 +201,25 @@ pub async fn run_telegram(poller: Poller) -> anyhow::Result<()> {
         .build();
 
     let mut albums = Albums::default();
+    let telegram = poller.telegram.clone();
+    let poller = Arc::new(poller);
+    let mut queues = ChatQueues::new(move |parts| {
+        let poller = Arc::clone(&poller);
+        async move { poller.handle(parts).await }
+    }, CHAT_QUEUE_IDLE);
 
     loop {
         params.timeout = Some(match albums.is_empty() {
             true => POLL_TIMEOUT_SECS,
             false => ALBUM_POLL_TIMEOUT_SECS,
         });
-        match poller.telegram.bot.get_updates(&params).await {
+        match telegram.bot.get_updates(&params).await {
             Ok(response) => {
                 for update in response.result {
                     params.offset = Some(i64::from(update.update_id) + 1);
                     if let UpdateContent::Message(message) = update.content {
                         for parts in albums.accept(*message, Instant::now()) {
-                            poller.handle(parts).await;
+                            queues.dispatch(parts);
                         }
                     }
                 }
@@ -228,9 +237,71 @@ pub async fn run_telegram(poller: Poller) -> anyhow::Result<()> {
             }
         }
         for parts in albums.take_quiet(Instant::now()) {
-            poller.handle(parts).await;
+            queues.dispatch(parts);
         }
     }
+}
+
+struct ChatQueues<F> {
+    handle: F,
+    idle: Duration,
+    workers: HashMap<String, mpsc::UnboundedSender<Vec<Message>>>,
+}
+
+impl<F, Fut> ChatQueues<F>
+where
+    F: Fn(Vec<Message>) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    fn new(handle: F, idle: Duration) -> Self {
+        Self {
+            handle,
+            idle,
+            workers: HashMap::new(),
+        }
+    }
+
+    fn dispatch(&mut self, parts: Vec<Message>) {
+        let Some(first) = parts.first() else {
+            return;
+        };
+        let key = conversation_key(first.chat.id, topic_id(first));
+        self.workers.retain(|_, worker| !worker.is_closed());
+        let parts = match self.workers.get(&key) {
+            Some(worker) => match worker.send(parts) {
+                Ok(()) => return,
+                Err(mpsc::error::SendError(parts)) => parts,
+            },
+            None => parts,
+        };
+        let (sender, receiver) = mpsc::unbounded_channel();
+        sender.send(parts).expect("the receiver is still held here");
+        tokio::spawn(run_chat_queue(receiver, self.handle.clone(), self.idle));
+        self.workers.insert(key, sender);
+    }
+}
+
+async fn run_chat_queue<F, Fut>(
+    mut receiver: mpsc::UnboundedReceiver<Vec<Message>>,
+    handle: F,
+    idle: Duration,
+) where
+    F: Fn(Vec<Message>) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    while let Ok(Some(parts)) = tokio::time::timeout(idle, receiver.recv()).await {
+        handle(parts).await;
+    }
+    receiver.close();
+    while let Ok(parts) = receiver.try_recv() {
+        handle(parts).await;
+    }
+}
+
+fn topic_id(message: &Message) -> Option<i32> {
+    message
+        .message_thread_id
+        .filter(|_| message.is_topic_message == Some(true))
 }
 
 struct Album {
@@ -461,14 +532,10 @@ impl Poller {
             text: album_text(parts.iter().map(|part| filter(part, &self.bot_user)).collect()),
             attachments,
         };
-        let thread_id = message
-            .message_thread_id
-            .filter(|_| message.is_topic_message == Some(true));
-
         deliver(Delivery {
             conversation: ConversationId(
                 Platform::Telegram,
-                conversation_key(message.chat.id, thread_id),
+                conversation_key(message.chat.id, topic_id(message)),
             ),
             is_group: message.chat.type_field != ChatType::Private,
             bot: bot_identity(&self.bot_user),
@@ -873,5 +940,38 @@ mod tests {
         let input = r#"{"ok":true,"result":[{"update_id":41,"x":{}},{"update_id":43,"y":1}]}"#;
         assert_eq!(last_update_id(input), Some(43));
         assert_eq!(last_update_id("not json"), None);
+    }
+
+    #[tokio::test]
+    async fn a_slow_chat_does_not_hold_up_others_and_each_chat_keeps_its_order() {
+        let at = |chat: i64, id: i32| {
+            message(serde_json::json!({"message_id": id, "chat": {"id": chat, "type": "private"}}))
+        };
+        let (done, mut finished) = mpsc::unbounded_channel();
+        let mut queues = ChatQueues::new(move |parts: Vec<Message>| {
+            let done = done.clone();
+            async move {
+                let message = &parts[0];
+                if message.message_id == 1 {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                done.send((message.chat.id, message.message_id)).unwrap();
+            }
+        }, Duration::from_millis(100));
+
+        queues.dispatch(vec![at(1, 1)]);
+        queues.dispatch(vec![at(2, 3)]);
+        queues.dispatch(vec![at(1, 2)]);
+        let mut order = Vec::new();
+        for _ in 0..3 {
+            order.push(finished.recv().await.unwrap());
+        }
+        assert_eq!(order, [(2, 3), (1, 1), (1, 2)]);
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(queues.workers.values().all(|worker| worker.is_closed()));
+        queues.dispatch(vec![at(1, 4)]);
+        assert_eq!(finished.recv().await.unwrap(), (1, 4));
+        assert_eq!(queues.workers.len(), 1);
     }
 }
