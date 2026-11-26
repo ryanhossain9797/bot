@@ -28,6 +28,7 @@ serenity = { version = "0.12", default-features = false, features = [
     "cache",
 ] }
 regex = "1.12"
+frankenstein = { version = "0.52", default-features = false, features = ["client-reqwest"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 reqwest = { version = "0.13", features = ["json"] }
 base64 = "0.22"

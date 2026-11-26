@@ -52,16 +52,42 @@ pub enum Attachment {
     Image {
         image: MessageImage,
         filename: String,
-        url: String,
+        url: Option<String>,
     },
     File {
         filename: String,
         content_type: Option<String>,
-        url: String,
+        url: Option<String>,
     },
 }
 
 impl Attachment {
+    pub fn image_or_file(
+        download: Result<Vec<u8>, String>,
+        filename: String,
+        mime: String,
+        url: Option<String>,
+    ) -> Attachment {
+        match download {
+            Ok(bytes) => Attachment::Image {
+                image: MessageImage::Hydrated(Image {
+                    bytes: Arc::new(bytes),
+                    mime,
+                }),
+                filename,
+                url,
+            },
+            Err(err) => {
+                eprintln!("[attachments] couldn't download image {filename} ({err}); listing it as a file");
+                Attachment::File {
+                    filename,
+                    content_type: Some(mime),
+                    url,
+                }
+            }
+        }
+    }
+
     pub fn downscaled(&self) -> Attachment {
         match self {
             Attachment::Image {
@@ -91,6 +117,11 @@ impl Attachment {
             Attachment::File { .. } => self.clone(),
         }
     }
+}
+
+pub struct OutgoingFile {
+    pub filename: String,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -166,7 +197,7 @@ mod tests {
                 mime: "image/png".to_string(),
             }),
             filename: "photo.png".to_string(),
-            url: "https://cdn/photo.png".to_string(),
+            url: Some("https://cdn/photo.png".to_string()),
         };
         let json = serde_json::to_string(&attachment).unwrap();
         let back: Attachment = serde_json::from_str(&json).unwrap();
@@ -174,7 +205,7 @@ mod tests {
             Attachment::Image { image, filename, url } => {
                 assert!(matches!(image, MessageImage::Dehydrated { byte_size: 3 }));
                 assert_eq!(filename, "photo.png");
-                assert_eq!(url, "https://cdn/photo.png");
+                assert_eq!(url.as_deref(), Some("https://cdn/photo.png"));
             }
             Attachment::File { .. } => panic!("expected image attachment"),
         }
@@ -185,7 +216,7 @@ mod tests {
         let attachment = Attachment::File {
             filename: "report.pdf".to_string(),
             content_type: Some("application/pdf".to_string()),
-            url: "https://cdn/report.pdf".to_string(),
+            url: Some("https://cdn/report.pdf".to_string()),
         };
         let json = serde_json::to_string(&attachment).unwrap();
         let back: Attachment = serde_json::from_str(&json).unwrap();
@@ -193,9 +224,24 @@ mod tests {
             Attachment::File { filename, content_type, url } => {
                 assert_eq!(filename, "report.pdf");
                 assert_eq!(content_type.as_deref(), Some("application/pdf"));
-                assert_eq!(url, "https://cdn/report.pdf");
+                assert_eq!(url.as_deref(), Some("https://cdn/report.pdf"));
             }
             Attachment::Image { .. } => panic!("expected file attachment"),
+        }
+    }
+
+    #[test]
+    fn failed_image_downloads_fall_back_to_files() {
+        let image = Attachment::image_or_file(Ok(vec![1]), "a.png".into(), "image/png".into(), None);
+        assert!(matches!(image, Attachment::Image { url: None, .. }));
+        let file = Attachment::image_or_file(Err("boom".into()), "a.png".into(), "image/png".into(), None);
+        match file {
+            Attachment::File { filename, content_type, url } => {
+                assert_eq!(filename, "a.png");
+                assert_eq!(content_type.as_deref(), Some("image/png"));
+                assert_eq!(url, None);
+            }
+            Attachment::Image { .. } => panic!("expected a file"),
         }
     }
 }

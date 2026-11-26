@@ -37,15 +37,29 @@ impl Platform {
                 "Platform: Discord — renders basic markdown but NOT tables. For tabular data use an aligned monospace table inside a ```code block```, never bare `| ... |` (it won't align)."
             }
             Platform::Telegram => {
-                "Platform: Telegram — supports a limited markdown subset (bold, italic, `code`, links); no tables, headers, or bullet lists. For tabular data use a ```code block```."
+                "Platform: Telegram — your reply is sent as plain text, so markdown is NOT rendered and its symbols show up literally. Write without markdown: no **bold**, headers, backticks or tables. Use line breaks and simple \"- \" lists."
             }
+        }
+    }
+
+    pub fn message_limit(&self) -> usize {
+        match self {
+            Platform::Discord => 2000,
+            Platform::Telegram => 2048,
+        }
+    }
+
+    pub fn upload_limit(&self) -> usize {
+        match self {
+            Platform::Discord => 8 * 1024 * 1024,
+            Platform::Telegram => 50 * 1024 * 1024,
         }
     }
 
     pub fn subtext(&self, text: &str) -> String {
         match self {
             Platform::Discord => format!("-# *{text}*"),
-            Platform::Telegram => format!("_{text}_"),
+            Platform::Telegram => format!("· {text}"),
         }
     }
 }
@@ -139,6 +153,53 @@ pub enum PostSend {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Identity {
+    pub id: u64,
+    pub name: String,
+}
+
+impl Identity {
+    pub fn new(id: u64, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+        }
+    }
+}
+
+impl Display for Identity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}) {}", self.id, self.name)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncomingMessage {
+    pub author: Identity,
+    pub replied_to: Option<Identity>,
+    pub text: Option<String>,
+    pub attachments: Vec<Attachment>,
+}
+
+impl IncomingMessage {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_none() && self.attachments.is_empty()
+    }
+
+    pub fn render(&self) -> String {
+        let mut line = format!("{}:", self.author);
+        if let Some(who) = &self.replied_to {
+            line.push_str(&format!(" [replying to {who}]"));
+        }
+        if let Some(text) = &self.text {
+            line.push(' ');
+            line.push_str(text);
+        }
+        line
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationMessage {
     pub text: String,
@@ -209,7 +270,9 @@ impl ConversationMessage {
             match attachment {
                 Attachment::Image { image, url, .. } => match image.hydrated() {
                     Some(img) => {
-                        blocks.push(ContentBlock::text(format!("url: {url}")));
+                        if let Some(url) = url {
+                            blocks.push(ContentBlock::text(format!("url: {url}")));
+                        }
                         blocks.push(ContentBlock::image(&img.mime, Arc::clone(&img.bytes)));
                     }
                     None => dehydrated += 1,
@@ -220,9 +283,10 @@ impl ConversationMessage {
                     url,
                 } => {
                     let kind = content_type.as_deref().unwrap_or("unknown type");
-                    blocks.push(ContentBlock::text(format!(
-                        "file {filename} ({kind}) url: {url}"
-                    )));
+                    blocks.push(ContentBlock::text(match url {
+                        Some(url) => format!("file {filename} ({kind}) url: {url}"),
+                        None => format!("file {filename} ({kind}), no download link"),
+                    }));
                 }
             }
         }
@@ -515,12 +579,7 @@ pub struct CompactionOutput {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConversationAction {
-    NewMessage {
-        msg: String,
-        user_id: String,
-        name: String,
-        attachments: Vec<Attachment>,
-    },
+    NewMessage(IncomingMessage),
     LLMDecisionResult(Result<LLMResponse, InterruptionReason>),
     MessageSent(Result<(), String>),
     ToolResult {
@@ -554,7 +613,7 @@ impl ToolResultData {
 impl std::fmt::Debug for ConversationAction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConversationAction::NewMessage { .. } => write!(f, "NewMessage"),
+            ConversationAction::NewMessage(_) => write!(f, "NewMessage"),
             ConversationAction::LLMDecisionResult(_) => write!(f, "LLMDecisionResult"),
             ConversationAction::MessageSent(_) => write!(f, "MessageSent"),
             ConversationAction::ToolResult { .. } => write!(f, "ToolResult"),
@@ -567,4 +626,55 @@ impl std::fmt::Debug for ConversationAction {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ConversationFailure {
     InvalidAction { action: String, state: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn incoming(text: Option<&str>, replied_to: Option<Identity>) -> IncomingMessage {
+        IncomingMessage {
+            author: Identity::new(7, "Alice"),
+            replied_to,
+            text: text.map(str::to_string),
+            attachments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn incoming_messages_render_the_sender_tag_and_reply_marker() {
+        let bot = Identity::new(1, "A2");
+        assert_eq!(incoming(Some("hi"), None).render(), "(7) Alice: hi");
+        assert_eq!(
+            incoming(Some("hi"), Some(bot.clone())).render(),
+            "(7) Alice: [replying to (1) A2] hi"
+        );
+        assert_eq!(incoming(None, Some(bot)).render(), "(7) Alice: [replying to (1) A2]");
+        assert_eq!(incoming(None, None).render(), "(7) Alice:");
+        assert!(incoming(None, None).is_empty());
+    }
+
+    #[test]
+    fn attachments_without_a_public_url_say_so() {
+        let message = ConversationMessage {
+            text: "(7) Alice:".into(),
+            queued: false,
+            user_id: "7".into(),
+            name: "Alice".into(),
+            attachments: vec![Attachment::File {
+                filename: "voice.ogg".into(),
+                content_type: Some("audio/ogg".into()),
+                url: None,
+            }],
+        };
+        let texts: Vec<String> = message
+            .content_blocks()
+            .into_iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["(7) Alice:", "file voice.ogg (audio/ogg), no download link"]);
+    }
 }

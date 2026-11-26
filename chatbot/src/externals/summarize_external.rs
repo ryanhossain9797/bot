@@ -12,7 +12,7 @@ use crate::types::media::Attachment;
 use crate::types::memory_manager::MemoryManagerAction;
 
 fn render_message(msg: &ConversationMessage) -> String {
-    let mut line = format!("{}: {}", msg.name, msg.to_content());
+    let mut line = msg.to_content();
     let images = msg
         .attachments
         .iter()

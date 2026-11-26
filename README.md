@@ -1,6 +1,6 @@
 # A2
 
-A2 is a Discord chatbot written in Rust. It runs its LLM in-process with `llama.cpp` (or, behind
+A2 is a Discord and Telegram chatbot written in Rust. It runs its LLM in-process with `llama.cpp` (or, behind
 a config switch, against an Anthropic-compatible API), calls tools over many rounds per turn, and
 keeps every conversation as a persistent state machine that survives restarts.
 
@@ -50,13 +50,44 @@ Inside `chatbot/src/`:
 | `llm/native/` | Everything `llama.cpp`: model packs, prompt rendering, the decode loop, output parsers |
 | `prompts.rs` | System prompts and sampling settings |
 | `tools.rs` | Tool definitions and argument binding |
+| `services.rs` | `deliver`: the one way an incoming platform message reaches a conversation |
 | `services/discord.rs` | Discord gateway handling |
+| `services/telegram.rs` | Telegram long polling (`getUpdates`) via `frankenstein` |
+| `types/` | Shared data and model-facing formats: sender tags, reply markers, mentions, attachments |
 | `configuration.rs` | Tokens and switches (gitignored, copy from `configuration.rs.template`) |
+
+## Telegram
+
+Telegram runs alongside Discord. The differences from Discord:
+
+- **Conversations:** one per chat, and one per topic in forum groups (`ConversationId` is
+  `chat_id` or `chat_id/topic_id`).
+- **Replies:** sent as plain text (the prompt tells the model not to use markdown), split at
+  2,048 characters. `[[attach_…]]` files go out after the text: PNG, JPEG and WebP as photos and GIFs as
+  animations, so they show inline as on Discord; anything else, or an image Telegram rejects, as a
+  document.
+- **Mentions:** the model writes `<@ID>`, or `<@handle>` when all it has is an @handle; parsing
+  is shared in `types/mention.rs`. Discord keeps `<@ID>` native (sends allow only user mentions, never
+  roles or `@everyone`) and writes handles as plain `@handle`. Telegram looks each id up with
+  `getChatMember` and replaces the tag with the user's name plus a `text_mention` entity, and
+  writes handles as `@handle`, which Telegram links itself.
+- **Replies:** on both platforms, a reply shows the model `[replying to (ID) Name]` after the
+  sender tag, so a reply to the bot counts as addressing it.
+- **Albums:** Telegram sends each album item as its own message. The poller holds the parts
+  (keyed by chat and `media_group_id`) until none has arrived for a second, then delivers them as
+  one message, as Discord does. If several items have their own caption, all are kept and
+  numbered by position (`[item 1] … [item 3] …`) so the model can match them to the images.
+- **Incoming files:** photos and image documents up to 20 MB are downloaded and shown to the
+  model. Other files, videos, audio, voice messages and round video messages are listed by name
+  and type only: Telegram file URLs contain the bot token, so the model never sees one. Stickers,
+  polls, locations and contacts are ignored, as on Discord.
+- **Outgoing files:** each platform sets its own upload limit (`Platform::upload_limit`): 8 MB on
+  Discord, 50 MB on Telegram. A larger file is not sent; the reply gets a note saying why.
 
 ## How a turn runs
 
 ```
-Discord message
+Discord / Telegram message
       │
       ▼
 ConversationMachine ── queued in `pending`
@@ -64,7 +95,7 @@ ConversationMachine ── queued in `pending`
       ▼
 AwaitingLLMDecision ──▶ llm_external: build request → LLM backend → parse
       │
-      ├── reply text ──▶ SendingMessage ──▶ Discord
+      ├── reply text ──▶ SendingMessage ──▶ Discord / Telegram
       └── tool calls ──▶ RunningTools ──▶ results fed back ──▶ AwaitingLLMDecision
                                                                (until no tools, or 30 rounds)
       ▼
@@ -142,6 +173,8 @@ modes on one prompt.
 - Docker. The deploy targets an AMD GPU (Vulkan) host.
 - A Discord bot token, with the **Message Content** privileged intent enabled. Without it the
   bot can't read channel messages that don't mention it.
+- A Telegram bot token from @BotFather. To let the bot read group messages that don't mention it, turn off privacy mode
+  (`/setprivacy`) before adding it to a group.
 - The model packs' GGUF files in `chatbot/models/`. They're copied into the base image, not
   mounted, so use real files or hard links; `docker build` doesn't follow symlinks.
 
@@ -151,7 +184,7 @@ modes on one prompt.
 cp chatbot/src/configuration.rs.template chatbot/src/configuration.rs
 ```
 
-Fill in `DISCORD_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
+Fill in `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, `SEARXNG_URL` and the switches. Values are compiled in, so changing one
 means rebuilding.
 
 ### Build and deploy (from `chatbot/`)

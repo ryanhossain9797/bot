@@ -1,6 +1,6 @@
 use crate::externals::container::{docker, docker_ok, ensure_image, is_running, revive_if_present};
 use crate::types::conversation::ToolResultData;
-use crate::types::media::{Image, MessageImage};
+use crate::types::media::{Image, MessageImage, OutgoingFile};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
@@ -170,14 +170,11 @@ pub async fn pull_image(conversation_id: &str, path: &str) -> Result<MessageImag
     Ok(MessageImage::Hydrated(image).downscaled())
 }
 
-pub struct PulledFile {
-    pub filename: String,
-    pub bytes: Vec<u8>,
-}
-
-pub(crate) const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
-
-pub async fn pull_file(conversation_id: &str, path: &str) -> Result<PulledFile, String> {
+pub async fn pull_file(
+    conversation_id: &str,
+    path: &str,
+    max_bytes: usize,
+) -> Result<OutgoingFile, String> {
     let name = worker_name(conversation_id);
     ensure_worker(&name).await?;
 
@@ -193,9 +190,9 @@ pub async fn pull_file(conversation_id: &str, path: &str) -> Result<PulledFile, 
     if bytes.is_empty() {
         return Err(format!("'{path}' is empty — nothing to attach"));
     }
-    if bytes.len() > MAX_ATTACHMENT_BYTES {
+    if bytes.len() > max_bytes {
         return Err(format!(
-            "'{path}' is {} bytes, over the {MAX_ATTACHMENT_BYTES}-byte attachment limit",
+            "'{path}' is {} bytes, over the {max_bytes}-byte attachment limit",
             bytes.len()
         ));
     }
@@ -205,7 +202,7 @@ pub async fn pull_file(conversation_id: &str, path: &str) -> Result<PulledFile, 
         .find(|s| !s.is_empty())
         .unwrap_or("attachment")
         .to_string();
-    Ok(PulledFile { filename, bytes })
+    Ok(OutgoingFile { filename, bytes })
 }
 
 pub async fn read_file(conversation_id: &str, path: &str) -> Result<String, String> {

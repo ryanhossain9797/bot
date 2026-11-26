@@ -268,15 +268,15 @@ mod tests {
         let history = vec![
             e(HistoryEntryKind::Summary("earlier: Alice likes Rust".into())),
             e(HistoryEntryKind::Input(LLMInput::ConversationMessage(msg("hey look at this", false, vec![
-                Attachment::Image { image: img(vec![1, 1, 1]), filename: "x.png".into(), url: "https://cdn/x.png".into() },
-                Attachment::File { filename: "r.pdf".into(), content_type: Some("application/pdf".into()), url: "https://cdn/r.pdf".into() },
-                Attachment::Image { image: MessageImage::Dehydrated { byte_size: 9 }, filename: "old.png".into(), url: "https://cdn/old.png".into() },
+                Attachment::Image { image: img(vec![1, 1, 1]), filename: "x.png".into(), url: Some("https://cdn/x.png".into()) },
+                Attachment::File { filename: "r.pdf".into(), content_type: Some("application/pdf".into()), url: Some("https://cdn/r.pdf".into()) },
+                Attachment::Image { image: MessageImage::Dehydrated { byte_size: 9 }, filename: "old.png".into(), url: Some("https://cdn/old.png".into()) },
             ])))),
             e(HistoryEntryKind::Output(LLMResponse { thoughts: "hmm".into(), reply: Reply::Empty, tool_calls: vec![c0.clone(), c1.clone()] })),
             e(HistoryEntryKind::Input(LLMInput::ToolResults(vec![
                 ToolResult { call: c0, data: ToolResultData { actual: "FULL search".into(), simplified: "simple search".into(), image_for_assistant: None } },
                 ToolResult { call: c1, data: ToolResultData { actual: "".into(), simplified: "".into(), image_for_assistant: Some(img(vec![2, 2])) } },
-            ], Some(msg("also this", true, vec![Attachment::Image { image: img(vec![3]), filename: "y.png".into(), url: "https://cdn/y.png".into() }]))))),
+            ], Some(msg("also this", true, vec![Attachment::Image { image: img(vec![3]), filename: "y.png".into(), url: Some("https://cdn/y.png".into()) }]))))),
             e(HistoryEntryKind::Output(LLMResponse { thoughts: "".into(), reply: Reply::Said("here you go".into()), tool_calls: vec![] })),
             e(HistoryEntryKind::OutputInterrupted(InterruptionReason::TimedOut)),
             e(HistoryEntryKind::Input(LLMInput::SystemMessage(vec![
