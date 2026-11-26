@@ -50,8 +50,10 @@ Inside `chatbot/src/`:
 | `llm/native/` | Everything `llama.cpp`: model packs, prompt rendering, the decode loop, output parsers |
 | `prompts.rs` | System prompts and sampling settings |
 | `tools.rs` | Tool definitions and argument binding |
+| `services.rs` | `deliver`: the one way an incoming platform message reaches a conversation |
 | `services/discord.rs` | Discord gateway handling |
 | `services/telegram.rs` | Telegram long polling (`getUpdates`) via `frankenstein` |
+| `types/` | Shared data and model-facing formats: sender tags, reply markers, mentions, attachments |
 | `configuration.rs` | Tokens and switches (gitignored, copy from `configuration.rs.template`) |
 
 ## Telegram
@@ -65,7 +67,7 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
   animations, so they show inline as on Discord; anything else, or an image Telegram rejects, as a
   document.
 - **Mentions:** the model writes `<@ID>`, or `<@handle>` when all it has is an @handle; parsing
-  is shared in `services.rs`. Discord keeps `<@ID>` native (sends allow only user mentions, never
+  is shared in `types/mention.rs`. Discord keeps `<@ID>` native (sends allow only user mentions, never
   roles or `@everyone`) and writes handles as plain `@handle`. Telegram looks each id up with
   `getChatMember` and replaces the tag with the user's name plus a `text_mention` entity, and
   writes handles as `@handle`, which Telegram links itself.
@@ -79,6 +81,8 @@ Telegram runs alongside Discord when `TELEGRAM_TOKEN` is set. The differences fr
   model. Other files, videos, audio, voice messages and round video messages are listed by name
   and type only: Telegram file URLs contain the bot token, so the model never sees one. Stickers,
   polls, locations and contacts are ignored, as on Discord.
+- **Outgoing files:** each platform sets its own upload limit (`Platform::upload_limit`): 8 MB on
+  Discord, 50 MB on Telegram. A larger file is not sent; the reply gets a note saying why.
 
 ## How a turn runs
 

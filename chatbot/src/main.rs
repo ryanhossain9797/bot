@@ -9,8 +9,7 @@ mod state_machines;
 mod tools;
 mod types;
 
-use serenity::all::{Http, HttpBuilder};
-use services::discord::*;
+use services::discord::{Discord, run_discord};
 use services::telegram::{Telegram, run_telegram};
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -24,7 +23,7 @@ pub const BOT_NAME: &str = "A2";
 
 #[derive(Clone)]
 pub struct Env {
-    discord_http: Arc<Http>,
+    discord: Discord,
     telegram: Option<Telegram>,
     llm: Arc<LlmBackend>,
     announce_tool_use: bool,
@@ -35,8 +34,6 @@ fn telegram_token() -> Option<&'static str> {
 }
 
 async fn init_env() -> anyhow::Result<Env> {
-    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
-
     let llm = match configuration::llm::BACKEND {
         LlmBackendConfig::Native => LlmBackend::Native(NativeLlm::load().await?),
         LlmBackendConfig::Remote(config) => {
@@ -50,12 +47,11 @@ async fn init_env() -> anyhow::Result<Env> {
         }
     };
 
-    let discord_http = Arc::new(HttpBuilder::new(discord_token).build());
-
+    let discord = Discord::new(configuration::client_tokens::DISCORD_TOKEN);
     let telegram = telegram_token().map(Telegram::new);
 
     Ok(Env {
-        discord_http,
+        discord,
         telegram,
         llm: Arc::new(llm),
         announce_tool_use: configuration::features::ANNOUNCE_TOOL_USE,
@@ -73,6 +69,7 @@ async fn main() -> anyhow::Result<!> {
 
     re_framework::init_turso_store("framework_db/chatbot.db").await?;
     let env = init_env().await?;
+    let discord = env.discord.clone();
     let telegram = env.telegram.clone();
     re_framework::register::<ConversationMachine>(env.clone());
     re_framework::register::<MemoryManagerMachine>(env.clone());
@@ -97,11 +94,9 @@ async fn main() -> anyhow::Result<!> {
         }
     });
 
-    let discord_token = configuration::client_tokens::DISCORD_TOKEN;
-
     let mut set = JoinSet::new();
 
-    set.spawn(run_discord(prepare_discord_client(discord_token).await?));
+    set.spawn(run_discord(discord.client().await?));
     match telegram {
         Some(telegram) => {
             set.spawn(run_telegram(telegram));

@@ -298,23 +298,15 @@ fn conversation_transition(
     let from = state_label(&conversation.state);
 
     let state = match (conversation.state, action) {
-        (
-            user_state,
-            ConversationAction::NewMessage {
-                msg,
-                user_id,
-                name,
-                attachments,
-            },
-        ) => {
+        (user_state, ConversationAction::NewMessage(incoming)) => {
             let mut pending = conversation.pending;
             let queued = !matches!(&user_state, ConversationState::Idle { .. });
             pending.push(Pending::Message(ConversationMessage {
-                text: msg.clone(),
+                text: incoming.render(),
                 queued,
-                user_id: user_id.clone(),
-                name: name.clone(),
-                attachments: attachments.iter().map(Attachment::downscaled).collect(),
+                user_id: incoming.author.id.to_string(),
+                name: incoming.author.name.clone(),
+                attachments: incoming.attachments.iter().map(Attachment::downscaled).collect(),
             }));
 
             Ok(Conversation {

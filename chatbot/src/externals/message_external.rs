@@ -1,9 +1,9 @@
 use std::sync::{Arc, LazyLock};
 
 use crate::{
-    externals::bash_container_external::{pull_file, PulledFile},
-    services::discord,
+    externals::bash_container_external::pull_file,
     types::conversation::{ConversationAction, Platform, ConversationId},
+    types::media::OutgoingFile,
     Env,
 };
 use regex::Regex;
@@ -88,9 +88,9 @@ pub async fn send_message(
     let text = compose(platform, outbound.message, &outbound.tool_names);
     let (mut text, attach_paths) = extract_attach_paths(&text);
 
-    let mut files: Vec<PulledFile> = Vec::new();
+    let mut files: Vec<OutgoingFile> = Vec::new();
     for path in &attach_paths {
-        match pull_file(&conversation_id.to_string(), path).await {
+        match pull_file(&conversation_id.to_string(), path, platform.upload_limit()).await {
             Ok(file) => files.push(file),
             Err(err) => {
                 eprintln!("[send] attach '{path}' failed: {err}");
@@ -102,7 +102,7 @@ pub async fn send_message(
 
     let chunks = split_message(&text, platform.message_limit());
     let result = match platform {
-        Platform::Discord => discord::send(&env.discord_http, key, chunks, files).await,
+        Platform::Discord => env.discord.send(key, chunks, files).await,
         Platform::Telegram => match &env.telegram {
             Some(telegram) => telegram.send(key, chunks, files).await,
             None => Err("Telegram is not configured".to_string()),

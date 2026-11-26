@@ -1,44 +1,83 @@
-use std::sync::LazyLock;
+use std::sync::Arc;
 
-use regex::Regex;
 use serenity::all::{
-    ChannelId, CreateAllowedMentions, CreateAttachment, CreateMessage, Http, MessageType,
+    ChannelId, CreateAllowedMentions, CreateAttachment, CreateMessage, Http, HttpBuilder,
+    MessageType, User,
 };
 use serenity::{async_trait, model::channel::Message as DMessage, prelude::*};
 
 use crate::{
-    externals::bash_container_external::PulledFile,
-    services::{Segment, identity, mention_segments, with_reply_marker},
-    state_machines::conversation_state_machine::ConversationMachine,
-    types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
-    types::media::{Attachment, Image, MessageImage},
+    services::{Delivery, deliver, normalize_text},
+    types::conversation::{ConversationId, Identity, IncomingMessage, Platform},
+    types::media::{Attachment, OutgoingFile},
+    types::mention::{Segment, mention_segments},
 };
 
-pub async fn prepare_discord_client(discord_token: &str) -> anyhow::Result<Client> {
-    let intents = GatewayIntents::DIRECT_MESSAGES
-        | GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::MESSAGE_CONTENT;
-
-    let http = serenity::all::HttpBuilder::new(discord_token).build();
-    let bot_user = http.get_current_user().await?;
-    let bot_user_id = bot_user.id.get();
-    let bot_name = bot_user
-        .global_name
-        .clone()
-        .unwrap_or_else(|| bot_user.name.clone());
-
-    let client = Client::builder(discord_token, intents)
-        .event_handler(Handler {
-            bot_user_id,
-            bot_name,
-        })
-        .await?;
-
-    Ok(client)
+#[derive(Clone)]
+pub struct Discord {
+    http: Arc<Http>,
+    token: String,
 }
 
-static WHITESPACE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
+impl Discord {
+    pub fn new(token: &str) -> Self {
+        Self {
+            http: Arc::new(HttpBuilder::new(token).build()),
+            token: token.to_string(),
+        }
+    }
+
+    pub async fn client(&self) -> anyhow::Result<Client> {
+        let intents = GatewayIntents::DIRECT_MESSAGES
+            | GatewayIntents::GUILD_MESSAGES
+            | GatewayIntents::MESSAGE_CONTENT;
+
+        let bot_user = self.http.get_current_user().await?;
+        let bot = Identity::new(bot_user.id.get(), display_name(&bot_user));
+
+        Ok(Client::builder(&self.token, intents)
+            .event_handler(Handler { bot })
+            .await?)
+    }
+
+    pub async fn send(
+        &self,
+        channel_key: &str,
+        chunks: Vec<String>,
+        files: Vec<OutgoingFile>,
+    ) -> Result<(), String> {
+        let channel = channel_key
+            .parse::<u64>()
+            .map(ChannelId::new)
+            .map_err(|err| format!("invalid channel id {channel_key:?}: {err}"))?;
+        let files: Vec<CreateAttachment> = files
+            .into_iter()
+            .map(|file| CreateAttachment::bytes(file.bytes, file.filename))
+            .collect();
+
+        let mut messages: Vec<CreateMessage> = chunks
+            .iter()
+            .map(|chunk| new_message().content(render_mentions(chunk)))
+            .collect();
+        if !files.is_empty() {
+            let last = messages.pop().unwrap_or_else(new_message);
+            messages.push(last.files(files));
+        }
+
+        for message in messages {
+            channel
+                .send_message(&self.http, message)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(())
+    }
+}
+
+pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
+    client.start().await?;
+    Err(anyhow::anyhow!("Discord failed"))
+}
 
 fn new_message() -> CreateMessage {
     CreateMessage::new().allowed_mentions(CreateAllowedMentions::new().all_users(true))
@@ -55,111 +94,62 @@ fn render_mentions(text: &str) -> String {
         .collect()
 }
 
-pub async fn send(
-    http: &Http,
-    channel_key: &str,
-    chunks: Vec<String>,
-    files: Vec<PulledFile>,
-) -> Result<(), String> {
-    let channel = channel_key
-        .parse::<u64>()
-        .map(ChannelId::new)
-        .map_err(|err| format!("invalid channel id {channel_key:?}: {err}"))?;
-    let files: Vec<CreateAttachment> = files
-        .into_iter()
-        .map(|file| CreateAttachment::bytes(file.bytes, file.filename))
-        .collect();
-
-    let mut messages: Vec<CreateMessage> = chunks
-        .iter()
-        .map(|chunk| new_message().content(render_mentions(chunk)))
-        .collect();
-    if !files.is_empty() {
-        let last = messages.pop().unwrap_or_else(new_message);
-        messages.push(last.files(files));
-    }
-
-    for message in messages {
-        channel
-            .send_message(http, message)
-            .await
-            .map_err(|err| err.to_string())?;
-    }
-    Ok(())
-}
-
-pub async fn run_discord(mut client: Client) -> anyhow::Result<()> {
-    client.start().await?;
-    Err(anyhow::anyhow!("Discord failed"))
+fn display_name(user: &User) -> String {
+    user.global_name.clone().unwrap_or_else(|| user.name.clone())
 }
 
 struct Handler {
-    bot_user_id: u64,
-    bot_name: String,
+    bot: Identity,
 }
 
 impl Handler {
-    fn replied_to(&self, message: &DMessage) -> Option<String> {
+    fn identity(&self, user: &User) -> Identity {
+        match user.id.get() == self.bot.id {
+            true => self.bot.clone(),
+            false => Identity::new(user.id.get(), display_name(user)),
+        }
+    }
+
+    fn replied_to(&self, message: &DMessage) -> Option<Identity> {
         if message.kind != MessageType::InlineReply {
             return None;
         }
-        let author = &message.referenced_message.as_deref()?.author;
-        let id = author.id.get();
-        let name = match id == self.bot_user_id {
-            true => self.bot_name.clone(),
-            false => author.global_name.clone().unwrap_or_else(|| author.name.clone()),
-        };
-        Some(identity(&name, id))
+        Some(self.identity(&message.referenced_message.as_deref()?.author))
+    }
+
+    fn filter(&self, message: &DMessage) -> Option<String> {
+        let mut text = message.content.clone();
+        for user in &message.mentions {
+            let id = user.id.get();
+            let label = self.identity(user).to_string();
+            text = text
+                .replace(&format!("<@{id}>"), &label)
+                .replace(&format!("<@!{id}>"), &label);
+        }
+        normalize_text(&text)
     }
 }
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, _ctx: Context, message: DMessage) {
-        if message.author.id.get() == self.bot_user_id {
+        if message.author.id.get() == self.bot.id {
             return;
         }
 
-        let attachments = collect_attachments(&message).await;
-        let text = filter(&message, self.bot_user_id, &self.bot_name);
-
-        if text.is_none() && attachments.is_empty() {
-            return;
-        }
-
-        let body = with_reply_marker(text, self.replied_to(&message)).unwrap_or_default();
-
-        let is_group = message.guild_id.is_some();
-        let author_id = message.author.id.get();
-        let user_id = author_id.to_string();
-        let name = message
-            .author
-            .global_name
-            .clone()
-            .unwrap_or_else(|| message.author.name.clone());
-
-        let msg = format!("{}: {body}", identity(&name, author_id));
-
-        let bot_identity = identity(&self.bot_name, self.bot_user_id);
-
-        let conversation_id =
-            ConversationId(Platform::Discord, message.channel_id.get().to_string());
-
-        let handle = re_framework::handle::<ConversationMachine>();
-
-        let constructor = ConversationConstructor {
-            id: conversation_id,
-            is_group,
-            bot_identity,
+        let incoming = IncomingMessage {
+            author: self.identity(&message.author),
+            replied_to: self.replied_to(&message),
+            text: self.filter(&message),
+            attachments: collect_attachments(&message).await,
         };
-        let action = ConversationAction::NewMessage {
-            msg,
-            user_id,
-            name,
-            attachments,
-        };
-
-        handle.act_maybe_construct(constructor, action).await;
+        deliver(Delivery {
+            conversation: ConversationId(Platform::Discord, message.channel_id.get().to_string()),
+            is_group: message.guild_id.is_some(),
+            bot: self.bot.clone(),
+            message: incoming,
+        })
+        .await;
     }
 }
 
@@ -167,60 +157,24 @@ async fn collect_attachments(message: &DMessage) -> Vec<Attachment> {
     let mut attachments = Vec::new();
     for attachment in &message.attachments {
         let filename = attachment.filename.clone();
-        let url = attachment.url.clone();
-        let content_type = attachment.content_type.clone();
-        let is_image = content_type
-            .as_deref()
-            .is_some_and(|mime| mime.starts_with("image/"));
-
-        let as_file = || Attachment::File {
-            filename: filename.clone(),
-            content_type: content_type.clone(),
-            url: url.clone(),
-        };
-
-        match is_image {
-            false => attachments.push(as_file()),
-            true => match attachment.download().await {
-                Ok(bytes) => attachments.push(Attachment::Image {
-                    image: MessageImage::Hydrated(Image {
-                        bytes: std::sync::Arc::new(bytes),
-                        mime: content_type.clone().unwrap_or_default(),
-                    }),
-                    filename: filename.clone(),
-                    url: url.clone(),
-                }),
-                Err(err) => {
-                    eprintln!("[discord] failed to download image {filename}: {err}");
-                    attachments.push(as_file());
-                }
+        let url = Some(attachment.url.clone());
+        let image_mime = attachment
+            .content_type
+            .clone()
+            .filter(|mime| mime.starts_with("image/"));
+        attachments.push(match image_mime {
+            Some(mime) => {
+                let download = attachment.download().await.map_err(|err| err.to_string());
+                Attachment::image_or_file(download, filename, mime, url)
+            }
+            None => Attachment::File {
+                filename,
+                content_type: attachment.content_type.clone(),
+                url,
             },
-        }
+        });
     }
     attachments
-}
-
-fn filter(message: &DMessage, bot_user_id: u64, bot_name: &str) -> Option<String> {
-    let mut text = message.content.clone();
-    for user in &message.mentions {
-        let id = user.id.get();
-        let name = if id == bot_user_id {
-            bot_name.to_string()
-        } else {
-            user.global_name
-                .clone()
-                .unwrap_or_else(|| user.name.clone())
-        };
-        let label = identity(&name, id);
-        text = text
-            .replace(&format!("<@{id}>"), &label)
-            .replace(&format!("<@!{id}>"), &label);
-    }
-
-    let text = text.trim().trim_start_matches('/').trim();
-    let text = WHITESPACE.replace_all(text, " ").trim().to_string();
-
-    (!text.is_empty()).then_some(text)
 }
 
 #[cfg(test)]

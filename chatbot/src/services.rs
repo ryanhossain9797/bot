@@ -2,73 +2,60 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
+use crate::{
+    state_machines::conversation_state_machine::ConversationMachine,
+    types::conversation::{
+        ConversationAction, ConversationConstructor, ConversationId, Identity, IncomingMessage,
+    },
+};
+
 pub mod discord;
 pub mod telegram;
 
-static MENTION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"<@!?@?([A-Za-z0-9_.]{1,64})>").expect("static mention regex is valid")
-});
+static WHITESPACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
 
-pub fn identity(name: &str, id: u64) -> String {
-    format!("({id}) {name}")
+pub fn normalize_text(text: &str) -> Option<String> {
+    let text = text.trim().trim_start_matches('/').trim();
+    let text = WHITESPACE.replace_all(text, " ").trim().to_string();
+    (!text.is_empty()).then_some(text)
 }
 
-pub fn with_reply_marker(text: Option<String>, replied_to: Option<String>) -> Option<String> {
-    match (replied_to, text) {
-        (Some(who), Some(text)) => Some(format!("[replying to {who}] {text}")),
-        (Some(who), None) => Some(format!("[replying to {who}]")),
-        (None, text) => text,
-    }
+pub struct Delivery {
+    pub conversation: ConversationId,
+    pub is_group: bool,
+    pub bot: Identity,
+    pub message: IncomingMessage,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum Segment<'a> {
-    Text(&'a str),
-    Id(u64),
-    Handle(&'a str),
-}
-
-pub fn mention_segments(text: &str) -> Vec<Segment<'_>> {
-    let mut segments = Vec::new();
-    let mut last = 0;
-    for cap in MENTION.captures_iter(text) {
-        let whole = cap.get(0).expect("capture 0 is the whole match");
-        let target = cap.get(1).expect("the pattern has one group").as_str();
-        if whole.start() > last {
-            segments.push(Segment::Text(&text[last..whole.start()]));
-        }
-        segments.push(match target.parse() {
-            Ok(id) => Segment::Id(id),
-            Err(_) => Segment::Handle(target),
-        });
-        last = whole.end();
+pub async fn deliver(delivery: Delivery) {
+    let Delivery {
+        conversation,
+        is_group,
+        bot,
+        message,
+    } = delivery;
+    if message.author.id == bot.id || message.is_empty() {
+        return;
     }
-    if last < text.len() {
-        segments.push(Segment::Text(&text[last..]));
-    }
-    segments
+    let constructor = ConversationConstructor {
+        id: conversation,
+        is_group,
+        bot_identity: bot.to_string(),
+    };
+    re_framework::handle::<ConversationMachine>()
+        .act_maybe_construct(constructor, ConversationAction::NewMessage(message))
+        .await;
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::normalize_text;
 
     #[test]
-    fn mentions_split_into_ids_and_handles() {
-        assert_eq!(
-            mention_segments("hi <@123>, <@!45> and <@bob_k> or <@@ann.b>; <@ not> <@a b>"),
-            vec![
-                Segment::Text("hi "),
-                Segment::Id(123),
-                Segment::Text(", "),
-                Segment::Id(45),
-                Segment::Text(" and "),
-                Segment::Handle("bob_k"),
-                Segment::Text(" or "),
-                Segment::Handle("ann.b"),
-                Segment::Text("; <@ not> <@a b>"),
-            ]
-        );
-        assert!(mention_segments("").is_empty());
+    fn text_is_trimmed_collapsed_and_loses_a_leading_slash() {
+        assert_eq!(normalize_text("  /ask   about\n\nthis ").as_deref(), Some("ask about this"));
+        assert_eq!(normalize_text(" / "), None);
+        assert_eq!(normalize_text(""), None);
     }
 }

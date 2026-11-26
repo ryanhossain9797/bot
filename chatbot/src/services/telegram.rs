@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use frankenstein::client_reqwest::Bot;
@@ -12,14 +11,12 @@ use frankenstein::types::{
 };
 use frankenstein::updates::UpdateContent;
 use frankenstein::{AsyncTelegramApi, Error};
-use regex::Regex;
 
 use crate::{
-    externals::bash_container_external::PulledFile,
-    services::{Segment, identity, mention_segments, with_reply_marker},
-    state_machines::conversation_state_machine::ConversationMachine,
-    types::conversation::{ConversationAction, ConversationConstructor, ConversationId, Platform},
-    types::media::{Attachment, Image, MessageImage},
+    services::{Delivery, deliver, normalize_text},
+    types::conversation::{ConversationId, Identity, IncomingMessage, Platform},
+    types::media::{Attachment, OutgoingFile},
+    types::mention::{Segment, mention_segments},
 };
 
 const POLL_TIMEOUT_SECS: u32 = 30;
@@ -29,10 +26,6 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(45);
-pub const NO_PUBLIC_URL: &str = "none (Telegram attachment)";
-
-static WHITESPACE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\s+").expect("static whitespace regex is valid"));
 
 #[derive(Clone)]
 pub struct Telegram {
@@ -52,7 +45,7 @@ impl Telegram {
         &self,
         key: &str,
         chunks: Vec<String>,
-        files: Vec<PulledFile>,
+        files: Vec<OutgoingFile>,
     ) -> Result<(), String> {
         let (chat_id, thread_id) = parse_conversation_key(key)
             .ok_or_else(|| format!("invalid Telegram conversation key {key:?}"))?;
@@ -110,7 +103,7 @@ impl Telegram {
         chat_id: i64,
         thread_id: Option<i32>,
         dir: &std::path::Path,
-        file: &PulledFile,
+        file: &OutgoingFile,
         waited: &mut Duration,
     ) -> Result<(), String> {
         let staging = |err: std::io::Error| format!("staging {}: {err}", file.filename);
@@ -455,60 +448,41 @@ impl Poller {
         let Some(author) = message.from.as_deref() else {
             return;
         };
-        if author.id == self.bot_user.id {
-            return;
-        }
 
         let mut attachments = Vec::new();
         for part in &parts {
             attachments.extend(self.collect_attachments(part).await);
         }
-        let text = album_text(parts.iter().map(|part| filter(part, &self.bot_user)).collect());
-        if text.is_none() && attachments.is_empty() {
-            return;
-        }
-        let replied_to = parts.iter().find_map(|part| self.replied_to(part));
-        let text = with_reply_marker(text, replied_to);
-
-        let name = full_name(author);
-        let msg = format!("{}: {}", identity(&name, author.id), text.unwrap_or_default());
+        let incoming = IncomingMessage {
+            author: Identity::new(author.id, full_name(author)),
+            replied_to: parts.iter().find_map(|part| self.replied_to(part)),
+            text: album_text(parts.iter().map(|part| filter(part, &self.bot_user)).collect()),
+            attachments,
+        };
         let thread_id = message
             .message_thread_id
             .filter(|_| message.is_topic_message == Some(true));
 
-        let constructor = ConversationConstructor {
-            id: ConversationId(
+        deliver(Delivery {
+            conversation: ConversationId(
                 Platform::Telegram,
                 conversation_key(message.chat.id, thread_id),
             ),
             is_group: message.chat.type_field != ChatType::Private,
-            bot_identity: identity(&self.bot_user.first_name, self.bot_user.id),
-        };
-        let action = ConversationAction::NewMessage {
-            msg,
-            user_id: author.id.to_string(),
-            name,
-            attachments,
-        };
-
-        re_framework::handle::<ConversationMachine>()
-            .act_maybe_construct(constructor, action)
-            .await;
+            bot: bot_identity(&self.bot_user),
+            message: incoming,
+        })
+        .await;
     }
 
-    fn replied_to(&self, message: &Message) -> Option<String> {
+    fn replied_to(&self, message: &Message) -> Option<Identity> {
         let replied = message.reply_to_message.as_deref()?;
         if message.is_topic_message == Some(true)
             && Some(replied.message_id) == message.message_thread_id
         {
             return None;
         }
-        let author = replied.from.as_deref()?;
-        let name = match author.id == self.bot_user.id {
-            true => self.bot_user.first_name.clone(),
-            false => full_name(author),
-        };
-        Some(identity(&name, author.id))
+        Some(user_identity(replied.from.as_deref()?, &self.bot_user))
     }
 
     async fn collect_attachments(&self, message: &Message) -> Vec<Attachment> {
@@ -543,7 +517,7 @@ impl Poller {
                 None => Attachment::File {
                     filename,
                     content_type: document.mime_type.clone(),
-                    url: NO_PUBLIC_URL.to_string(),
+                    url: None,
                 },
             });
         }
@@ -565,24 +539,7 @@ impl Poller {
                 .await
                 .unwrap_or_else(|_| Err(format!("timed out after {DOWNLOAD_TIMEOUT:?}"))),
         };
-        match downloaded {
-            Ok(bytes) => Attachment::Image {
-                image: MessageImage::Hydrated(Image {
-                    bytes: Arc::new(bytes),
-                    mime,
-                }),
-                filename,
-                url: NO_PUBLIC_URL.to_string(),
-            },
-            Err(err) => {
-                eprintln!("[telegram] failed to download image {filename}: {err}");
-                Attachment::File {
-                    filename,
-                    content_type: Some(mime),
-                    url: NO_PUBLIC_URL.to_string(),
-                }
-            }
-        }
+        Attachment::image_or_file(downloaded, filename, mime, None)
     }
 }
 
@@ -609,7 +566,7 @@ fn listed_media(message: &Message) -> Vec<Attachment> {
         Attachment::File {
             filename: name.cloned().unwrap_or_else(|| format!("{kind}_{unique}.{}", default.1)),
             content_type: Some(mime.cloned().unwrap_or_else(|| default.0.to_string())),
-            url: NO_PUBLIC_URL.to_string(),
+            url: None,
         }
     };
     let mp4 = ("video/mp4", "mp4");
@@ -637,6 +594,17 @@ fn full_name(user: &User) -> String {
     }
 }
 
+fn bot_identity(bot_user: &User) -> Identity {
+    Identity::new(bot_user.id, bot_user.first_name.clone())
+}
+
+fn user_identity(user: &User, bot_user: &User) -> Identity {
+    match user.id == bot_user.id {
+        true => bot_identity(bot_user),
+        false => Identity::new(user.id, full_name(user)),
+    }
+}
+
 fn is_bot_username(handle: &str, bot_user: &User) -> bool {
     bot_user
         .username
@@ -649,10 +617,9 @@ fn rewrite(entity: &MessageEntity, span: &str, bot_user: &User) -> Option<String
         MessageEntityType::Mention => span
             .strip_prefix('@')
             .filter(|handle| is_bot_username(handle, bot_user))
-            .map(|_| identity(&bot_user.first_name, bot_user.id)),
+            .map(|_| bot_identity(bot_user).to_string()),
         MessageEntityType::TextMention => {
-            let user = entity.user.as_ref()?;
-            Some(identity(&full_name(user), user.id))
+            Some(user_identity(entity.user.as_ref()?, bot_user).to_string())
         }
         MessageEntityType::BotCommand => {
             let (command, handle) = span.split_once('@')?;
@@ -684,12 +651,7 @@ fn filter(message: &Message, bot_user: &User) -> Option<String> {
             units.splice(start..end, replacement.encode_utf16());
         }
     }
-    let text = String::from_utf16_lossy(&units);
-
-    let text = text.trim().trim_start_matches('/').trim();
-    let text = WHITESPACE.replace_all(text, " ").trim().to_string();
-
-    (!text.is_empty()).then_some(text)
+    normalize_text(&String::from_utf16_lossy(&units))
 }
 
 #[cfg(test)]
@@ -811,7 +773,7 @@ mod tests {
             "reply_to_message": {"message_id": 3, "date": 0, "chat": {"id": -100, "type": "supergroup"},
                                  "from": {"id": 9, "is_bot": true, "first_name": "A2"}},
         }));
-        assert_eq!(poller.replied_to(&reply).as_deref(), Some("(9) A2"));
+        assert_eq!(poller.replied_to(&reply), Some(Identity::new(9, "A2")));
         let in_topic = message(serde_json::json!({
             "text": "hello", "is_topic_message": true, "message_thread_id": 3,
             "reply_to_message": {"message_id": 3, "date": 0, "chat": {"id": -100, "type": "supergroup"},
@@ -856,7 +818,7 @@ mod tests {
                       "file_name": "clip.mov", "mime_type": "video/quicktime"},
             "voice": {"file_id": "o", "file_unique_id": "O1", "duration": 4},
         }));
-        let listed: Vec<(String, Option<String>, String)> = listed_media(&m)
+        let listed: Vec<(String, Option<String>, Option<String>)> = listed_media(&m)
             .into_iter()
             .map(|a| match a {
                 Attachment::File { filename, content_type, url } => (filename, content_type, url),
@@ -864,8 +826,8 @@ mod tests {
             })
             .collect();
         assert_eq!(listed, vec![
-            ("clip.mov".into(), Some("video/quicktime".into()), NO_PUBLIC_URL.into()),
-            ("voice_O1.ogg".into(), Some("audio/ogg".into()), NO_PUBLIC_URL.into()),
+            ("clip.mov".into(), Some("video/quicktime".into()), None),
+            ("voice_O1.ogg".into(), Some("audio/ogg".into()), None),
         ]);
 
         let note = message(serde_json::json!({
